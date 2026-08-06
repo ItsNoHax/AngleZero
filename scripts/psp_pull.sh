@@ -63,7 +63,45 @@ done
 echo "pulled $count frame(s) into $DEST/"
 echo
 
-for txt in "$DEST"/*.txt; do
+# Per-shot counters are short enough to read in full.
+for txt in "$DEST"/SHOT*.txt; do
+    [ -e "$txt" ] || continue
     echo "--- $(basename "$txt") ---"
     cat "$txt"
+done
+
+# Traces are 600 rows each, so summarise instead: report the range of each geometry counter and
+# call out any frame that submitted nothing. A drop to zero is the signature of geometry being
+# culled or a draw being skipped; a steady count means the fault is further down the pipeline.
+for trace in "$DEST"/TRACE*.txt; do
+    [ -e "$trace" ] || continue
+    echo
+    echo "--- $(basename "$trace") ---"
+    awk '
+        /^#/ { next }
+        {
+            n++
+            for (i = 2; i <= 7; i++) {
+                if (n == 1 || $i < lo[i]) lo[i] = $i
+                if (n == 1 || $i > hi[i]) hi[i] = $i
+            }
+            if ($2 == 0 || $3 == 0) zero[$1] = $0
+        }
+        END {
+            split("road terrain lines rails dashes props", name, " ")
+            printf "  %d frames recorded\n", n
+            for (i = 2; i <= 7; i++)
+                printf "  %-8s %3d .. %-3d%s\n", name[i-1], lo[i], hi[i],
+                       (lo[i] == 0 ? "   <-- dropped to zero" : "")
+            k = 0
+            for (f in zero) k++
+            if (k > 0) {
+                printf "\n  %d frame(s) submitted no road or no terrain:\n", k
+                c = 0
+                for (f in zero) { if (c++ < 12) printf "    %s\n", zero[f] }
+            } else {
+                print "\n  every frame submitted road and terrain geometry"
+            }
+        }
+    ' "$trace"
 done

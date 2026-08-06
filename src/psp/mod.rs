@@ -7,6 +7,8 @@
 pub mod audio;
 #[cfg(feature = "devtools")]
 pub mod capture;
+#[cfg(feature = "devtools")]
+pub mod trace;
 pub mod hud;
 pub mod render;
 pub mod scratch;
@@ -190,9 +192,9 @@ pub fn psp_main() {
                 if select_edge {
                     burst = 0;
                 }
-                // Every 10th frame while held, so a burst covers roughly a sixth of a second per
-                // shot without the file writes starving the frame entirely.
-                let due = select_held && burst > 0 && burst % 10 == 0;
+                // Every 4th frame while held. Denser than before, because a burst that samples
+                // one frame in ten slid straight past the artifact this is meant to catch.
+                let due = select_held && burst > 0 && burst % 4 == 0;
                 if select_held {
                     burst += 1;
                 }
@@ -279,9 +281,23 @@ pub fn psp_main() {
 
             // After the swap, so the capture is of the frame just shown rather than the one
             // still being drawn into.
+            // Cleared every frame in every build, so the two tally identically.
+            #[cfg_attr(not(feature = "devtools"), allow(unused_variables))]
+            let stats = render::take_stats();
+
             #[cfg(feature = "devtools")]
-            if want_capture && capture::capture(game, &diag).is_some() {
-                shots += 1;
+            {
+                trace::record(frame, &stats, game, diag.frame_us);
+                if want_capture {
+                    // The ring covers the ten seconds *before* the press, so it holds the
+                    // artifact even when the screenshot lands on a clean frame.
+                    if shots == 0 || burst == 1 {
+                        trace::dump(shots);
+                    }
+                    if capture::capture(game, &diag).is_some() {
+                        shots += 1;
+                    }
+                }
             }
 
             frame += 1;

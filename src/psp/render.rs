@@ -1008,12 +1008,63 @@ fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
     to_chunk.dot(forward) > -(chunk.radius + 12.0)
 }
 
+/// Per-frame tally of what actually got submitted to the GE.
+///
+/// Cheap enough to keep in every build so the two behave identically, but only read under
+/// `devtools`. It exists to answer one question that a screenshot cannot: when part of the world
+/// vanishes, was the draw call issued at all?
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DrawStats {
+    pub road: u16,
+    pub terrain: u16,
+    pub lines: u16,
+    pub rails: u16,
+    pub dashes: u16,
+    pub props: u16,
+    pub verts: u32,
+}
+
+static mut STATS: DrawStats = DrawStats {
+    road: 0,
+    terrain: 0,
+    lines: 0,
+    rails: 0,
+    dashes: 0,
+    props: 0,
+    verts: 0,
+};
+/// Which counter `draw_ribbon` should attribute its chunks to.
+static mut STATS_SLOT: u8 = 0;
+
+/// Snapshot and clear the tally. Call once per frame, after drawing.
+pub fn take_stats() -> DrawStats {
+    unsafe {
+        let s = STATS;
+        STATS = DrawStats::default();
+        s
+    }
+}
+
+unsafe fn tally(slot: u8, verts: u32) {
+    // Saturating, so a build that somehow stopped clearing these cannot wrap or trap.
+    match slot {
+        0 => STATS.road = STATS.road.saturating_add(1),
+        1 => STATS.terrain = STATS.terrain.saturating_add(1),
+        2 => STATS.lines = STATS.lines.saturating_add(1),
+        3 => STATS.rails = STATS.rails.saturating_add(1),
+        4 => STATS.dashes = STATS.dashes.saturating_add(1),
+        _ => STATS.props = STATS.props.saturating_add(1),
+    }
+    STATS.verts = STATS.verts.saturating_add(verts);
+}
+
 fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
     unsafe {
         for chunk in r.chunks.iter() {
             if !visible(chunk, eye, forward) {
                 continue;
             }
+            tally(STATS_SLOT, chunk.count);
             sys::sceGumDrawArray(
                 GuPrimitive::TriangleStrip,
                 VERTEX_FORMAT,
@@ -1035,10 +1086,13 @@ pub fn draw_world(camera: &Camera) {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
 
+        STATS_SLOT = 1;
         draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
+        STATS_SLOT = 0;
         draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
 
         // Markings sit fractions of a metre above the road; draw them after so they win ties.
+        STATS_SLOT = 2;
         draw_ribbon(&*(&raw const EDGE_L_MESH), eye, forward);
         draw_ribbon(&*(&raw const EDGE_R_MESH), eye, forward);
 
@@ -1048,6 +1102,7 @@ pub fn draw_world(camera: &Camera) {
             if !visible(chunk, eye, forward) {
                 continue;
             }
+            tally(4, chunk.count);
             sys::sceGumDrawArray(
                 GuPrimitive::Triangles,
                 VERTEX_FORMAT,
@@ -1061,6 +1116,7 @@ pub fn draw_world(camera: &Camera) {
         // one winding, so with culling on it disappears when seen from behind — which for the
         // left-hand rail is nearly always, since the chase camera sits inside the road.
         sys::sceGuDisable(GuState::CullFace);
+        STATS_SLOT = 3;
         draw_ribbon(&*(&raw const RAIL_L_MESH), eye, forward);
         draw_ribbon(&*(&raw const RAIL_R_MESH), eye, forward);
 
@@ -1072,6 +1128,7 @@ pub fn draw_world(camera: &Camera) {
             if !visible(chunk, eye, forward) {
                 continue;
             }
+            tally(5, chunk.count);
             sys::sceGumDrawArray(
                 GuPrimitive::Triangles,
                 VERTEX_FORMAT,
