@@ -9,6 +9,7 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod audio;
 pub mod camera;
 pub mod effects;
 pub mod game;

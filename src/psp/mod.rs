@@ -4,6 +4,7 @@
 //! only the things that need the hardware: the display list, the framebuffers, the pad, and the
 //! clock that drives the fixed-timestep update.
 
+pub mod audio;
 pub mod hud;
 pub mod render;
 pub mod scratch;
@@ -129,6 +130,8 @@ pub fn psp_main() {
         text::init();
         hud::init_minimap(track);
 
+        audio::start();
+
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
         game.enter_title(track);
@@ -151,6 +154,15 @@ pub fn psp_main() {
             if game.take_record_dirty() {
                 storage::store(&game.record);
             }
+
+            audio::set_params(angle_zero::audio::params_for(
+                game.vehicle.state.vx,
+                angle_zero::hud::rpm(game.vehicle.state.vx, game.throttle_hint()),
+                game.throttle_hint(),
+                game.phase == Phase::Run,
+                game.vehicle.drifting,
+                game.vehicle.slip_angle,
+            ));
 
             // Every dynamically-built vertex buffer for this frame comes from here, and must
             // stay valid until the GE has run the list below.
