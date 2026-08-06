@@ -189,6 +189,7 @@ pub fn psp_main() {
             if game.phase != Phase::Title {
                 render::draw_headlight_beams(&game.vehicle.state);
                 render::draw_effects(&game.effects, &game.camera);
+                render::draw_lamp_glows(&game.vehicle.state, &game.camera, game.braking_hint());
             }
 
             hud::begin();

@@ -1143,6 +1143,87 @@ unsafe fn alloc_verts(n: usize) -> Option<*mut Vertex> {
     }
 }
 
+/// Additive glows around the head and tail lamps. The tail lamps jump in size and
+/// brightness under braking, which is most of what tells you what the car ahead is doing.
+pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
+    unsafe {
+        sys::sceGuEnable(GuState::Blend);
+        sys::sceGuBlendFunc(
+            sys::BlendOp::Add,
+            sys::BlendFactor::SrcAlpha,
+            sys::BlendFactor::Fix,
+            0,
+            0xffff_ffff,
+        );
+        sys::sceGuDepthMask(1);
+        sys::sceGuDisable(GuState::CullFace);
+        sys::sceGuDisable(GuState::Fog);
+        sys::sceGumMatrixMode(MatrixMode::Model);
+        sys::sceGumLoadIdentity();
+
+        let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
+        let (s, c) = (sin(st.yaw), cos(st.yaw));
+        // Local (x, z) offset of a lamp, into world space.
+        let place = |lx: f32, lz: f32| (st.x + lx * c + lz * s, st.z - lx * s + lz * c);
+
+        let tail_alpha = if braking { 0xF2 } else { 0x66 };
+        let (tail_w, tail_h) = if braking { (0.95, 0.65) } else { (0.60, 0.40) };
+
+        // A lamp glow is a billboard with no depth of its own, so without this the headlamps
+        // shine straight through the car whenever the camera is behind it — which, with a chase
+        // camera, is almost always. Show each pair only from the side it actually faces.
+        let to_camera_x = camera.pos.x - st.x;
+        let to_camera_z = camera.pos.z - st.z;
+        let facing = to_camera_x * s + to_camera_z * c;
+        let show_head = facing > 0.0;
+        let show_tail = facing < 0.0;
+
+        let lamps: [(f32, f32, f32, f32, f32, u32, bool); 4] = [
+            (-0.60, 2.09, 1.00, 0.85, 0.60, rgba(0xFF, 0xF3, 0xD2, 0x59), show_head),
+            (0.60, 2.09, 1.00, 0.85, 0.60, rgba(0xFF, 0xF3, 0xD2, 0x59), show_head),
+            (-0.64, -2.02, 1.00, tail_w, tail_h, rgba(0xFF, 0x55, 0x44, tail_alpha), show_tail),
+            (0.64, -2.02, 1.00, tail_w, tail_h, rgba(0xFF, 0x55, 0x44, tail_alpha), show_tail),
+        ];
+
+        if let Some(verts) = alloc_verts(lamps.len() * 6) {
+            let mut w = 0usize;
+            for (lx, lz, ly, hw, hh, color, visible) in lamps {
+                if !visible {
+                    continue;
+                }
+                let (px, pz) = place(lx, lz);
+                let py = st.y + ly;
+                let corner = |a: f32, b: f32| {
+                    Vertex::new(px + right_x * hw * a, py + hh * b, pz + right_z * hw * a, color)
+                };
+                for v in [
+                    corner(-1.0, -1.0),
+                    corner(1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, -1.0),
+                    corner(1.0, 1.0),
+                    corner(-1.0, 1.0),
+                ] {
+                    *verts.add(w) = v;
+                    w += 1;
+                }
+            }
+            sys::sceGumDrawArray(
+                GuPrimitive::Triangles,
+                VERTEX_FORMAT,
+                w as i32,
+                core::ptr::null(),
+                verts as *const c_void,
+            );
+        }
+
+        sys::sceGuEnable(GuState::Fog);
+        sys::sceGuEnable(GuState::CullFace);
+        sys::sceGuDepthMask(0);
+        sys::sceGuDisable(GuState::Blend);
+    }
+}
+
 /// The two additive ground beams that stand in for a real headlight spot.
 pub fn draw_headlight_beams(st: &CarState) {
     unsafe {

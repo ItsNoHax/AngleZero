@@ -80,6 +80,8 @@ pub struct Game {
     pub toast_timer: f32,
     /// Throttle applied on the last substep, which the rev counter reads.
     last_throttle: f32,
+    /// Whether the brake or handbrake was applied, which the tail lamps read.
+    last_braking: bool,
 
     /// Last frame's buttons, for edge detection.
     prev: Buttons,
@@ -116,6 +118,7 @@ impl Game {
             toast: None,
             toast_timer: 0.0,
             last_throttle: 0.0,
+            last_braking: false,
             prev: Buttons {
                 cross: false,
                 circle: false,
@@ -196,6 +199,12 @@ impl Game {
         self.last_throttle
     }
 
+    /// Whether the brake or handbrake is on, for the tail lamps.
+    #[inline]
+    pub fn braking_hint(&self) -> bool {
+        self.last_braking
+    }
+
     /// Progress down the hill as a whole percentage, for the HUD.
     pub fn descent_percent(&self, track: &Track) -> u32 {
         (track.progress(self.vehicle.locator.last_idx) * 100.0 + 0.5) as u32
@@ -256,6 +265,7 @@ impl Game {
     fn run_substeps(&mut self, track: &Track, buttons: Buttons, frame_dt: f32) {
         let input = Self::drive_input(&buttons);
         self.last_throttle = input.throttle;
+        self.last_braking = input.brake || input.handbrake;
         self.accumulator += frame_dt;
 
         let mut guard = 0;
