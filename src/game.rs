@@ -1,0 +1,290 @@
+//! Screen flow and the fixed-timestep loop.
+//!
+//! This is the piece the PSP shell drives: hand it the track, the buttons and a frame delta, and
+//! it advances everything else. Physics runs on its own fixed 1/120 s clock underneath, so the
+//! game behaves identically whether the renderer is managing 60 fps or 20.
+
+use crate::camera::Camera;
+use crate::math::{atan2, clamp, cos, min, sin};
+use crate::scoring::Scoring;
+use crate::track::{Track, BAY_NODE, BAY_SIDE};
+use crate::vehicle::{Input, Vehicle, FIXED_DT, MAX_FRAME_DT, MAX_SUBSTEPS};
+
+/// Node the run starts from. The first two nodes are spline lead-in.
+pub const START_NODE: usize = 2;
+/// Fraction of the centreline that counts as finishing.
+pub const FINISH_PROGRESS: f32 = 0.985;
+/// How long a toast stays up, and how long it spends fading out.
+pub const TOAST_HOLD: f32 = 1.1;
+pub const TOAST_FADE: f32 = 0.4;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Title,
+    Run,
+    Results,
+}
+
+/// The messages that flash up mid-run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Toast {
+    Go,
+    ComboUp(u32),
+    WallTap,
+    WrongWay,
+    BackOnTrack,
+}
+
+/// PSP controller state for one frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Buttons {
+    pub cross: bool,
+    pub circle: bool,
+    pub square: bool,
+    pub triangle: bool,
+    pub up: bool,
+    pub down: bool,
+    pub left: bool,
+    pub right: bool,
+    /// Analog nub, -1.0 (right) to +1.0 (left). Ignored when the d-pad is used.
+    pub analog_x: f32,
+}
+
+/// What the results screen shows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RunResult {
+    pub time: f32,
+    pub score: f32,
+    pub best_combo: u32,
+}
+
+pub struct Game {
+    pub phase: Phase,
+    pub vehicle: Vehicle,
+    pub scoring: Scoring,
+    pub camera: Camera,
+    pub run_time: f32,
+    pub result: RunResult,
+
+    pub toast: Option<Toast>,
+    pub toast_timer: f32,
+    /// Throttle applied on the last substep, which the rev counter reads.
+    last_throttle: f32,
+
+    /// Last frame's buttons, for edge detection.
+    prev: Buttons,
+    /// Leftover time not yet consumed by a fixed substep.
+    accumulator: f32,
+}
+
+impl Default for Game {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Game {
+    pub const fn new() -> Self {
+        Game {
+            phase: Phase::Title,
+            vehicle: Vehicle::new(),
+            scoring: Scoring::new(),
+            camera: Camera::new(),
+            run_time: 0.0,
+            result: RunResult {
+                time: 0.0,
+                score: 0.0,
+                best_combo: 1,
+            },
+            toast: None,
+            toast_timer: 0.0,
+            last_throttle: 0.0,
+            prev: Buttons {
+                cross: false,
+                circle: false,
+                square: false,
+                triangle: false,
+                up: false,
+                down: false,
+                left: false,
+                right: false,
+                analog_x: 0.0,
+            },
+            accumulator: 0.0,
+        }
+    }
+
+    /// Maps the controller to driving inputs.
+    pub fn drive_input(b: &Buttons) -> Input {
+        // The d-pad is all-or-nothing; the nub only speaks when the d-pad is quiet.
+        let steer_in = if b.left || b.right {
+            (if b.left { 1.0 } else { 0.0 }) - (if b.right { 1.0 } else { 0.0 })
+        } else {
+            clamp(b.analog_x, -1.0, 1.0)
+        };
+
+        Input {
+            throttle: if b.cross || b.up { 1.0 } else { 0.0 },
+            brake: b.square || b.down,
+            handbrake: b.circle,
+            steer_in,
+        }
+    }
+
+    /// Puts the car in the emergency pull-off and shows the title screen.
+    pub fn enter_title(&mut self, track: &Track) {
+        let n = &track.nodes[BAY_NODE];
+        let road_heading = atan2(n.dir.x, n.dir.z);
+        // Centre of the gravel pad, then nudged forward and back toward the road.
+        let pad_x = n.p.x + n.nrm.x * BAY_SIDE * 11.5;
+        let pad_z = n.p.z + n.nrm.z * BAY_SIDE * 11.5;
+        let x = pad_x + sin(road_heading) * 2.5 - n.nrm.x * BAY_SIDE * 1.2;
+        let z = pad_z + cos(road_heading) * 2.5 - n.nrm.z * BAY_SIDE * 1.2;
+
+        self.vehicle
+            .place_at(track, x, n.p.y, z, road_heading + BAY_SIDE * 0.16, BAY_NODE);
+        self.phase = Phase::Title;
+        self.camera.orbit_angle = 0.0;
+        self.toast = None;
+        self.toast_timer = 0.0;
+        self.scoring.reset();
+        self.run_time = 0.0;
+    }
+
+    /// Starts a fresh descent from the top of the road.
+    pub fn start_run(&mut self, track: &Track) {
+        self.vehicle.place_at_node(track, START_NODE);
+        self.scoring.reset();
+        self.run_time = 0.0;
+        self.accumulator = 0.0;
+        self.phase = Phase::Run;
+        self.camera.snap_behind(&self.vehicle.state);
+        self.show(Toast::Go);
+    }
+
+    fn show(&mut self, toast: Toast) {
+        self.toast = Some(toast);
+        self.toast_timer = TOAST_HOLD;
+    }
+
+    /// Toast alpha, 1.0 while held then fading to 0.0.
+    pub fn toast_opacity(&self) -> f32 {
+        clamp(self.toast_timer / TOAST_FADE, 0.0, 1.0)
+    }
+
+    /// Throttle from the last substep, for the rev counter.
+    #[inline]
+    pub fn throttle_hint(&self) -> f32 {
+        self.last_throttle
+    }
+
+    /// Progress down the hill as a whole percentage, for the HUD.
+    pub fn descent_percent(&self, track: &Track) -> u32 {
+        (track.progress(self.vehicle.locator.last_idx) * 100.0 + 0.5) as u32
+    }
+
+    /// Advances one rendered frame.
+    pub fn update(&mut self, track: &Track, buttons: Buttons, dt: f32) {
+        let pressed = |now: bool, before: bool| now && !before;
+        let cross_edge = pressed(buttons.cross, self.prev.cross);
+        let triangle_edge = pressed(buttons.triangle, self.prev.triangle);
+        self.prev = buttons;
+
+        // A hitch must not be simulated in full, or the car teleports through the scenery.
+        let frame_dt = min(dt, MAX_FRAME_DT);
+
+        match self.phase {
+            Phase::Title => {
+                if cross_edge {
+                    self.start_run(track);
+                } else {
+                    self.camera.update_title(&self.vehicle.state, frame_dt);
+                }
+            }
+            Phase::Run => {
+                if triangle_edge {
+                    self.vehicle.place_at_node(track, self.vehicle.locator.last_idx);
+                    self.vehicle.state.vx = 3.0;
+                    self.scoring.on_wall_tap();
+                    self.show(Toast::BackOnTrack);
+                }
+                self.run_substeps(track, buttons, frame_dt);
+                self.camera.update_run(&self.vehicle.state, frame_dt);
+
+                if track.progress(self.vehicle.locator.last_idx) > FINISH_PROGRESS {
+                    self.finish();
+                }
+            }
+            Phase::Results => {
+                if cross_edge || triangle_edge {
+                    self.start_run(track);
+                } else {
+                    self.camera.update_run(&self.vehicle.state, frame_dt);
+                }
+            }
+        }
+
+        if self.toast_timer > 0.0 {
+            self.toast_timer -= frame_dt;
+            if self.toast_timer <= 0.0 {
+                self.toast_timer = 0.0;
+                self.toast = None;
+            }
+        }
+    }
+
+    fn run_substeps(&mut self, track: &Track, buttons: Buttons, frame_dt: f32) {
+        let input = Self::drive_input(&buttons);
+        self.last_throttle = input.throttle;
+        self.accumulator += frame_dt;
+
+        let mut guard = 0;
+        while self.accumulator >= FIXED_DT && guard < MAX_SUBSTEPS {
+            guard += 1;
+            self.accumulator -= FIXED_DT;
+
+            let outcome = self.vehicle.step(track, input, FIXED_DT);
+            self.run_time += FIXED_DT;
+
+            if outcome.respawned {
+                self.scoring.on_wall_tap();
+                self.show(Toast::BackOnTrack);
+                continue;
+            }
+            if outcome.wall_tap {
+                self.camera.add_shake(0.5);
+                // The combo always dies; it is only worth announcing if there was one.
+                if self.scoring.on_wall_tap() {
+                    self.show(Toast::WallTap);
+                }
+            } else if outcome.wrong_way {
+                self.show(Toast::WrongWay);
+            }
+
+            let speed = crate::math::hypot(self.vehicle.state.vx, self.vehicle.state.vy);
+            let event = self.scoring.update(
+                self.vehicle.drifting,
+                speed,
+                self.vehicle.slip_angle,
+                FIXED_DT,
+            );
+            if event.combo_up {
+                self.show(Toast::ComboUp(self.scoring.combo));
+            }
+        }
+
+        // Whatever is left over would otherwise pile up during a long stall.
+        if self.accumulator > FIXED_DT * MAX_SUBSTEPS as f32 {
+            self.accumulator = 0.0;
+        }
+    }
+
+    fn finish(&mut self) {
+        self.phase = Phase::Results;
+        self.result = RunResult {
+            time: self.run_time,
+            score: self.scoring.score,
+            best_combo: self.scoring.best_combo,
+        };
+    }
+}
