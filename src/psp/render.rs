@@ -11,7 +11,7 @@ use core::ffi::c_void;
 
 use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
-use angle_zero::math::{cos, sin, Mat4, Vec3, TAU};
+use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::track::{Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
@@ -156,6 +156,7 @@ pub fn init(track: &Track) {
         build_dashes(track);
         build_props(track);
         build_mountains(track);
+        build_starfield();
         build_car();
         build_wheel();
         sys::sceKernelDcacheWritebackAll();
@@ -669,8 +670,93 @@ unsafe fn build_mountains(track: &Track) {
     }
 }
 
+/// Stars and moon.
+///
+/// Placed on a dome that is translated to the camera every frame rather than drawn in screen
+/// space. Screen-locked stars slide across the sky whenever the camera turns, which on a road
+/// this twisty is immediately obvious.
+const STAR_COUNT: usize = 700;
+const SKY_RADIUS: f32 = 1800.0;
+const STAR_VERTS: usize = STAR_COUNT * 6 + 12; // stars, plus the moon and its halo
+static mut STARFIELD: psp::Align16<[Vertex; STAR_VERTS]> = psp::Align16([Vertex::ZERO; STAR_VERTS]);
+
+unsafe fn build_starfield() {
+    let out = core::slice::from_raw_parts_mut(&raw mut STARFIELD as *mut Vertex, STAR_VERTS);
+    let mut w = 0usize;
+    // Deterministic, so a headless capture of the sky is reproducible.
+    let mut rng: u32 = 0x5EED_1234;
+    let mut next = || {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        (rng >> 8) as f32 / (1 << 24) as f32
+    };
+
+    for i in 0..STAR_COUNT {
+        let yaw = next() * TAU;
+        // Biased toward the upper sky.
+        let height = 0.12 + next() * 0.88;
+        let ring = sqrt(1.0 - height * height);
+        let (cx, cy, cz) = (
+            sin(yaw) * ring * SKY_RADIUS,
+            height * SKY_RADIUS,
+            cos(yaw) * ring * SKY_RADIUS,
+        );
+        // Three brightnesses, as the palette has it.
+        let color = match i % 3 {
+            0 => rgb(0xFF, 0xFF, 0xFF),
+            1 => rgb(0xCD, 0xDC, 0xF2),
+            _ => rgb(0x7F, 0x93, 0xAD),
+        };
+        let s = 3.0 + next() * 4.0;
+        // Billboarded roughly toward the origin by using the ring tangent as the horizontal axis.
+        let (tx, tz) = (cos(yaw), -sin(yaw));
+        for (a, b) in [
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+        ] {
+            out[w] = Vertex::new(cx + tx * s * a, cy + s * b, cz + tz * s * a, color);
+            w += 1;
+        }
+    }
+
+    // The moon, with a faint halo behind it.
+    let yaw = 2.1;
+    let height = 0.55;
+    let ring = sqrt(1.0 - height * height);
+    let (mx, my, mz) = (
+        sin(yaw) * ring * SKY_RADIUS,
+        height * SKY_RADIUS,
+        cos(yaw) * ring * SKY_RADIUS,
+    );
+    let (tx, tz) = (cos(yaw), -sin(yaw));
+    for (radius, color) in [(90.0f32, rgba(0xCF, 0xDA, 0xEA, 0x28)), (34.0, rgb(0xE8, 0xEE, 0xF7))] {
+        for (a, b) in [
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, -1.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+        ] {
+            out[w] = Vertex::new(
+                mx + tx * radius * a,
+                my + radius * b,
+                mz + tz * radius * a,
+                color,
+            );
+            w += 1;
+        }
+    }
+    debug_assert!(w == STAR_VERTS);
+}
+
 /// Draws the night sky: a vertical gradient behind everything, then the mountain silhouette.
-pub fn draw_sky() {
+pub fn draw_sky(camera: &Camera) {
     unsafe {
         // The gradient is 2D, so it needs no camera and cannot be occluded by anything.
         sys::sceGuDisable(GuState::DepthTest);
@@ -724,11 +810,38 @@ pub fn draw_sky() {
             verts as *const c_void,
         );
 
-        // Mountains sit in front of the gradient but behind everything else. Depth writes stay
-        // off so the scene proper is never occluded by geometry a kilometre away.
+        // Stars and moon sit on a dome centred on the camera, so they never come closer and
+        // never slide as the car turns. Depth writes off, and blended for the moon's halo.
         sys::sceGuEnable(GuState::DepthTest);
         sys::sceGuDepthMask(1);
+        sys::sceGuDisable(GuState::CullFace);
+        sys::sceGuEnable(GuState::Blend);
+        sys::sceGuBlendFunc(
+            sys::BlendOp::Add,
+            sys::BlendFactor::SrcAlpha,
+            sys::BlendFactor::OneMinusSrcAlpha,
+            0,
+            0,
+        );
         sys::sceGumMatrixMode(MatrixMode::Model);
+        sys::sceGumLoadIdentity();
+        sys::sceGumTranslate(&ScePspFVector3 {
+            x: camera.pos.x,
+            y: camera.pos.y,
+            z: camera.pos.z,
+        });
+        sys::sceGumDrawArray(
+            GuPrimitive::Triangles,
+            VERTEX_FORMAT,
+            STAR_VERTS as i32,
+            core::ptr::null(),
+            &raw const STARFIELD as *const c_void,
+        );
+        sys::sceGuDisable(GuState::Blend);
+        sys::sceGuEnable(GuState::CullFace);
+
+        // Mountains sit in front of the gradient but behind everything else. Depth writes stay
+        // off so the scene proper is never occluded by geometry a kilometre away.
         sys::sceGumLoadIdentity();
         sys::sceGumDrawArray(
             GuPrimitive::Triangles,

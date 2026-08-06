@@ -171,7 +171,7 @@ pub fn psp_main() {
             sys::sceGuDisable(GuState::Texture2D);
 
             render::set_camera(&game.camera);
-            render::draw_sky();
+            render::draw_sky(&game.camera);
             render::draw_world(&game.camera);
             render::draw_car(&game.vehicle, track);
             if game.phase != Phase::Title {
@@ -181,6 +181,7 @@ pub fn psp_main() {
 
             hud::begin();
             hud::draw(game, track);
+            hud::scanlines();
             hud::end();
 
             // The GE reads through uncached memory, so this frame's vertices have to leave the

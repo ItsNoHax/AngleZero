@@ -138,6 +138,16 @@ pub fn begin() {
     }
 }
 
+/// One-in-three scanlines at 16% black. Drawn last, over everything.
+pub fn scanlines() {
+    let color = rgba(0x00, 0x00, 0x00, 0x29);
+    let mut y = 0.0;
+    while y < SCREEN_H {
+        fill_rect(0.0, y, SCREEN_W, 1.0, color);
+        y += 3.0;
+    }
+}
+
 pub fn end() {
     unsafe {
         sys::sceGuDisable(GuState::Blend);
