@@ -1,4 +1,11 @@
 title = "Angle Zero"
-# xmb_icon_png = "path/to/24bit_144x80_image.png"
-# xmb_background_png = "path/to/24bit_480x272_background.png"
-# xmb_music_at3 = "path/to/ATRAC3_audio.at3"
+
+# XMB presentation. Both PNGs are 24-bit (no alpha) — the source art is RGBA, and some firmwares
+# and packers reject an alpha channel here, so `assets/` holds the converted copies.
+xmb_icon_png = "assets/ICON0.png"
+xmb_background_png = "assets/PIC1.png"
+
+# XMB background music. Needs ATRAC3, which nothing on this machine can encode: ffmpeg ships
+# decoders for it but no encoder. `assets/SND0_source.wav` is the 20 s source loop, ready for
+# `at3tool -e -br 66` or `atracdenc`. See assets/README.md.
+# xmb_music_at3 = "assets/SND0.AT3"

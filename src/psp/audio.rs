@@ -82,8 +82,20 @@ pub fn start() {
         let id = sys::sceKernelCreateThread(
             b"angle_zero_audio\0".as_ptr(),
             audio_thread,
-            // Above the main thread's 32, so buffers are refilled promptly even under load.
-            0x12,
+            // Below the main thread's 32 — lower numbers win on the PSP, so this must not be
+            // smaller than 32.
+            //
+            // It used to be 0x12, which preempted rendering. That matters because the buffer
+            // swap is only safe inside the vblank window: rust-psp calls `sceDisplaySetFrameBuf`
+            // with `Immediate`, so a swap delayed past vblank switches the framebuffer
+            // mid-scanout and the display tears to a half-drawn frame. The audio thread wakes
+            // every ~23 ms and could land in the few hundred microseconds between
+            // `sceDisplayWaitVblankStart` returning and the swap.
+            //
+            // Starving audio is not a risk at this priority: the main thread spends most of each
+            // frame blocked on vblank, and `sceAudioOutputBlocking` gives a whole buffer period
+            // to synthesise the next one.
+            0x40,
             32 * 1024,
             ThreadAttributes::USER,
             core::ptr::null_mut(),
