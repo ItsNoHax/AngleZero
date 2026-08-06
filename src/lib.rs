@@ -9,6 +9,9 @@
 #[cfg(test)]
 extern crate std;
 
+pub mod camera;
+pub mod hud;
 pub mod math;
+pub mod scoring;
 pub mod track;
 pub mod vehicle;
