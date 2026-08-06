@@ -227,6 +227,43 @@ fn pad2(buf: &mut [u8; 2], value: u32) -> &[u8] {
     &buf[..]
 }
 
+/// The debug readout, toggled with START. Deliberately terse: it has to fit on one line at the
+/// bottom of a 480 px screen and still be legible in a photograph of the handheld.
+///
+/// `SCF` is the one to watch. It counts refused vertex-arena allocations, and any non-zero value
+/// means draws were silently dropped — which looks like flickering geometry, not like an error.
+pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
+    let mut l = [0u8; 96];
+    let mut w = 0usize;
+    let mut b = [0u8; 12];
+
+    let mut field = |l: &mut [u8; 96], w: &mut usize, name: &[u8], v: u32| {
+        for &c in name {
+            l[*w] = c;
+            *w += 1;
+        }
+        for &c in digits(&mut b, v) {
+            l[*w] = c;
+            *w += 1;
+        }
+        l[*w] = b' ';
+        *w += 1;
+    };
+
+    field(&mut l, &mut w, b"US", diag.frame_us);
+    field(&mut l, &mut w, b" LST", diag.list_bytes);
+    field(&mut l, &mut w, b" SCR", diag.scratch_peak);
+    field(&mut l, &mut w, b" SCF", diag.scratch_failures);
+    field(&mut l, &mut w, b" SK", diag.live_skids);
+    field(&mut l, &mut w, b" SM", diag.live_puffs);
+    field(&mut l, &mut w, b" SHOT", shots);
+
+    // Red when something has actually gone wrong, so it is obvious in a photo.
+    let color = if diag.scratch_failures > 0 { WARN } else { GREEN };
+    text::bind();
+    text::draw_shadowed(&l[..w], 4.0, 262.0, 1.0, color);
+}
+
 pub fn draw(game: &Game, track: &Track) {
     match game.phase {
         Phase::Title => draw_title(game),

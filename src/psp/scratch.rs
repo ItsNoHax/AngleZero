@@ -12,11 +12,23 @@
 
 use psp::sys;
 
+/// The PSP's data cache line. Writing back a range that does not cover whole lines can leave the
+/// partial line at either end in the cache, where the GE — which reads through uncached memory —
+/// will never see it. The arena is aligned to this and flushed in whole lines for that reason.
+const CACHE_LINE: usize = 64;
+
+/// A multiple of `CACHE_LINE`, so rounding the flush up can never run past the end.
 const SCRATCH_BYTES: usize = 96 * 1024;
 
-static mut BUF: psp::Align16<[u8; SCRATCH_BYTES]> = psp::Align16([0; SCRATCH_BYTES]);
+#[repr(C, align(64))]
+struct CacheAligned<T>(T);
+
+static mut BUF: CacheAligned<[u8; SCRATCH_BYTES]> = CacheAligned([0; SCRATCH_BYTES]);
 static mut USED: usize = 0;
 static mut HIGH_WATER: usize = 0;
+/// Counts exhaustion. Any non-zero value means a draw was silently skipped, which looks like
+/// geometry flickering in and out rather than like an error.
+static mut FAILURES: u32 = 0;
 
 /// Frees the whole arena. Call once at the top of each frame, before anything draws.
 pub fn reset() {
@@ -32,6 +44,7 @@ pub unsafe fn alloc<T>(n: usize) -> *mut T {
     let start = (USED + ALIGN - 1) & !(ALIGN - 1);
     let bytes = n * core::mem::size_of::<T>();
     if start + bytes > SCRATCH_BYTES {
+        FAILURES = FAILURES.saturating_add(1);
         return core::ptr::null_mut();
     }
     USED = start + bytes;
@@ -45,7 +58,10 @@ pub unsafe fn alloc<T>(n: usize) -> *mut T {
 pub fn flush() {
     unsafe {
         if USED > 0 {
-            sys::sceKernelDcacheWritebackRange(&raw const BUF as *const _, USED as u32);
+            // Rounded up to a whole cache line: flushing exactly `USED` bytes leaves the tail of
+            // the last line dirty, and the GE reads whatever was there before.
+            let len = (USED + CACHE_LINE - 1) & !(CACHE_LINE - 1);
+            sys::sceKernelDcacheWritebackRange(&raw const BUF as *const _, len as u32);
         }
     }
 }
@@ -53,4 +69,9 @@ pub fn flush() {
 /// Largest amount used by any frame so far, for tuning `SCRATCH_BYTES`.
 pub fn high_water() -> usize {
     unsafe { HIGH_WATER }
+}
+
+/// How many allocations have been refused. Should always be zero.
+pub fn failures() -> u32 {
+    unsafe { FAILURES }
 }

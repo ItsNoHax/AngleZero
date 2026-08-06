@@ -5,6 +5,7 @@
 //! clock that drives the fixed-timestep update.
 
 pub mod audio;
+pub mod capture;
 pub mod hud;
 pub mod render;
 pub mod scratch;
@@ -140,6 +141,14 @@ pub fn psp_main() {
         let mut frame: u32 = 0;
         let mut last_tick = sys::sceKernelGetSystemTimeLow();
 
+        // Hardware-only diagnostics: START toggles the readout, SELECT saves a frame and its
+        // counters to ms0:/ANGLEZERO/. Both are edge-triggered off the raw pad, deliberately
+        // outside the game's own input mapping so they cannot affect driving.
+        let mut diag = capture::Diagnostics::default();
+        let mut show_debug = false;
+        let mut shots: u32 = 0;
+        let mut prev_debug_buttons = CtrlButtons::empty();
+
         loop {
             sys::sceCtrlReadBufferPositive(pad, 1);
             let buttons = read_buttons(pad);
@@ -150,6 +159,16 @@ pub fn psp_main() {
             let dt = (now.wrapping_sub(last_tick)) as f32 / 1_000_000.0;
             last_tick = now;
 
+            let start_edge = pad.buttons.contains(CtrlButtons::START)
+                && !prev_debug_buttons.contains(CtrlButtons::START);
+            let select_edge = pad.buttons.contains(CtrlButtons::SELECT)
+                && !prev_debug_buttons.contains(CtrlButtons::SELECT);
+            prev_debug_buttons = pad.buttons;
+            if start_edge {
+                show_debug = !show_debug;
+            }
+
+            let work_start = sys::sceKernelGetSystemTimeLow();
             game.update(track, buttons, dt);
             if game.take_record_dirty() {
                 storage::store(&game.record);
@@ -196,16 +215,40 @@ pub fn psp_main() {
             hud::begin();
             hud::draw(game, track);
             hud::scanlines();
+            if show_debug {
+                hud::debug_overlay(&diag, shots);
+            }
             hud::end();
 
             // The GE reads through uncached memory, so this frame's vertices have to leave the
             // data cache before the list is kicked.
             scratch::flush();
 
-            sys::sceGuFinish();
+            // `sceGuFinish` reports how much of the display list this frame used; overrunning
+            // the buffer corrupts GE state silently, so it is worth watching.
+            let list_bytes = sys::sceGuFinish() as u32;
             sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
+
+            diag = capture::Diagnostics {
+                frame_us: sys::sceKernelGetSystemTimeLow().wrapping_sub(work_start),
+                list_bytes,
+                scratch_peak: scratch::high_water() as u32,
+                scratch_failures: scratch::failures(),
+                live_skids: game.effects.live_skids() as u32,
+                live_puffs: game.effects.live_puffs() as u32,
+                drifting: game.vehicle.drifting,
+                speed_kph: (game.vehicle.speed_kph() + 0.5) as u32,
+                descent_percent: game.descent_percent(track),
+            };
+
             sys::sceDisplayWaitVblankStart();
             sys::sceGuSwapBuffers();
+
+            // After the swap, so the capture is of the frame just shown rather than the one
+            // still being drawn into.
+            if select_edge && capture::capture(game, &diag).is_some() {
+                shots += 1;
+            }
 
             frame += 1;
             if frame % 30 == 0 {
