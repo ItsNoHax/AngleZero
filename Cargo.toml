@@ -3,7 +3,19 @@ name = "angle-zero"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "angle_zero"
+path = "src/lib.rs"
 
+[[bin]]
+name = "angle-zero"
+path = "src/main.rs"
+test = false
+
+# The game core is target-agnostic `no_std` so it can be unit-tested on the host.
 [dependencies]
+libm = "0.2"
+
+# Only the binary shell touches the PSP SDK, so host `cargo test` never builds it.
+[target.'cfg(target_os = "psp")'.dependencies]
 psp = "0.3.11"
