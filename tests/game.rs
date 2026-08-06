@@ -343,3 +343,34 @@ fn the_descent_percentage_tracks_progress_down_the_hill() {
     g.update(&t, NONE, 1.0 / 60.0);
     assert!((49..=51).contains(&g.descent_percent(&t)));
 }
+
+#[test]
+fn hitting_a_rail_bumps_the_impact_count_once_per_hit() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+
+    // Aim across the road so the rail arrives quickly.
+    g.vehicle.place_at_node(&t, 600);
+    g.vehicle.state.vx = 30.0;
+    g.vehicle.state.yaw += 0.5;
+    let before = g.impact_count();
+
+    let mut saw_first = None;
+    for i in 0..(3.0 / FIXED_DT) as usize {
+        g.update(&t, NONE, FIXED_DT);
+        if saw_first.is_none() && g.impact_count() != before {
+            saw_first = Some(i);
+        }
+    }
+    let after = g.impact_count();
+    assert!(saw_first.is_some(), "driving into the rail never registered an impact");
+    assert!(after > before, "impact count did not advance");
+    // The 0.5 s hit cooldown gates it, so a few seconds of contact is a handful of thuds and
+    // not one per substep.
+    assert!(
+        after - before <= 6,
+        "{} impacts in three seconds — the thud would machine-gun",
+        after - before
+    );
+}

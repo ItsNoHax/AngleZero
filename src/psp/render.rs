@@ -301,6 +301,26 @@ static mut PROP_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
     radius: 0.0,
 }; mesh::CHUNK_COUNT];
 
+/// Additive light pools and lamp glows. Kept in their own chunked buffer
+/// because they need a separate blended, depth-write-off pass after the opaque world.
+const GLOWS_PER_CHUNK: usize = 512;
+const PROP_GLOW_VERTS: usize = GLOWS_PER_CHUNK * mesh::CHUNK_COUNT;
+static mut PROP_GLOW_MESH: psp::Align16<[Vertex; PROP_GLOW_VERTS]> =
+    psp::Align16([Vertex::ZERO; PROP_GLOW_VERTS]);
+static mut PROP_GLOW_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
+    start: 0,
+    count: 0,
+    center: Vec3::ZERO,
+    radius: 0.0,
+}; mesh::CHUNK_COUNT];
+
+/// Warm light, as the lamp glows have it.
+const LAMP_GLOW: u32 = rgba(0xFF, 0xEC, 0xBE, 0x8C);
+/// Ground pools are wide and faint; at 0.55 opacity across 19 m a flat quad would wash the road
+/// out, so these fade from the centre like the sprites they stand in for.
+const LAMP_POOL: u32 = rgba(0xFF, 0xE4, 0xB0, 0x54);
+const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
+
 const TREE_STRIDE: usize = 4;
 const LAMP_STRIDE: usize = 58;
 const CONE_STRIDE: usize = 11;
@@ -320,11 +340,20 @@ const LAMP_HEAD: u32 = rgb(0xFF, 0xEC, 0xBE);
 
 unsafe fn build_props(track: &Track) {
     let verts = core::slice::from_raw_parts_mut(&raw mut PROP_MESH as *mut Vertex, PROP_VERTS);
+    let glows =
+        core::slice::from_raw_parts_mut(&raw mut PROP_GLOW_MESH as *mut Vertex, PROP_GLOW_VERTS);
     let mut w = 0usize;
+    let mut gw = 0usize;
 
     for c in 0..mesh::CHUNK_COUNT {
         let start = w;
         let budget = start + PROPS_PER_CHUNK;
+        let glow_start = gw;
+        let glow_budget = glow_start + GLOWS_PER_CHUNK;
+        let (mut glo, mut ghi) = (
+            Vec3::new(f32::MAX, f32::MAX, f32::MAX),
+            Vec3::new(f32::MIN, f32::MIN, f32::MIN),
+        );
         let first_node = c * mesh::CHUNK_NODES * mesh::RENDER_STRIDE;
         let last_node = core::cmp::min(
             first_node + mesh::CHUNK_NODES * mesh::RENDER_STRIDE,
@@ -432,6 +461,31 @@ unsafe fn build_props(track: &Track) {
                 for v in &verts[w - 108..w] {
                     note(&(*v), &mut lo, &mut hi);
                 }
+
+                // A glow around the head, and a 19 m pool of light spilling onto the road.
+                if gw + GROUND_GLOW_VERTS + GLOW_VERTS <= glow_budget {
+                    push_ground_glow(
+                        glows,
+                        &mut gw,
+                        node.p.x + node.nrm.x * 5.6 * side,
+                        node.p.y + 0.04,
+                        node.p.z + node.nrm.z * 5.6 * side,
+                        9.5,
+                        LAMP_POOL,
+                    );
+                    push_blob_glow(
+                        glows,
+                        &mut gw,
+                        head_x,
+                        node.p.y + 7.15,
+                        head_z,
+                        2.75,
+                        LAMP_GLOW,
+                    );
+                    for v in &glows[gw - GROUND_GLOW_VERTS - GLOW_VERTS * 2..gw] {
+                        note(&(*v), &mut glo, &mut ghi);
+                    }
+                }
             }
 
             // --- cones, alternating sides of the road ---
@@ -498,6 +552,23 @@ unsafe fn build_props(track: &Track) {
                 for v in &verts[before..w] {
                     note(&(*v), &mut lo, &mut hi);
                 }
+
+                if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
+                    let g0 = gw;
+                    push_ground_glow(
+                        glows,
+                        &mut gw,
+                        node.p.x + node.nrm.x * 7.0 * side,
+                        node.p.y + 0.04,
+                        node.p.z + node.nrm.z * 7.0 * side,
+                        11.0,
+                        FLOOD_POOL,
+                    );
+                    push_blob_glow(glows, &mut gw, bx, node.p.y + 11.9, bz, 6.0, LAMP_GLOW);
+                    for v in &glows[g0..gw] {
+                        note(&(*v), &mut glo, &mut ghi);
+                    }
+                }
             }
         }
 
@@ -507,6 +578,26 @@ unsafe fn build_props(track: &Track) {
             w += build_bay_props(track, &mut verts[w..]);
             for v in &verts[before..w] {
                 note(&(*v), &mut lo, &mut hi);
+            }
+
+            // The 26 m pool over the pad, and a glow on the lamp head above it.
+            let node = &track.nodes[BAY_NODE];
+            let s = BAY_SIDE;
+            let at = |along: f32, lateral: f32| {
+                (
+                    node.p.x + node.dir.x * along + node.nrm.x * lateral * s,
+                    node.p.z + node.dir.z * along + node.nrm.z * lateral * s,
+                )
+            };
+            if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
+                let g0 = gw;
+                let (px, pz) = at(11.0, 9.0);
+                push_ground_glow(glows, &mut gw, px, node.p.y + 0.05, pz, 13.0, LAMP_POOL);
+                let (hx, hz) = at(14.0, 9.8);
+                push_blob_glow(glows, &mut gw, hx, node.p.y + 7.15, hz, 2.75, LAMP_GLOW);
+                for v in &glows[g0..gw] {
+                    note(&(*v), &mut glo, &mut ghi);
+                }
             }
         }
 
@@ -525,6 +616,26 @@ unsafe fn build_props(track: &Track) {
             count: count as u32,
             center,
             radius,
+        };
+
+        let glow_count = gw - glow_start;
+        let glow_center = if glow_count > 0 {
+            glo.add(ghi).scale(0.5)
+        } else {
+            Vec3::ZERO
+        };
+        let mut glow_radius = 0.0f32;
+        for v in &glows[glow_start..gw] {
+            glow_radius = fmax(
+                glow_radius,
+                Vec3::new(v.x, v.y, v.z).sub(glow_center).length(),
+            );
+        }
+        PROP_GLOW_CHUNKS[c] = Chunk {
+            start: glow_start as u32,
+            count: glow_count as u32,
+            center: glow_center,
+            radius: glow_radius,
         };
     }
 }
@@ -959,6 +1070,38 @@ pub fn draw_world(camera: &Camera) {
             );
         }
         sys::sceGuEnable(GuState::CullFace);
+
+        // Light pools and lamp glows, added on top of the world they fall on. Depth-tested so a
+        // pool is hidden by a hill in front of it, but never written, so nothing behind is lost.
+        sys::sceGuEnable(GuState::Blend);
+        sys::sceGuBlendFunc(
+            sys::BlendOp::Add,
+            sys::BlendFactor::SrcAlpha,
+            sys::BlendFactor::Fix,
+            0,
+            0xffff_ffff,
+        );
+        sys::sceGuDepthMask(1);
+        sys::sceGuDisable(GuState::CullFace);
+
+        let glow_verts = &raw const PROP_GLOW_MESH as *const Vertex;
+        let glow_chunks = &*(&raw const PROP_GLOW_CHUNKS);
+        for chunk in glow_chunks.iter() {
+            if !visible(chunk, eye, forward) {
+                continue;
+            }
+            sys::sceGumDrawArray(
+                GuPrimitive::Triangles,
+                VERTEX_FORMAT,
+                chunk.count as i32,
+                core::ptr::null(),
+                glow_verts.add(chunk.start as usize) as *const c_void,
+            );
+        }
+
+        sys::sceGuEnable(GuState::CullFace);
+        sys::sceGuDepthMask(0);
+        sys::sceGuDisable(GuState::Blend);
     }
 }
 
@@ -1156,6 +1299,68 @@ unsafe fn push_glow(
         *verts.add(*w + 1) = edge(k);
         *verts.add(*w + 2) = edge(k + 1);
         *w += 3;
+    }
+}
+
+/// Vertices a flat ground pool costs.
+const GROUND_GLOW_VERTS: usize = GLOW_SEGMENTS * 3;
+
+/// A pool of light lying on the ground, fading out from the middle. Flat, so unlike the lamp
+/// billboards it needs no camera and can be baked once.
+unsafe fn push_ground_glow(
+    out: &mut [Vertex],
+    w: &mut usize,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    radius: f32,
+    color: u32,
+) {
+    let rim = color & 0x00ff_ffff;
+    let centre = Vertex::new(cx, cy, cz, color);
+    let edge = |k: usize| {
+        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+        Vertex::new(cx + cos(a) * radius, cy, cz + sin(a) * radius, rim)
+    };
+    for k in 0..GLOW_SEGMENTS {
+        out[*w] = centre;
+        out[*w + 1] = edge(k);
+        out[*w + 2] = edge(k + 1);
+        *w += 3;
+    }
+}
+
+/// A glow around a lamp head, built as two crossed vertical fans. Baked rather than billboarded:
+/// these are fixed to the scenery, and a crossed pair reads from any angle without needing to be
+/// rebuilt every frame for every lamp on the track.
+unsafe fn push_blob_glow(
+    out: &mut [Vertex],
+    w: &mut usize,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    radius: f32,
+    color: u32,
+) {
+    let rim = color & 0x00ff_ffff;
+    let centre = Vertex::new(cx, cy, cz, color);
+    for axis in 0..2 {
+        let (ax, az) = if axis == 0 { (1.0, 0.0) } else { (0.0, 1.0) };
+        let edge = |k: usize| {
+            let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+            Vertex::new(
+                cx + ax * cos(a) * radius,
+                cy + sin(a) * radius,
+                cz + az * cos(a) * radius,
+                rim,
+            )
+        };
+        for k in 0..GLOW_SEGMENTS {
+            out[*w] = centre;
+            out[*w + 1] = edge(k);
+            out[*w + 2] = edge(k + 1);
+            *w += 3;
+        }
     }
 }
 

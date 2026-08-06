@@ -247,3 +247,86 @@ fn synthesis_is_deterministic() {
     let b = render(&mut Synth::new(), &p, 4);
     assert_eq!(a, b);
 }
+
+// ------------------------------------------------------------------ rail impacts
+
+#[test]
+fn a_rail_hit_makes_a_noise() {
+    let silent = Params {
+        engine_freq: 200.0,
+        engine_gain: 0.0,
+        cutoff: 1_000.0,
+        squeal_gain: 0.0,
+    };
+    let mut s = Synth::new();
+    // Nothing but the impact, so this measures the thud alone.
+    s.trigger_impact(1.0);
+    let hit = rms(&render(&mut s, &silent, 2));
+    assert!(hit > 50.0, "the impact was inaudible (RMS {hit})");
+}
+
+#[test]
+fn the_thud_dies_away() {
+    let silent = Params {
+        engine_freq: 200.0,
+        engine_gain: 0.0,
+        cutoff: 1_000.0,
+        squeal_gain: 0.0,
+    };
+    let mut s = Synth::new();
+    s.trigger_impact(1.0);
+    // Equal-length windows, or the later one is just dominated by its own opening samples.
+    let early = rms(&render(&mut s, &silent, 2));
+    let _ = render(&mut s, &silent, 10);
+    let late = rms(&render(&mut s, &silent, 2));
+    assert!(late < early * 0.1, "impact rang on: {early} -> {late}");
+    // And it settles to actual silence rather than to a floor.
+    let _ = render(&mut s, &silent, 20);
+    let eventually = rms(&render(&mut s, &silent, 2));
+    assert!(eventually < 1.0, "impact never fell silent (RMS {eventually})");
+}
+
+#[test]
+fn a_harder_hit_is_louder() {
+    let silent = Params {
+        engine_freq: 200.0,
+        engine_gain: 0.0,
+        cutoff: 1_000.0,
+        squeal_gain: 0.0,
+    };
+    let mut soft = Synth::new();
+    soft.trigger_impact(0.25);
+    let a = rms(&render(&mut soft, &silent, 2));
+
+    let mut hard = Synth::new();
+    hard.trigger_impact(1.0);
+    let b = rms(&render(&mut hard, &silent, 2));
+    assert!(b > a * 2.0, "hit strength barely mattered: {a} vs {b}");
+}
+
+#[test]
+fn grinding_along_a_rail_cannot_stack_into_a_roar() {
+    // Wall taps arrive repeatedly while scraping. Retriggering must not accumulate.
+    let p = params_for(40.0, 1.0, 1.0, true, true, 2.0);
+    let mut s = Synth::new();
+    let mut peak = 0u16;
+    for _ in 0..60 {
+        s.trigger_impact(1.0);
+        let mut buf = vec![0i16; FRAMES_PER_BUFFER * 2];
+        s.render(&p, &mut buf);
+        peak = peak.max(buf.iter().map(|&v| v.unsigned_abs()).max().unwrap());
+    }
+    assert!(peak < 32_700, "repeated impacts clipped at {peak}");
+}
+
+#[test]
+fn an_untriggered_synth_stays_silent() {
+    let silent = Params {
+        engine_freq: 200.0,
+        engine_gain: 0.0,
+        cutoff: 1_000.0,
+        squeal_gain: 0.0,
+    };
+    let mut s = Synth::new();
+    assert!(rms(&render(&mut s, &silent, 4)) < 1.0);
+}

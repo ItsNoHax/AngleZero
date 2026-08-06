@@ -82,6 +82,8 @@ pub struct Game {
     last_throttle: f32,
     /// Whether the brake or handbrake was applied, which the tail lamps read.
     last_braking: bool,
+    /// Counts guard-rail impacts. The shell watches it to fire the thud once per hit.
+    impacts: u32,
 
     /// Last frame's buttons, for edge detection.
     prev: Buttons,
@@ -119,6 +121,7 @@ impl Game {
             toast_timer: 0.0,
             last_throttle: 0.0,
             last_braking: false,
+            impacts: 0,
             prev: Buttons {
                 cross: false,
                 circle: false,
@@ -205,6 +208,14 @@ impl Game {
         self.last_braking
     }
 
+    /// Running count of guard-rail impacts. The shell compares it against the last value it saw
+    /// rather than being handed a flag, so a hit is sounded exactly once however many frames
+    /// elapse between the audio thread's buffers.
+    #[inline]
+    pub fn impact_count(&self) -> u32 {
+        self.impacts
+    }
+
     /// Progress down the hill as a whole percentage, for the HUD.
     pub fn descent_percent(&self, track: &Track) -> u32 {
         (track.progress(self.vehicle.locator.last_idx) * 100.0 + 0.5) as u32
@@ -283,6 +294,7 @@ impl Game {
             }
             if outcome.wall_tap {
                 self.camera.add_shake(0.5);
+                self.impacts = self.impacts.wrapping_add(1);
                 // The combo always dies; it is only worth announcing if there was one.
                 if self.scoring.on_wall_tap() {
                     self.show(Toast::WallTap);

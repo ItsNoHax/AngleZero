@@ -55,6 +55,12 @@ pub fn params_for(
     }
 }
 
+/// Per-sample decay of the impact envelope: down to a thousandth after about 0.3 s, which is
+/// roughly how long a guard rail takes to stop ringing.
+const IMPACT_DECAY: f32 = 0.99948;
+/// Fundamental of the impact thud, in Hz. Low enough to feel like a body panel rather than a beep.
+const IMPACT_FREQ: f32 = 78.0;
+
 /// Stateful oscillator bank. Phase carries across buffers — resetting it would click audibly at
 /// every boundary, roughly 43 times a second.
 pub struct Synth {
@@ -64,6 +70,8 @@ pub struct Synth {
     noise: u32,
     band_lo: f32,
     band_mid: f32,
+    impact_env: f32,
+    impact_phase: f32,
 }
 
 impl Default for Synth {
@@ -81,6 +89,20 @@ impl Synth {
             noise: 0x1357_9BDF,
             band_lo: 0.0,
             band_mid: 0.0,
+            impact_env: 0.0,
+            impact_phase: 0.0,
+        }
+    }
+
+    /// Thumps once — a guard-rail hit. `strength` is 0.0–1.0.
+    ///
+    /// Retriggering takes the louder of the two rather than adding, so grinding along a rail
+    /// cannot stack impacts into a roar.
+    pub fn trigger_impact(&mut self, strength: f32) {
+        let s = crate::math::clamp(strength, 0.0, 1.0);
+        if s > self.impact_env {
+            self.impact_env = s;
+            self.impact_phase = 0.0;
         }
     }
 
@@ -138,9 +160,25 @@ impl Synth {
                 0.0
             };
 
+            // A rail hit: a low tone with a noise edge, decaying fast.
+            let impact = if self.impact_env > 0.0001 {
+                self.impact_phase += IMPACT_FREQ * dt;
+                if self.impact_phase >= 1.0 {
+                    self.impact_phase -= 1.0;
+                }
+                let tone = crate::math::sin(self.impact_phase * crate::math::TAU);
+                let edge = self.white();
+                let hit = (tone * 0.75 + edge * 0.25) * self.impact_env * 0.16;
+                self.impact_env *= IMPACT_DECAY;
+                hit
+            } else {
+                self.impact_env = 0.0;
+                0.0
+            };
+
             // Headroom is deliberate: the gains sum well under 1.0, and the limiter is
             // only here so a future tweak cannot wrap the sample and produce a full-scale click.
-            let mixed = (engine + squeal) * 4.0;
+            let mixed = (engine + squeal + impact) * 4.0;
             let clamped = crate::math::clamp(mixed, -0.98, 0.98);
             let sample = (clamped * 32_767.0) as i16;
 

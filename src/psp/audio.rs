@@ -26,10 +26,21 @@ static mut BUFFER: psp::Align16<[i16; FRAMES_PER_BUFFER * 2]> =
     psp::Align16([0; FRAMES_PER_BUFFER * 2]);
 static mut RUNNING: bool = false;
 
+/// Impact counter published by the game thread. The audio thread keeps its own copy of the last
+/// value it acted on, so a hit fires exactly once no matter how the two threads interleave.
+static mut IMPACT_SEQ: u32 = 0;
+
 /// Hands the synthesiser the latest car state. Cheap enough to call every frame.
 pub fn set_params(params: Params) {
     unsafe {
         PARAMS = params;
+    }
+}
+
+/// Publishes the game's running impact count; the audio thread thumps on each change.
+pub fn set_impact_count(count: u32) {
+    unsafe {
+        IMPACT_SEQ = count;
     }
 }
 
@@ -44,8 +55,15 @@ extern "C" fn audio_thread(_argc: usize, _argv: *mut c_void) -> i32 {
         let buffer = &raw mut BUFFER as *mut i16;
         let synth = &mut *(&raw mut SYNTH);
 
+        let mut last_impact = IMPACT_SEQ;
+
         while RUNNING {
             let params = PARAMS;
+            let impacts = IMPACT_SEQ;
+            if impacts != last_impact {
+                last_impact = impacts;
+                synth.trigger_impact(0.9);
+            }
             let slice = core::slice::from_raw_parts_mut(buffer, FRAMES_PER_BUFFER * 2);
             synth.render(&params, slice);
             // Full volume; the mix is already scaled well below the rail in the synthesiser.
