@@ -989,6 +989,12 @@ pub fn set_camera(camera: &Camera) {
 }
 
 /// Chunks beyond fog range or behind the camera contribute nothing.
+///
+/// `forward` must be the real view direction, not the chase heading. The camera sits several
+/// metres above the road looking down at it, so the near plane is pitched; ground that is behind
+/// the camera *horizontally* can still be well inside the frustum. Testing against the horizontal
+/// heading culled the road out from under the car, and got worse with speed, because the camera
+/// rises, pulls back and widens its field of view as it goes faster.
 fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
     if chunk.count == 0 {
         return false;
@@ -998,7 +1004,7 @@ fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
     if distance - chunk.radius > FOG_FAR {
         return false;
     }
-    // Generous behind-test: only reject what is fully behind the eye plane.
+    // Reject only what the bounding sphere places entirely behind the near plane.
     to_chunk.dot(forward) > -(chunk.radius + 12.0)
 }
 
@@ -1022,7 +1028,8 @@ fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
 /// Draws the world. The car is drawn separately so it can carry its own transform.
 pub fn draw_world(camera: &Camera) {
     let eye = camera.pos;
-    let forward = Vec3::new(sin(camera.yaw), 0.0, cos(camera.yaw));
+    // Where the camera actually points, including its downward tilt onto the road.
+    let forward = camera.look_at.sub(eye).normalized();
 
     unsafe {
         sys::sceGumMatrixMode(MatrixMode::Model);

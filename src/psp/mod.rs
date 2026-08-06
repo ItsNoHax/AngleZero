@@ -157,6 +157,11 @@ pub fn psp_main() {
         let mut show_debug = false;
         #[cfg(feature = "devtools")]
         let mut shots: u32 = 0;
+        // Each capture is half a megabyte; enough for a burst, not enough to fill a stick.
+        #[cfg(feature = "devtools")]
+        const MAX_SHOTS: u32 = 40;
+        #[cfg(feature = "devtools")]
+        let mut burst: u32 = 0;
         #[cfg(feature = "devtools")]
         let mut prev_debug_buttons = CtrlButtons::empty();
 
@@ -170,17 +175,28 @@ pub fn psp_main() {
             let dt = (now.wrapping_sub(last_tick)) as f32 / 1_000_000.0;
             last_tick = now;
 
+            // A tap saves one frame; holding SELECT saves a burst, which is the only practical
+            // way to catch something that flickers for a few frames while you are also driving.
             #[cfg(feature = "devtools")]
-            let select_edge = {
+            let want_capture = {
                 let start_edge = pad.buttons.contains(CtrlButtons::START)
                     && !prev_debug_buttons.contains(CtrlButtons::START);
-                let select = pad.buttons.contains(CtrlButtons::SELECT)
-                    && !prev_debug_buttons.contains(CtrlButtons::SELECT);
+                let select_held = pad.buttons.contains(CtrlButtons::SELECT);
+                let select_edge = select_held && !prev_debug_buttons.contains(CtrlButtons::SELECT);
                 prev_debug_buttons = pad.buttons;
                 if start_edge {
                     show_debug = !show_debug;
                 }
-                select
+                if select_edge {
+                    burst = 0;
+                }
+                // Every 10th frame while held, so a burst covers roughly a sixth of a second per
+                // shot without the file writes starving the frame entirely.
+                let due = select_held && burst > 0 && burst % 10 == 0;
+                if select_held {
+                    burst += 1;
+                }
+                (select_edge || due) && shots < MAX_SHOTS
             };
 
             #[cfg(feature = "devtools")]
@@ -264,7 +280,7 @@ pub fn psp_main() {
             // After the swap, so the capture is of the frame just shown rather than the one
             // still being drawn into.
             #[cfg(feature = "devtools")]
-            if select_edge && capture::capture(game, &diag).is_some() {
+            if want_capture && capture::capture(game, &diag).is_some() {
                 shots += 1;
             }
 

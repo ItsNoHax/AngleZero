@@ -71,6 +71,29 @@ pub struct Chunk {
     pub radius: f32,
 }
 
+/// Whether a chunk can contribute anything to the frame.
+///
+/// `forward` must be the camera's real view direction, not its horizontal heading. The chase
+/// camera sits several metres above the road looking down at it, so the near plane is pitched:
+/// ground that is behind the camera *horizontally* can still be well inside the frustum.
+///
+/// The sphere test against the plane through the eye is exact, so the extra 12 m is pure margin
+/// for the fact that a chunk's bounding sphere is a loose fit around 130 m of curving track.
+///
+/// Lives here rather than next to the renderer so it can be tested — it is pure geometry, and
+/// getting it wrong deletes parts of the world that are plainly on screen.
+pub fn chunk_visible(chunk: &Chunk, eye: Vec3, forward: Vec3, fog_far: f32) -> bool {
+    if chunk.count == 0 {
+        return false;
+    }
+    let to_chunk = chunk.center.sub(eye);
+    if to_chunk.length() - chunk.radius > fog_far {
+        return false;
+    }
+    // Reject only what the bounding sphere places entirely behind the near plane.
+    to_chunk.dot(forward) > -(chunk.radius + 12.0)
+}
+
 /// Worst-case vertex count for a ribbon with `stations` columns.
 pub const fn ribbon_capacity(stations: usize) -> usize {
     // One node of overlap keeps chunks watertight, so a chunk spans CHUNK_NODES + 1 nodes.
