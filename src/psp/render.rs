@@ -1090,31 +1090,15 @@ pub fn draw_effects(effects: &Effects, camera: &Camera) {
             // Face the camera, so a puff never collapses to an edge-on sliver.
             let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
 
-            if let Some(verts) = alloc_verts(puffs * 6) {
+            if let Some(verts) = alloc_verts(puffs * GLOW_VERTS) {
                 let mut w = 0usize;
                 for p in effects.puffs().iter().filter(|p| p.life > 0.0) {
                     let r = p.scale() * 0.5;
                     let a = (p.alpha() * 255.0) as u32;
                     let color = rgba(0xC8, 0xCE, 0xD8, a);
-                    let corner = |sx: f32, sy: f32| {
-                        Vertex::new(
-                            p.x + right_x * r * sx,
-                            p.y + r * sy,
-                            p.z + right_z * r * sx,
-                            color,
-                        )
-                    };
-                    for v in [
-                        corner(-1.0, -1.0),
-                        corner(1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, -1.0),
-                        corner(1.0, 1.0),
-                        corner(-1.0, 1.0),
-                    ] {
-                        *verts.add(w) = v;
-                        w += 1;
-                    }
+                    // Soft-edged, for the same reason the lamp glows are: a flat additive quad
+                    // reads as a grey card rather than a puff.
+                    push_glow(verts, &mut w, p.x, p.y, p.z, (right_x, right_z), r, r, color);
                 }
                 sys::sceGumDrawArray(
                     GuPrimitive::Triangles,
@@ -1130,6 +1114,48 @@ pub fn draw_effects(effects: &Effects, camera: &Camera) {
         sys::sceGuEnable(GuState::CullFace);
         sys::sceGuDepthMask(0);
         sys::sceGuDisable(GuState::Blend);
+    }
+}
+
+/// Segments in a radial glow sprite.
+const GLOW_SEGMENTS: usize = 8;
+/// Vertices one glow costs, as a triangle fan expanded into separate triangles.
+const GLOW_VERTS: usize = GLOW_SEGMENTS * 3;
+
+/// Writes a camera-facing radial glow: bright in the middle, fading to nothing at the rim.
+///
+/// Gradient sprites would be the obvious way to do these. A flat quad of the same size and opacity
+/// saturates instead of glowing — two braking tail lamps at 0.95 alpha turn the whole car into a
+/// red slab — so the falloff is built into the vertex colours.
+#[allow(clippy::too_many_arguments)]
+unsafe fn push_glow(
+    verts: *mut Vertex,
+    w: &mut usize,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    right: (f32, f32),
+    half_w: f32,
+    half_h: f32,
+    color: u32,
+) {
+    let core = color;
+    let rim = color & 0x00ff_ffff; // same hue, zero alpha
+    let centre = Vertex::new(cx, cy, cz, core);
+    let edge = |k: usize| {
+        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+        Vertex::new(
+            cx + right.0 * cos(a) * half_w,
+            cy + sin(a) * half_h,
+            cz + right.1 * cos(a) * half_w,
+            rim,
+        )
+    };
+    for k in 0..GLOW_SEGMENTS {
+        *verts.add(*w) = centre;
+        *verts.add(*w + 1) = edge(k);
+        *verts.add(*w + 2) = edge(k + 1);
+        *w += 3;
     }
 }
 
@@ -1185,28 +1211,24 @@ pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
             (0.64, -2.02, 1.00, tail_w, tail_h, rgba(0xFF, 0x55, 0x44, tail_alpha), show_tail),
         ];
 
-        if let Some(verts) = alloc_verts(lamps.len() * 6) {
+        if let Some(verts) = alloc_verts(lamps.len() * GLOW_VERTS) {
             let mut w = 0usize;
             for (lx, lz, ly, hw, hh, color, visible) in lamps {
                 if !visible {
                     continue;
                 }
                 let (px, pz) = place(lx, lz);
-                let py = st.y + ly;
-                let corner = |a: f32, b: f32| {
-                    Vertex::new(px + right_x * hw * a, py + hh * b, pz + right_z * hw * a, color)
-                };
-                for v in [
-                    corner(-1.0, -1.0),
-                    corner(1.0, -1.0),
-                    corner(1.0, 1.0),
-                    corner(-1.0, -1.0),
-                    corner(1.0, 1.0),
-                    corner(-1.0, 1.0),
-                ] {
-                    *verts.add(w) = v;
-                    w += 1;
-                }
+                push_glow(
+                    verts,
+                    &mut w,
+                    px,
+                    st.y + ly,
+                    pz,
+                    (right_x, right_z),
+                    hw,
+                    hh,
+                    color,
+                );
             }
             sys::sceGumDrawArray(
                 GuPrimitive::Triangles,
