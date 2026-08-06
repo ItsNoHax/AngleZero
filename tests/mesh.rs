@@ -114,13 +114,24 @@ fn road_vertices_sit_where_the_stations_say_relative_to_the_centreline() {
 
     // Every vertex must lie within the widest station's offset of some centreline node. Sample
     // the vertices, but search every node — a coarse node search would itself add error.
+    //
+    // Apron vertices are excluded: they are deliberately extrapolated past the ends of the track,
+    // so being far from any node is the whole point of them.
     let widest = ROAD
         .iter()
         .fold(0.0f32, |m, s| m.max(s.lateral.abs()));
+    let first = t.nodes[0];
+    let last = t.nodes[angle_zero::track::NODE_COUNT - 1];
 
     let mut v_i = 0;
     while v_i < r.len {
         let v = &r.verts[v_i];
+        let before = (v.x - first.p.x) * first.dir.x + (v.z - first.p.z) * first.dir.z;
+        let after = (v.x - last.p.x) * last.dir.x + (v.z - last.p.z) * last.dir.z;
+        if before < 0.0 || after > 0.0 {
+            v_i += 37;
+            continue;
+        }
         let mut best = f32::INFINITY;
         for n in t.nodes.iter() {
             let d = ((v.x - n.p.x).powi(2) + (v.z - n.p.z).powi(2)).sqrt();
@@ -243,5 +254,62 @@ fn a_cylinder_closes_on_itself() {
         let r = (v.y * v.y + v.z * v.z).sqrt();
         assert!(r <= 0.36 + 1e-4, "radius {r} exceeded 0.36");
         assert!(v.x.abs() <= 0.13 + 1e-4, "width {} exceeded half of 0.26", v.x);
+    }
+}
+
+/// The chase camera sits up to 10.6 m behind the car, and a run starts at node 2 — barely three
+/// metres into the track. Without an apron of geometry extrapolated beyond each end, the camera
+/// looks past the start of the ribbon at ground that was never built, and the bottom of the screen
+/// shows the clear colour. It is 100% reproducible at the start of a run and gets worse with
+/// speed, because the camera pulls further back the faster you go.
+#[test]
+fn the_ribbon_extends_beyond_both_ends_of_the_track() {
+    let t = track();
+    let mut r = Box::new(Ribbon::<{ mesh::ribbon_capacity(5) }>::EMPTY);
+    r.build(&t, &ROAD);
+
+    let first = t.nodes[0];
+    let last = t.nodes[angle_zero::track::NODE_COUNT - 1];
+
+    // How far the mesh reaches *behind* node 0, measured against that node's direction.
+    let behind = r.verts[..r.len]
+        .iter()
+        .map(|v| (v.x - first.p.x) * first.dir.x + (v.z - first.p.z) * first.dir.z)
+        .fold(f32::INFINITY, f32::min);
+    assert!(
+        behind <= -mesh::APRON_METRES + 0.5,
+        "ribbon only reaches {behind:.1} m behind the start; the camera can sit 10.6 m back"
+    );
+
+    // And past the finish, for the same reason at the other end.
+    let beyond = r.verts[..r.len]
+        .iter()
+        .map(|v| (v.x - last.p.x) * last.dir.x + (v.z - last.p.z) * last.dir.z)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        beyond >= mesh::APRON_METRES - 0.5,
+        "ribbon only reaches {beyond:.1} m past the finish"
+    );
+}
+
+#[test]
+fn the_apron_stays_on_the_line_the_track_was_heading() {
+    let t = track();
+    let mut r = Box::new(Ribbon::<{ mesh::ribbon_capacity(5) }>::EMPTY);
+    r.build(&t, &ROAD);
+
+    // Extrapolated vertices must sit within the road's half-width of node 0's tangent line, or
+    // the apron would visibly kink away from the road it is extending.
+    let n = t.nodes[0];
+    for v in r.verts[..r.len].iter() {
+        let along = (v.x - n.p.x) * n.dir.x + (v.z - n.p.z) * n.dir.z;
+        if along >= 0.0 {
+            continue;
+        }
+        let lat = (v.x - n.p.x) * n.nrm.x + (v.z - n.p.z) * n.nrm.z;
+        assert!(
+            lat.abs() < 7.0,
+            "apron vertex {lat:.1} m off the centreline, wider than the road"
+        );
     }
 }

@@ -20,6 +20,17 @@ pub const RENDER_STRIDE: usize = 3;
 pub const RENDER_NODES: usize = (NODE_COUNT + RENDER_STRIDE - 1) / RENDER_STRIDE;
 /// Nodes per cullable chunk.
 pub const CHUNK_NODES: usize = 32;
+
+/// Render nodes of extrapolated road built beyond each end of the track.
+///
+/// The chase camera trails the car by up to 10.6 m, and a run starts at node 2 — three metres in.
+/// Without this the camera sits behind where the ribbon begins and looks at ground that was never
+/// built, so the bottom of the screen shows the clear colour. It is worse the faster you go,
+/// because the camera pulls further back with speed.
+pub const APRON_NODES: usize = 8;
+/// How far that apron reaches, in metres. Node spacing is ~1.34 m and the mesh takes every
+/// `RENDER_STRIDE`-th node.
+pub const APRON_METRES: f32 = APRON_NODES as f32 * RENDER_STRIDE as f32 * 1.34;
 pub const CHUNK_COUNT: usize = (RENDER_NODES + CHUNK_NODES - 1) / CHUNK_NODES;
 
 /// Vertex layout for `GU_COLOR_8888 | GU_VERTEX_32BITF`. Colour precedes position, as the GU
@@ -96,8 +107,9 @@ pub fn chunk_visible(chunk: &Chunk, eye: Vec3, forward: Vec3, fog_far: f32) -> b
 
 /// Worst-case vertex count for a ribbon with `stations` columns.
 pub const fn ribbon_capacity(stations: usize) -> usize {
-    // One node of overlap keeps chunks watertight, so a chunk spans CHUNK_NODES + 1 nodes.
-    let n = CHUNK_NODES + 1;
+    // One node of overlap keeps chunks watertight, so a chunk spans CHUNK_NODES + 1 nodes. The
+    // first and last chunks carry the apron as well, so budget for it in every chunk.
+    let n = CHUNK_NODES + 1 + APRON_NODES;
     let strips = stations - 1;
     // Two vertices per strip per node, plus two degenerates at each strip join.
     (strips * 2 * n + (strips - 1) * 2) * CHUNK_COUNT
@@ -137,9 +149,16 @@ impl<const V: usize> Ribbon<V> {
         let mut w = 0usize;
 
         for c in 0..CHUNK_COUNT {
-            let first = c * CHUNK_NODES;
+            // Signed, because the first chunk starts before the track does.
+            let mut first = (c * CHUNK_NODES) as i32;
             // Overlap the next chunk by one node so there is no seam between them.
-            let last = min_usize(first + CHUNK_NODES, RENDER_NODES - 1);
+            let mut last = min_usize(c * CHUNK_NODES + CHUNK_NODES, RENDER_NODES - 1) as i32;
+            if c == 0 {
+                first -= APRON_NODES as i32;
+            }
+            if c == CHUNK_COUNT - 1 {
+                last += APRON_NODES as i32;
+            }
             let start = w;
 
             let (mut lo, mut hi) = (
@@ -200,24 +219,45 @@ impl<const V: usize> Ribbon<V> {
 }
 
 /// Whether a render node falls inside a gap expressed in centreline node indices.
-fn in_gap(render_node: usize, gap: Option<(usize, usize)>) -> bool {
+fn in_gap(render_node: i32, gap: Option<(usize, usize)>) -> bool {
     match gap {
         None => false,
         Some((from, to)) => {
-            let i = render_node * RENDER_STRIDE;
+            if render_node < 0 {
+                return false;
+            }
+            let i = render_node as usize * RENDER_STRIDE;
             i >= from && i <= to
         }
     }
 }
 
 /// Position of one station at one render node.
-fn station_vertex(track: &Track, render_node: usize, st: &Station) -> Vertex {
-    let i = min_usize(render_node * RENDER_STRIDE, NODE_COUNT - 1);
-    let n = &track.nodes[i];
+///
+/// The index is signed and may run past either end of the track: those become the apron, laid
+/// along the tangent of the nearest real node so the extension carries on in the direction the
+/// road was already going.
+fn station_vertex(track: &Track, render_node: i32, st: &Station) -> Vertex {
+    let last = (NODE_COUNT - 1) as i32;
+    let raw = render_node * RENDER_STRIDE as i32;
+
+    let (n, overshoot) = if raw < 0 {
+        (&track.nodes[0], raw as f32)
+    } else if raw > last {
+        (&track.nodes[NODE_COUNT - 1], (raw - last) as f32)
+    } else {
+        (&track.nodes[raw as usize], 0.0)
+    };
+
+    // Mean node spacing. Uniform-t sampling makes it vary, but the apron is short and only has to
+    // be continuous with the road, not exact.
+    let spacing = track.length / (NODE_COUNT - 1) as f32;
+    let along = overshoot * spacing;
+
     Vertex::new(
-        n.p.x + n.nrm.x * st.lateral,
+        n.p.x + n.dir.x * along + n.nrm.x * st.lateral,
         n.p.y + st.y,
-        n.p.z + n.nrm.z * st.lateral,
+        n.p.z + n.dir.z * along + n.nrm.z * st.lateral,
         st.color,
     )
 }

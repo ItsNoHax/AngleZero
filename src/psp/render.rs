@@ -34,6 +34,9 @@ pub const SKY_CLEAR: u32 = rgb(0x07, 0x0A, 0x12);
 pub const FOG_COLOR: u32 = rgb(0x08, 0x0C, 0x15);
 pub const FOG_NEAR: f32 = 45.0;
 pub const FOG_FAR: f32 = 330.0;
+/// Projection far plane, and the distance past which chunks are culled. Geometry beyond this is
+/// clipped by the hardware anyway, so nothing visible can be lost by using it.
+pub const DRAW_DISTANCE: f32 = 2400.0;
 
 const ROAD_COLOR: u32 = rgb(0x1A, 0x1C, 0x20);
 const EDGE_COLOR: u32 = rgb(0xA9, 0xA2, 0x93);
@@ -973,7 +976,7 @@ pub fn set_camera(camera: &Camera) {
         sys::sceGumLoadIdentity();
         // 480x272 is 16:9. Far is deliberately short — fog hides everything past
         // 330 m anyway, and a tighter range buys depth precision.
-        sys::sceGumPerspective(camera.fov, 16.0 / 9.0, 0.4, 2400.0);
+        sys::sceGumPerspective(camera.fov, 16.0 / 9.0, 0.4, DRAW_DISTANCE);
 
         sys::sceGumMatrixMode(MatrixMode::View);
         // Deliberately not `sceGumLookAt`: in rust-psp 0.3.13 it is a no-op, because its
@@ -988,24 +991,23 @@ pub fn set_camera(camera: &Camera) {
     }
 }
 
-/// Chunks beyond fog range or behind the camera contribute nothing.
+/// Chunks behind the camera, or past the projection's far plane, contribute nothing.
 ///
 /// `forward` must be the real view direction, not the chase heading. The camera sits several
 /// metres above the road looking down at it, so the near plane is pitched; ground that is behind
-/// the camera *horizontally* can still be well inside the frustum. Testing against the horizontal
-/// heading culled the road out from under the car, and got worse with speed, because the camera
-/// rises, pulls back and widens its field of view as it goes faster.
+/// the camera *horizontally* can still be well inside the frustum.
+///
+/// The far limit is the fog distance. Because the test compares `distance - radius`, and a
+/// chunk's bounding sphere grows with how much the track curves through it, a nearer chunk can be
+/// culled while a farther one is kept — an index gap in the drawn set. That is real, and visible
+/// in a trace, but harmless: anything culled by this test has every vertex beyond 330 m, where
+/// fog has already taken it to within a shade of the sky.
+///
+/// Raising the limit to the far plane closes those gaps and costs five times the vertices —
+/// 93k a frame against 18k — for geometry nobody can see. Not worth it. The fault this was
+/// briefly suspected of causing turned out to be the ribbon simply ending; see `mesh::APRON_NODES`.
 fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
-    if chunk.count == 0 {
-        return false;
-    }
-    let to_chunk = chunk.center.sub(eye);
-    let distance = to_chunk.length();
-    if distance - chunk.radius > FOG_FAR {
-        return false;
-    }
-    // Reject only what the bounding sphere places entirely behind the near plane.
-    to_chunk.dot(forward) > -(chunk.radius + 12.0)
+    mesh::chunk_visible(chunk, eye, forward, FOG_FAR)
 }
 
 /// Per-frame tally of what actually got submitted to the GE.
