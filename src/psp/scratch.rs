@@ -28,9 +28,11 @@ struct CacheAligned<T>(T);
 
 static mut BUF: CacheAligned<[u8; SCRATCH_BYTES]> = CacheAligned([0; SCRATCH_BYTES]);
 static mut USED: usize = 0;
+#[cfg_attr(not(feature = "devtools"), allow(dead_code))]
 static mut HIGH_WATER: usize = 0;
 /// Counts exhaustion. Any non-zero value means a draw was silently skipped, which looks like
 /// geometry flickering in and out rather than like an error.
+#[cfg_attr(not(feature = "devtools"), allow(dead_code))]
 static mut FAILURES: u32 = 0;
 
 /// Drops any cached lines covering the arena, once, before anything is written through the
@@ -75,11 +77,13 @@ pub unsafe fn alloc<T>(n: usize) -> *mut T {
 }
 
 /// Largest amount used by any frame so far, for tuning `SCRATCH_BYTES`.
+#[cfg(feature = "devtools")]
 pub fn high_water() -> usize {
     unsafe { HIGH_WATER }
 }
 
 /// How many allocations have been refused. Should always be zero.
+#[cfg(feature = "devtools")]
 pub fn failures() -> u32 {
     unsafe { FAILURES }
 }

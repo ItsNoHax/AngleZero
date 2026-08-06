@@ -70,6 +70,10 @@ Artifacts land in `target/mipsel-sony-psp/debug/`:
 Use `cargo psp --release` for hardware: it is a fraction of the size, since the debug artifact is
 mostly debug info, and about five times quicker per frame.
 
+Add `--features devtools` for the on-device diagnostics and the headless screenshot hook. It is off
+by default, so a shipping build carries neither — see
+[Inspecting it on real hardware](#inspecting-it-on-real-hardware).
+
 The build prints `rust-lld: ... linking abicalls code with non-abicalls code` and
 `relocation refers to a discarded section` warnings. These are a known upstream issue
 ([rust-psp#203](https://github.com/overdrivenpotato/rust-psp/issues/203)) — recent Rust nightlies
@@ -115,12 +119,25 @@ Related: rust-psp creates its VFPU matrix context lazily, but only inside `sceGu
 `unreachable` — surfacing as a bare break instruction, not a panic message. `psp_main` touches
 `sceGumLoadIdentity` once during setup so later code can start with `sceGumMatrixMode`.
 
-**The GE reads vertex data asynchronously.** `sceGumDrawArray` only queues a pointer; the hardware
-does not read it until the list is kicked at `sceGuFinish`/`sceGuSync`. Building vertices in a
-stack local, or reusing one static buffer for several draws in a frame, is therefore a
-use-after-free that PPSSPP often survives and hardware will not. Everything dynamic goes through
-the bump arena in `src/psp/scratch.rs`, which lives for the whole frame and is flushed out of the
-data cache before the list runs.
+**The GE reads vertex data by pointer, and sooner than you think.** `sceGumDrawArray` only queues
+the pointer, so building vertices in a stack local — or reusing one static buffer for several draws
+in a frame — is a use-after-free that PPSSPP often survives and hardware will not. Everything
+dynamic goes through the bump arena in `src/psp/scratch.rs`, which lives for the whole frame.
+
+Lifetime is only half of it. In `GuContextType::Direct` the hardware does **not** wait for
+`sceGuFinish`: every `sceGumDrawArray` ends in `send_command_i_stall`, which advances the display
+list's stall address and kicks the GE into executing that draw immediately. So there is no safe
+point at which to write the data cache back — by the time the frame ends, the GE has already read
+every buffer the frame referenced, while the writes were still sitting in cache.
+
+The arena therefore hands out **uncached** pointers, the same trick `sceGuStart` uses for the
+display list itself, so the data is in memory before the draw pointing at it is ever issued. It
+costs about 0.3 ms a frame and cannot be got wrong later by a call site that forgets to flush.
+Statics the GE reads (the meshes, the font texture, the projected minimap) are written once at boot
+and flushed with `sceKernelDcacheWritebackAll` afterwards.
+
+Getting this wrong does not fail cleanly: it reads as text losing its last few characters, sprites
+appearing at wild coordinates, and geometry flickering — intermittently, and only on hardware.
 
 ## Running interactively
 
@@ -274,9 +291,20 @@ arena with a known ceiling.
 
 ## Inspecting it on real hardware
 
+The diagnostics live behind the `devtools` feature, which is **off by default** — a shipping build
+carries none of it, and does not sit there issuing an emulator devctl twice a second. Build with it
+when you need it:
+
+```bash
+cargo psp --release --features devtools
+```
+
+A feature rather than `debug_assertions`, because this tooling is most useful *on hardware*, and
+hardware builds are release builds: the debug binary is 7.6 MB against 460 KB.
+
 PPSSPP's software rasteriser is far more forgiving than the GE — no cache, no 16-bit depth buffer,
-no display list to overrun — so some faults only appear on a PSP. The game can capture its own
-evidence:
+no display list to overrun — so some faults only appear on a PSP. With the feature on, the game
+captures its own evidence:
 
 - **START** toggles a counter readout.
 - **SELECT** writes the current frame and those counters to `ms0:/ANGLEZERO/`.

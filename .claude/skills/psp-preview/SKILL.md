@@ -25,7 +25,7 @@ build — never start it without asking first).
 
 `--screenshot-save` is **pull-based**. Headless writes the file only when the emulated program calls
 `sceIoDevctl("emulator:", 0x20, ...)` (`EMULATOR_DEVCTL__EMIT_SCREENSHOT`) — that is the
-`emit_screenshot()` helper in `src/psp/mod.rs`, called every 30 frames. Headless captures **nothing** on
+`emit_screenshot()` helper in `src/psp/mod.rs`, which only exists under the `devtools` feature, called every 30 frames. Headless captures **nothing** on
 its `--timeout` path. So if no BMP appears, check that the program still emits, before suspecting the
 emulator.
 
@@ -36,8 +36,12 @@ Each emit overwrites the file, so the saved image is whatever state the *last* e
 1. Build from the project root:
 
    ```bash
-   cargo psp
+   cargo psp --features devtools
    ```
+
+   The `devtools` feature is **required**: capture is pull-based, and the `sceIoDevctl` hook that
+   asks the emulator to write the file is compiled out of a default build. Without it headless runs
+   to its timeout and produces no image at all.
 
    Headless runs the `.prx`, not the `.pbp`: `target/mipsel-sony-psp/debug/angle-zero.prx`. The
    `rust-lld` `abicalls` / `discarded section` warnings are expected and harmless (upstream

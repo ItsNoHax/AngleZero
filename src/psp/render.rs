@@ -364,7 +364,7 @@ unsafe fn build_props(track: &Track) {
             Vec3::new(f32::MAX, f32::MAX, f32::MAX),
             Vec3::new(f32::MIN, f32::MIN, f32::MIN),
         );
-        let mut note = |v: &Vertex, lo: &mut Vec3, hi: &mut Vec3| {
+        let note = |v: &Vertex, lo: &mut Vec3, hi: &mut Vec3| {
             *lo = Vec3::new(fmin(lo.x, v.x), fmin(lo.y, v.y), fmin(lo.z, v.z));
             *hi = Vec3::new(fmax(hi.x, v.x), fmax(hi.y, v.y), fmax(hi.z, v.z));
         };

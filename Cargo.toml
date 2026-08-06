@@ -3,6 +3,13 @@ name = "angle-zero"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# On-device diagnostics: the debug overlay, SELECT-to-capture, and the emulator screenshot hook
+# the headless preview relies on. Off by default so shipping builds carry none of it — but it is a
+# feature rather than `debug_assertions`, because the tooling is most useful on hardware and
+# hardware builds are release builds.
+devtools = []
+
 [lib]
 name = "angle_zero"
 path = "src/lib.rs"

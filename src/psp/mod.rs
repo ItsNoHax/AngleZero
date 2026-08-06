@@ -5,6 +5,7 @@
 //! clock that drives the fixed-timestep update.
 
 pub mod audio;
+#[cfg(feature = "devtools")]
 pub mod capture;
 pub mod hud;
 pub mod render;
@@ -35,7 +36,9 @@ static mut TRACK: Track = Track::EMPTY;
 static mut GAME: Game = Game::new();
 
 /// Ask the emulator to capture the display framebuffer. PPSSPP writes it to whatever path was
-/// passed to `--screenshot-save`; on real hardware this devctl simply fails and does nothing.
+/// passed to `--screenshot-save`; on real hardware this devctl simply fails and does nothing —
+/// which is exactly why a shipping build should not be issuing it twice a second.
+#[cfg(feature = "devtools")]
 fn emit_screenshot() {
     const EMULATOR_DEVCTL_EMIT_SCREENSHOT: u32 = 0x20;
 
@@ -148,9 +151,13 @@ pub fn psp_main() {
         // Hardware-only diagnostics: START toggles the readout, SELECT saves a frame and its
         // counters to ms0:/ANGLEZERO/. Both are edge-triggered off the raw pad, deliberately
         // outside the game's own input mapping so they cannot affect driving.
+        #[cfg(feature = "devtools")]
         let mut diag = capture::Diagnostics::default();
+        #[cfg(feature = "devtools")]
         let mut show_debug = false;
+        #[cfg(feature = "devtools")]
         let mut shots: u32 = 0;
+        #[cfg(feature = "devtools")]
         let mut prev_debug_buttons = CtrlButtons::empty();
 
         loop {
@@ -163,15 +170,20 @@ pub fn psp_main() {
             let dt = (now.wrapping_sub(last_tick)) as f32 / 1_000_000.0;
             last_tick = now;
 
-            let start_edge = pad.buttons.contains(CtrlButtons::START)
-                && !prev_debug_buttons.contains(CtrlButtons::START);
-            let select_edge = pad.buttons.contains(CtrlButtons::SELECT)
-                && !prev_debug_buttons.contains(CtrlButtons::SELECT);
-            prev_debug_buttons = pad.buttons;
-            if start_edge {
-                show_debug = !show_debug;
-            }
+            #[cfg(feature = "devtools")]
+            let select_edge = {
+                let start_edge = pad.buttons.contains(CtrlButtons::START)
+                    && !prev_debug_buttons.contains(CtrlButtons::START);
+                let select = pad.buttons.contains(CtrlButtons::SELECT)
+                    && !prev_debug_buttons.contains(CtrlButtons::SELECT);
+                prev_debug_buttons = pad.buttons;
+                if start_edge {
+                    show_debug = !show_debug;
+                }
+                select
+            };
 
+            #[cfg(feature = "devtools")]
             let work_start = sys::sceKernelGetSystemTimeLow();
             game.update(track, buttons, dt);
             if game.take_record_dirty() {
@@ -219,6 +231,7 @@ pub fn psp_main() {
             hud::begin();
             hud::draw(game, track);
             hud::scanlines();
+            #[cfg(feature = "devtools")]
             if show_debug {
                 hud::debug_overlay(&diag, shots);
             }
@@ -226,34 +239,41 @@ pub fn psp_main() {
 
             // `sceGuFinish` reports how much of the display list this frame used; overrunning
             // the buffer corrupts GE state silently, so it is worth watching.
+            #[cfg_attr(not(feature = "devtools"), allow(unused_variables))]
             let list_bytes = sys::sceGuFinish() as u32;
             sys::sceGuSync(GuSyncMode::Finish, GuSyncBehavior::Wait);
 
-            diag = capture::Diagnostics {
-                frame_us: sys::sceKernelGetSystemTimeLow().wrapping_sub(work_start),
-                list_bytes,
-                scratch_peak: scratch::high_water() as u32,
-                scratch_failures: scratch::failures(),
-                live_skids: game.effects.live_skids() as u32,
-                live_puffs: game.effects.live_puffs() as u32,
-                drifting: game.vehicle.drifting,
-                speed_kph: (game.vehicle.speed_kph() + 0.5) as u32,
-                descent_percent: game.descent_percent(track),
-            };
+            #[cfg(feature = "devtools")]
+            {
+                diag = capture::Diagnostics {
+                    frame_us: sys::sceKernelGetSystemTimeLow().wrapping_sub(work_start),
+                    list_bytes,
+                    scratch_peak: scratch::high_water() as u32,
+                    scratch_failures: scratch::failures(),
+                    live_skids: game.effects.live_skids() as u32,
+                    live_puffs: game.effects.live_puffs() as u32,
+                    drifting: game.vehicle.drifting,
+                    speed_kph: (game.vehicle.speed_kph() + 0.5) as u32,
+                    descent_percent: game.descent_percent(track),
+                };
+            }
 
             sys::sceDisplayWaitVblankStart();
             sys::sceGuSwapBuffers();
 
             // After the swap, so the capture is of the frame just shown rather than the one
             // still being drawn into.
+            #[cfg(feature = "devtools")]
             if select_edge && capture::capture(game, &diag).is_some() {
                 shots += 1;
             }
 
             frame += 1;
+            #[cfg(feature = "devtools")]
             if frame % 30 == 0 {
                 emit_screenshot();
             }
+            let _ = frame;
         }
     }
 }

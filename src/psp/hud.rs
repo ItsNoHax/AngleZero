@@ -232,10 +232,14 @@ fn pad2(buf: &mut [u8; 2], value: u32) -> &[u8] {
 ///
 /// `SCF` is the one to watch. It counts refused vertex-arena allocations, and any non-zero value
 /// means draws were silently dropped — which looks like flickering geometry, not like an error.
+#[cfg(feature = "devtools")]
 static mut SUM: u64 = 0;
+#[cfg(feature = "devtools")]
 static mut N: u64 = 0;
+#[cfg(feature = "devtools")]
 static mut PK: u32 = 0;
 
+#[cfg(feature = "devtools")]
 pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     let mut l = [0u8; 96];
     let mut w = 0usize;
