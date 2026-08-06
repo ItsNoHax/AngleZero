@@ -379,6 +379,7 @@ fn draw_run(game: &Game, track: &Track) {
 
     // --- bottom left: minimap and descent ---
     draw_minimap(game, track);
+
 }
 
 fn draw_minimap(game: &Game, track: &Track) {

@@ -5,6 +5,7 @@
 //! game behaves identically whether the renderer is managing 60 fps or 20.
 
 use crate::camera::Camera;
+use crate::effects::Effects;
 use crate::math::{atan2, clamp, cos, min, sin};
 use crate::scoring::Scoring;
 use crate::track::{Track, BAY_NODE, BAY_SIDE};
@@ -14,6 +15,8 @@ use crate::vehicle::{Input, Vehicle, FIXED_DT, MAX_FRAME_DT, MAX_SUBSTEPS};
 pub const START_NODE: usize = 2;
 /// Fraction of the centreline that counts as finishing.
 pub const FINISH_PROGRESS: f32 = 0.985;
+/// Beyond this lateral offset there is no tarmac left to mark.
+pub const SKID_LAT: f32 = 6.2;
 /// How long a toast stays up, and how long it spends fading out.
 pub const TOAST_HOLD: f32 = 1.1;
 pub const TOAST_FADE: f32 = 0.4;
@@ -63,6 +66,7 @@ pub struct Game {
     pub vehicle: Vehicle,
     pub scoring: Scoring,
     pub camera: Camera,
+    pub effects: Effects,
     pub run_time: f32,
     pub result: RunResult,
 
@@ -90,6 +94,7 @@ impl Game {
             vehicle: Vehicle::new(),
             scoring: Scoring::new(),
             camera: Camera::new(),
+            effects: Effects::new(),
             run_time: 0.0,
             result: RunResult {
                 time: 0.0,
@@ -155,6 +160,7 @@ impl Game {
     pub fn start_run(&mut self, track: &Track) {
         self.vehicle.place_at_node(track, START_NODE);
         self.scoring.reset();
+        self.effects.reset();
         self.run_time = 0.0;
         self.accumulator = 0.0;
         self.phase = Phase::Run;
@@ -210,6 +216,8 @@ impl Game {
                 }
                 self.run_substeps(track, buttons, frame_dt);
                 self.camera.update_run(&self.vehicle.state, frame_dt);
+                // Smoke ages per rendered frame rather than per substep.
+                self.effects.update(frame_dt);
 
                 if track.progress(self.vehicle.locator.last_idx) > FINISH_PROGRESS {
                     self.finish();
@@ -270,6 +278,14 @@ impl Game {
             );
             if event.combo_up {
                 self.show(Toast::ComboUp(self.scoring.combo));
+            }
+
+            if self.vehicle.drifting {
+                // Marks only where there is tarmac to mark; smoke happens regardless.
+                if crate::math::abs(self.vehicle.query.lat) < SKID_LAT {
+                    self.effects.emit_skids(&self.vehicle.state, speed);
+                }
+                self.effects.emit_smoke(&self.vehicle.state);
             }
         }
 

@@ -10,6 +10,7 @@
 use core::ffi::c_void;
 
 use angle_zero::camera::Camera;
+use angle_zero::effects::Effects;
 use angle_zero::math::{cos, sin, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::track::{Track, BAY_FROM, BAY_SIDE, BAY_TO};
@@ -726,6 +727,133 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
             );
             sys::sceGumPopMatrix();
         }
+    }
+}
+
+/// Skid marks and tyre smoke.
+///
+/// Both come out of fixed pools in the core, so the worst case is known up front and the whole
+/// lot fits in one draw call each.
+pub fn draw_effects(effects: &Effects, camera: &Camera) {
+    unsafe {
+        sys::sceGumMatrixMode(MatrixMode::Model);
+        sys::sceGumLoadIdentity();
+
+        // --- skid marks: dark quads laid flat on the road ---
+        sys::sceGuEnable(GuState::Blend);
+        sys::sceGuBlendFunc(
+            sys::BlendOp::Add,
+            sys::BlendFactor::SrcAlpha,
+            sys::BlendFactor::OneMinusSrcAlpha,
+            0,
+            0,
+        );
+        // Marks sit fractions of a metre above the road and must not fight it for depth.
+        sys::sceGuDepthMask(1);
+        sys::sceGuDisable(GuState::CullFace);
+
+        let live = effects.skids().iter().filter(|s| s.active).count();
+        if live > 0 {
+            if let Some(verts) = alloc_verts(live * 6) {
+                let mut w = 0usize;
+                for s in effects.skids().iter().filter(|s| s.active) {
+                    let (sy, cy) = (sin(s.yaw), cos(s.yaw));
+                    // 0.3 x 1.1 m, stretched lengthwise with speed.
+                    let (hw, hl) = (0.15, 0.55 * s.stretch);
+                    let corner = |a: f32, b: f32| {
+                        Vertex::new(
+                            s.x + a * hw * cy + b * hl * sy,
+                            s.y,
+                            s.z - a * hw * sy + b * hl * cy,
+                            rgba(0x08, 0x08, 0x0A, 0x8C),
+                        )
+                    };
+                    for v in [
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    ] {
+                        *verts.add(w) = v;
+                        w += 1;
+                    }
+                }
+                sys::sceGumDrawArray(
+                    GuPrimitive::Triangles,
+                    VERTEX_FORMAT,
+                    w as i32,
+                    core::ptr::null(),
+                    verts as *const c_void,
+                );
+            }
+        }
+
+        // --- smoke: additive billboards facing the camera ---
+        let puffs = effects.puffs().iter().filter(|p| p.life > 0.0).count();
+        if puffs > 0 {
+            sys::sceGuBlendFunc(
+                sys::BlendOp::Add,
+                sys::BlendFactor::SrcAlpha,
+                sys::BlendFactor::Fix,
+                0,
+                0xffff_ffff,
+            );
+            sys::sceGuDisable(GuState::Fog);
+            // Face the camera, so a puff never collapses to an edge-on sliver.
+            let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
+
+            if let Some(verts) = alloc_verts(puffs * 6) {
+                let mut w = 0usize;
+                for p in effects.puffs().iter().filter(|p| p.life > 0.0) {
+                    let r = p.scale() * 0.5;
+                    let a = (p.alpha() * 255.0) as u32;
+                    let color = rgba(0xC8, 0xCE, 0xD8, a);
+                    let corner = |sx: f32, sy: f32| {
+                        Vertex::new(
+                            p.x + right_x * r * sx,
+                            p.y + r * sy,
+                            p.z + right_z * r * sx,
+                            color,
+                        )
+                    };
+                    for v in [
+                        corner(-1.0, -1.0),
+                        corner(1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, -1.0),
+                        corner(1.0, 1.0),
+                        corner(-1.0, 1.0),
+                    ] {
+                        *verts.add(w) = v;
+                        w += 1;
+                    }
+                }
+                sys::sceGumDrawArray(
+                    GuPrimitive::Triangles,
+                    VERTEX_FORMAT,
+                    w as i32,
+                    core::ptr::null(),
+                    verts as *const c_void,
+                );
+            }
+            sys::sceGuEnable(GuState::Fog);
+        }
+
+        sys::sceGuEnable(GuState::CullFace);
+        sys::sceGuDepthMask(0);
+        sys::sceGuDisable(GuState::Blend);
+    }
+}
+
+/// Frame-lived vertex storage, or `None` when the arena is exhausted.
+unsafe fn alloc_verts(n: usize) -> Option<*mut Vertex> {
+    let p = super::scratch::alloc::<Vertex>(n);
+    if p.is_null() {
+        None
+    } else {
+        Some(p)
     }
 }
 

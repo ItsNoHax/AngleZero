@@ -10,6 +10,7 @@
 extern crate std;
 
 pub mod camera;
+pub mod effects;
 pub mod game;
 pub mod hud;
 pub mod math;

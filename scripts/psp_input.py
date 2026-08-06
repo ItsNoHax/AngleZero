@@ -107,14 +107,39 @@ def read_responses(sock, verbose):
                 print(f"  << {text}", flush=True)
 
 
+def parse_phases(args):
+    """Splits `a b --then 8 c d` into [(0, [a, b]), (8.0, [c, d])].
+
+    One connection has to drive the whole sequence: headless exits at its own --timeout, and a
+    second script started later usually finds the port already closed.
+    """
+    phases, current, delay = [], [], 0.0
+    i = 0
+    while i < len(args):
+        if args[i] == "--then":
+            phases.append((delay, current))
+            delay = float(args[i + 1])
+            current = []
+            i += 2
+            continue
+        current.append(args[i])
+        i += 1
+    phases.append((delay, current))
+    return [(d, b or ["cross"]) for d, b in phases]
+
+
 def main():
     if len(sys.argv) < 2:
-        sys.exit(f"usage: {sys.argv[0]} <debugger-port> [button ...] [--verbose]")
+        sys.exit(
+            f"usage: {sys.argv[0]} <debugger-port> [button ...] "
+            f"[--then <seconds> button ...] [--verbose]\n"
+            f"  e.g. {sys.argv[0]} 9333 cross --then 8 cross circle left"
+        )
 
     verbose = "--verbose" in sys.argv
     args = [a for a in sys.argv[1:] if a != "--verbose"]
     port = int(args[0])
-    buttons = args[1:] or ["cross"]
+    phases = parse_phases(args[1:])
 
     sock = socket.create_connection(("127.0.0.1", port), timeout=10)
     handshake(sock, port)
@@ -124,14 +149,25 @@ def main():
     send(sock, {"event": "cpu.resume"})
     time.sleep(1.5)
 
-    send(sock, {"event": "input.buttons.send", "buttons": {b: True for b in buttons}})
-    print(f"holding: {', '.join(buttons)} (ctrl-c or kill to release)", flush=True)
-
+    held = set()
     try:
+        for delay, buttons in phases:
+            if delay:
+                time.sleep(delay)
+            # Release anything this phase drops, then press what it wants.
+            release = held - set(buttons)
+            if release:
+                send(sock, {"event": "input.buttons.send",
+                            "buttons": {b: False for b in release}})
+            send(sock, {"event": "input.buttons.send", "buttons": {b: True for b in buttons}})
+            held = set(buttons)
+            print(f"holding: {', '.join(buttons)}", flush=True)
+
+        print("(ctrl-c or kill to release)", flush=True)
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        send(sock, {"event": "input.buttons.send", "buttons": {b: False for b in buttons}})
+        send(sock, {"event": "input.buttons.send", "buttons": {b: False for b in held}})
     finally:
         sock.close()
 

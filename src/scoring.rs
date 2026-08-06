@@ -9,6 +9,9 @@ use crate::math::{max, min};
 pub const COMBO_HOLD: f32 = 1.15;
 /// Drift points needed to step the multiplier up.
 pub const CHUNK_PER_COMBO: f32 = 380.0;
+/// Slip angle at which a slide starts counting. Mirrors `vehicle::DRIFT_SLIP`, re-exported
+/// here because scoring is where the threshold is meaningful to a reader.
+pub const DRIFT_SLIP_THRESHOLD: f32 = crate::vehicle::DRIFT_SLIP;
 /// The multiplier stops here.
 pub const COMBO_MAX: u32 = 9;
 
