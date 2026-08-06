@@ -70,24 +70,47 @@ for txt in "$DEST"/SHOT*.txt; do
     cat "$txt"
 done
 
-# Traces are 600 rows each, so summarise instead: report the range of each geometry counter and
-# call out any frame that submitted nothing. A drop to zero is the signature of geometry being
-# culled or a draw being skipped; a steady count means the fault is further down the pipeline.
+# Traces are 600 rows each, so summarise instead. Two things are worth calling out: a counter
+# falling to zero, and a *gap* — a chunk skipped while chunks on both sides of it were drawn.
+# The second matters because a band missing from the middle of the view only dips a count by one,
+# which is indistinguishable from ordinary culling at the edges unless you look at which chunks
+# were submitted rather than how many.
 for trace in "$DEST"/TRACE*.txt; do
     [ -e "$trace" ] || continue
     echo
     echo "--- $(basename "$trace") ---"
     awk '
+        function holes(mask,   i, seen, gap, bad) {
+            seen = 0; gap = 0; bad = 0
+            for (i = 0; i < 32; i++) {
+                if (int(mask / 2^i) % 2 == 1) {
+                    if (seen && gap) bad++
+                    seen = 1; gap = 0
+                } else if (seen) {
+                    gap = 1
+                }
+            }
+            return bad
+        }
         /^#/ { next }
+        NF < 11 { next }
         {
             n++
+            # Traces from before the chunk masks were added have 11 columns, not 13.
+            haveMask = (NF >= 13)
             for (i = 2; i <= 7; i++) {
                 if (n == 1 || $i < lo[i]) lo[i] = $i
                 if (n == 1 || $i > hi[i]) hi[i] = $i
             }
             if ($2 == 0 || $3 == 0) zero[$1] = $0
+            if (haveMask) {
+                masked++
+                if (holes($12) > 0) roadhole[$1] = $0
+                if (holes($13) > 0) terrhole[$1] = $0
+            }
         }
         END {
+            if (n == 0) { print "  (no rows)"; exit }
             split("road terrain lines rails dashes props", name, " ")
             printf "  %d frames recorded\n", n
             for (i = 2; i <= 7; i++)
@@ -96,11 +119,25 @@ for trace in "$DEST"/TRACE*.txt; do
             k = 0
             for (f in zero) k++
             if (k > 0) {
-                printf "\n  %d frame(s) submitted no road or no terrain:\n", k
-                c = 0
-                for (f in zero) { if (c++ < 12) printf "    %s\n", zero[f] }
+                printf "\n  %d frame(s) submitted no road or no terrain\n", k
             } else {
                 print "\n  every frame submitted road and terrain geometry"
+            }
+            if (masked == 0) {
+                print "  (this trace predates the chunk masks, so gaps cannot be checked)"
+                exit
+            }
+            rh = 0; th = 0
+            for (f in roadhole) rh++
+            for (f in terrhole) th++
+            if (rh || th) {
+                printf "  GAPS: %d frame(s) skipped a road chunk mid-run, %d for terrain\n", rh, th
+                c = 0
+                for (f in roadhole) { if (c++ < 6) printf "    road %s\n", roadhole[f] }
+                c = 0
+                for (f in terrhole) { if (c++ < 6) printf "    terr %s\n", terrhole[f] }
+            } else {
+                print "  no gaps: every drawn run of chunks was contiguous"
             }
         }
     ' "$trace"

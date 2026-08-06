@@ -54,17 +54,26 @@ if [ ! -x "$WORK/atracdenc/build/atracdenc" ]; then
 fi
 
 # RIFF is the container a PSP SND0.AT3 uses; `oma` and `rm` will not play in the XMB.
-# `atrac3` is LP2 at 132 kbps. (`atrac3_lp` appears in the help but this build rejects it.)
+#
+# LP4 (66 kbps), not LP2. The XMB would not play a 132 kbps file at all: every working SND0 on a
+# real memory stick is 66144 bps with a block align of 192 and the joint-stereo flag set, and an
+# LP2 file differs in all three. Verified by extracting SND0 from games whose music does play and
+# diffing the format chunk.
+#
+# The mode is `atrac3_lp4`. atracdenc's own help calls it `atrac3_lp`, which the binary rejects.
 echo ">> encoding"
-"$WORK/atracdenc/build/atracdenc" -e atrac3 --container riff -i "$SRC" -o "$OUT" 2>/dev/null
+"$WORK/atracdenc/build/atracdenc" -e atrac3_lp4 --container riff -i "$SRC" -o "$OUT" 2>/dev/null
 
 # Round-trip through ffmpeg's decoder: a file the PSP cannot play is usually one ffmpeg cannot
 # read either, and it is cheap to catch that here rather than on the handheld.
 if command -v ffprobe >/dev/null; then
     codec=$(ffprobe -v error -show_entries stream=codec_name -of default=nw=1:nk=1 "$OUT")
     dur=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$OUT")
+    rate=$(ffprobe -v error -show_entries stream=bit_rate -of default=nw=1:nk=1 "$OUT")
     [ "$codec" = "atrac3" ] || { echo "encoded to '$codec', expected atrac3" >&2; exit 1; }
-    echo ">> $OUT — $codec, ${dur}s, $(stat -c%s "$OUT") bytes"
+    # 66144 is LP4. Anything else will sit silent in the XMB.
+    [ "$rate" = "66144" ] || { echo "bitrate $rate, expected 66144 (LP4)" >&2; exit 1; }
+    echo ">> $OUT — $codec, ${rate}bps, ${dur}s, $(stat -c%s "$OUT") bytes"
 else
     echo ">> $OUT — $(stat -c%s "$OUT") bytes (install ffmpeg to verify)"
 fi

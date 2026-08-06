@@ -30,6 +30,8 @@ pub struct Frame {
     pub node: u16,
     pub speed_kph: u16,
     pub frame_us: u32,
+    pub road_mask: u32,
+    pub terrain_mask: u32,
 }
 
 static mut RING: [Frame; FRAMES] = [Frame {
@@ -44,6 +46,8 @@ static mut RING: [Frame; FRAMES] = [Frame {
     node: 0,
     speed_kph: 0,
     frame_us: 0,
+    road_mask: 0,
+    terrain_mask: 0,
 }; FRAMES];
 static mut WRITE: usize = 0;
 static mut FILLED: usize = 0;
@@ -64,6 +68,8 @@ pub fn record(index: u32, stats: &DrawStats, game: &Game, frame_us: u32) {
             node: game.vehicle.locator.last_idx as u16,
             speed_kph: (game.vehicle.speed_kph() + 0.5) as u16,
             frame_us,
+            road_mask: stats.road_mask,
+            terrain_mask: stats.terrain_mask,
         };
         WRITE += 1;
         if FILLED < FRAMES {
@@ -139,7 +145,7 @@ pub fn dump(index: u32) -> bool {
         push_str(
             &mut buf,
             &mut w,
-            b"# frame road terrain lines rails dashes props verts node kph us\n",
+            b"# frame road terrain lines rails dashes props verts node kph us roadmask terrainmask\n",
         );
         sys::sceIoWrite(fd, buf.as_ptr() as *const _, w);
 
@@ -161,6 +167,8 @@ pub fn dump(index: u32) -> bool {
                 f.node as u32,
                 f.speed_kph as u32,
                 f.frame_us,
+                f.road_mask,
+                f.terrain_mask,
             ] {
                 push_num(&mut line, &mut w, v);
                 push_str(&mut line, &mut w, b" ");

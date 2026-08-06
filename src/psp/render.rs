@@ -1022,6 +1022,13 @@ pub struct DrawStats {
     pub dashes: u16,
     pub props: u16,
     pub verts: u32,
+    /// One bit per chunk index actually submitted. There are 28 chunks, so a u32 holds the lot.
+    ///
+    /// The counts alone have a blind spot: a chunk missing from the *middle* of the visible run
+    /// leaves a gap across the screen while the count merely dips by one, which reads as normal
+    /// variation. A hole between set bits is unambiguous.
+    pub road_mask: u32,
+    pub terrain_mask: u32,
 }
 
 static mut STATS: DrawStats = DrawStats {
@@ -1032,6 +1039,8 @@ static mut STATS: DrawStats = DrawStats {
     dashes: 0,
     props: 0,
     verts: 0,
+    road_mask: 0,
+    terrain_mask: 0,
 };
 /// Which counter `draw_ribbon` should attribute its chunks to.
 static mut STATS_SLOT: u8 = 0;
@@ -1042,6 +1051,14 @@ pub fn take_stats() -> DrawStats {
         let s = STATS;
         STATS = DrawStats::default();
         s
+    }
+}
+
+unsafe fn tally_index(slot: u8, index: usize) {
+    match slot {
+        0 => STATS.road_mask |= 1 << (index & 31),
+        1 => STATS.terrain_mask |= 1 << (index & 31),
+        _ => {}
     }
 }
 
@@ -1060,11 +1077,12 @@ unsafe fn tally(slot: u8, verts: u32) {
 
 fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
     unsafe {
-        for chunk in r.chunks.iter() {
+        for (index, chunk) in r.chunks.iter().enumerate() {
             if !visible(chunk, eye, forward) {
                 continue;
             }
             tally(STATS_SLOT, chunk.count);
+            tally_index(STATS_SLOT, index);
             sys::sceGumDrawArray(
                 GuPrimitive::TriangleStrip,
                 VERTEX_FORMAT,
