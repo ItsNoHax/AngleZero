@@ -1110,8 +1110,15 @@ pub fn draw_world(camera: &Camera) {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
 
+        // The terrain ribbon reaches 190 m to either side, which is wider than the radius of
+        // this track's hairpins — so on the inside of a tight corner it folds over itself and
+        // those triangles come out wound the other way. There is no single winding that is
+        // correct for all of it, so it is drawn double-sided. Culling it leaves holes you can
+        // see the sky through, on the inside of corners.
+        sys::sceGuDisable(GuState::CullFace);
         STATS_SLOT = 1;
         draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
+        sys::sceGuEnable(GuState::CullFace);
         STATS_SLOT = 0;
         draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
 

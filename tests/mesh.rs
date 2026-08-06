@@ -313,3 +313,48 @@ fn the_apron_stays_on_the_line_the_track_was_heading() {
         );
     }
 }
+
+/// The terrain ribbon reaches 190 m to either side of the centreline, which is wider than the
+/// radius of this track's hairpins. On the inside of a tight corner the ribbon folds over itself,
+/// and the folded triangles come out wound the opposite way to the rest.
+///
+/// That means no single winding is correct for the whole ribbon, and it has to be drawn
+/// double-sided. This test exists to record *why*: if the terrain is ever narrowed enough that
+/// the fold stops happening, the renderer could cull it again and save the fill.
+#[test]
+fn the_terrain_ribbon_folds_over_itself_on_hairpins() {
+    let t = track();
+    let terrain: [Station; 12] = [
+        Station::new(-190.0, -78.0, 0), Station::new(-96.0, -40.0, 0),
+        Station::new(-48.0, -17.0, 0), Station::new(-22.0, -4.2, 0),
+        Station::new(-11.0, -0.9, 0), Station::new(-7.2, -0.25, 0),
+        Station::new(7.2, -0.25, 0), Station::new(11.0, -0.9, 0),
+        Station::new(22.0, -4.2, 0), Station::new(48.0, -17.0, 0),
+        Station::new(96.0, -40.0, 0), Station::new(190.0, -78.0, 0),
+    ];
+    let mut r = Box::new(Ribbon::<{ mesh::ribbon_capacity(12) }>::EMPTY);
+    r.build(&t, &terrain);
+
+    let mut inverted = 0;
+    for c in r.chunks.iter() {
+        let (s, n) = (c.start as usize, c.count as usize);
+        for i in 0..n.saturating_sub(2) {
+            let (a, b, cc) = (&r.verts[s + i], &r.verts[s + i + 1], &r.verts[s + i + 2]);
+            let (ux, uy, uz) = (b.x - a.x, b.y - a.y, b.z - a.z);
+            let (vx, vy, vz) = (cc.x - a.x, cc.y - a.y, cc.z - a.z);
+            let (nx, ny, nz) = (uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+            // Skip the degenerate triangles that stitch one strip to the next.
+            if (nx * nx + ny * ny + nz * nz).sqrt() < 1e-3 {
+                continue;
+            }
+            if (if i % 2 == 0 { ny } else { -ny }) <= 0.0 {
+                inverted += 1;
+            }
+        }
+    }
+    assert!(
+        inverted > 0,
+        "no inverted terrain triangles found — if the ribbon no longer folds, the renderer can \
+         go back to culling it"
+    );
+}
