@@ -271,3 +271,25 @@ and so cannot run away.
 Static allocation is ~3.4 MB of `.bss`, against the PSP's 24 MB. Nothing is allocated per frame:
 the effect pools are fixed-size ring buffers and every dynamic vertex comes from a frame-lived
 arena with a known ceiling.
+
+## Inspecting it on real hardware
+
+PPSSPP's software rasteriser is far more forgiving than the GE — no cache, no 16-bit depth buffer,
+no display list to overrun — so some faults only appear on a PSP. The game can capture its own
+evidence:
+
+- **START** toggles a counter readout.
+- **SELECT** writes the current frame and those counters to `ms0:/ANGLEZERO/`.
+
+Put the PSP into USB mode (Settings → USB Connection) and run:
+
+```bash
+scripts/psp_pull.sh
+```
+
+It finds the memory stick, converts the frames to PNG in `captures/`, and prints the counters.
+
+`SCF` is the field to watch: refused vertex-arena allocations. Any non-zero value means draws were
+silently dropped, and it turns red. `LST` is display-list bytes against the 1 MB buffer. Together
+they distinguish the two silent failure modes — an exhausted arena and an overrun list — which both
+look like flickering geometry rather than like an error.

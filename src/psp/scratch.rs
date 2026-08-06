@@ -1,23 +1,26 @@
-//! Per-frame vertex arena.
+//! Per-frame vertex arena, handed out through uncached memory.
 //!
-//! The GE reads vertex data asynchronously: a `sceGumDrawArray` only queues a command holding a
-//! *pointer*, and the hardware does not touch the data until the list is kicked at
-//! `sceGuFinish`/`sceGuSync`. Anything built on the stack has therefore already been destroyed by
-//! the time it is read, and a static buffer reused by a later call in the same frame is just as
-//! wrong. Both mistakes happen to survive PPSSPP often enough to look fine, and then fail on
-//! hardware.
+//! The GE reads vertex data by pointer, and in `GuContextType::Direct` it does not wait until the
+//! end of the frame to do it: every `sceGumDrawArray` ends by advancing the list's stall address,
+//! which kicks the hardware into executing that draw immediately. So there is no safe point at
+//! which to write the data cache back — by the time the frame ends, the GE has already read every
+//! buffer the frame referenced.
 //!
-//! So every dynamically-built vertex buffer is bump-allocated here, stays valid for the whole
-//! frame, and is flushed out of the data cache before the GE runs.
+//! Writing through an uncached address sidesteps the problem entirely: the data is in memory
+//! before the draw call that points at it is ever issued. This is the same trick `sceGuStart`
+//! uses for the display list itself.
+//!
+//! Getting this wrong does not fail cleanly. It reads as text losing its last few characters,
+//! sprites appearing at wild coordinates, and geometry flickering — intermittently, and only on
+//! hardware, because PPSSPP does not model the cache.
 
 use psp::sys;
 
-/// The PSP's data cache line. Writing back a range that does not cover whole lines can leave the
-/// partial line at either end in the cache, where the GE — which reads through uncached memory —
-/// will never see it. The arena is aligned to this and flushed in whole lines for that reason.
+/// The PSP's data cache line.
 const CACHE_LINE: usize = 64;
+/// Bit that turns a main-memory address into an uncached view of the same bytes.
+const UNCACHED: u32 = 0x4000_0000;
 
-/// A multiple of `CACHE_LINE`, so rounding the flush up can never run past the end.
 const SCRATCH_BYTES: usize = 96 * 1024;
 
 #[repr(C, align(64))]
@@ -30,6 +33,18 @@ static mut HIGH_WATER: usize = 0;
 /// geometry flickering in and out rather than like an error.
 static mut FAILURES: u32 = 0;
 
+/// Drops any cached lines covering the arena, once, before anything is written through the
+/// uncached view. The static initialiser populated it through the cache, and a line evicted
+/// later would land on top of vertices the GE is about to read.
+pub fn init() {
+    unsafe {
+        sys::sceKernelDcacheWritebackInvalidateRange(
+            &raw const BUF as *const _,
+            SCRATCH_BYTES as u32,
+        );
+    }
+}
+
 /// Frees the whole arena. Call once at the top of each frame, before anything draws.
 pub fn reset() {
     unsafe {
@@ -37,11 +52,15 @@ pub fn reset() {
     }
 }
 
-/// Reserves room for `n` values of `T`, aligned for the GE. Returns null when exhausted, which
-/// callers treat as "draw nothing" rather than scribbling past the end.
+/// Reserves room for `n` values of `T`. The returned pointer is uncached, so anything written
+/// through it is visible to the GE immediately — which is required, not merely convenient.
+///
+/// Returns null when exhausted, which callers treat as "draw nothing" rather than scribbling
+/// past the end.
 pub unsafe fn alloc<T>(n: usize) -> *mut T {
-    const ALIGN: usize = 16;
-    let start = (USED + ALIGN - 1) & !(ALIGN - 1);
+    // Cache-line granularity keeps separate allocations off each other's lines, which matters if
+    // this ever goes back to a cached buffer with explicit flushes.
+    let start = (USED + CACHE_LINE - 1) & !(CACHE_LINE - 1);
     let bytes = n * core::mem::size_of::<T>();
     if start + bytes > SCRATCH_BYTES {
         FAILURES = FAILURES.saturating_add(1);
@@ -51,19 +70,8 @@ pub unsafe fn alloc<T>(n: usize) -> *mut T {
     if USED > HIGH_WATER {
         HIGH_WATER = USED;
     }
-    (&raw mut BUF as *mut u8).add(start) as *mut T
-}
-
-/// Pushes this frame's writes out of the data cache so the GE sees them.
-pub fn flush() {
-    unsafe {
-        if USED > 0 {
-            // Rounded up to a whole cache line: flushing exactly `USED` bytes leaves the tail of
-            // the last line dirty, and the GE reads whatever was there before.
-            let len = (USED + CACHE_LINE - 1) & !(CACHE_LINE - 1);
-            sys::sceKernelDcacheWritebackRange(&raw const BUF as *const _, len as u32);
-        }
-    }
+    let base = &raw mut BUF as *mut u8 as u32;
+    ((base | UNCACHED) + start as u32) as *mut T
 }
 
 /// Largest amount used by any frame so far, for tuning `SCRATCH_BYTES`.

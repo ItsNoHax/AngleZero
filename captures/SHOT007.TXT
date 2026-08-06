@@ -1,0 +1,11 @@
+shot 7
+frame_us 18920
+list_bytes 4872
+scratch_peak 55552
+scratch_failures 0
+live_skids 260
+live_puffs 33
+drifting 1
+speed_kph 49
+descent_percent 31
+impacts 5

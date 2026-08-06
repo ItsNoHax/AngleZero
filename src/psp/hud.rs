@@ -232,6 +232,10 @@ fn pad2(buf: &mut [u8; 2], value: u32) -> &[u8] {
 ///
 /// `SCF` is the one to watch. It counts refused vertex-arena allocations, and any non-zero value
 /// means draws were silently dropped — which looks like flickering geometry, not like an error.
+static mut SUM: u64 = 0;
+static mut N: u64 = 0;
+static mut PK: u32 = 0;
+
 pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     let mut l = [0u8; 96];
     let mut w = 0usize;
@@ -250,7 +254,15 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
         *w += 1;
     };
 
+    // Rolling average and peak, so a single unlucky frame does not read as a regression.
+    unsafe {
+        SUM += diag.frame_us as u64;
+        N += 1;
+        if N > 90 && diag.frame_us > PK { PK = diag.frame_us; }
+    }
     field(&mut l, &mut w, b"US", diag.frame_us);
+    field(&mut l, &mut w, b" AVG", unsafe { (SUM / N.max(1)) as u32 });
+    field(&mut l, &mut w, b" PK", unsafe { PK });
     field(&mut l, &mut w, b" LST", diag.list_bytes);
     field(&mut l, &mut w, b" SCR", diag.scratch_peak);
     field(&mut l, &mut w, b" SCF", diag.scratch_failures);

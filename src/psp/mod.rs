@@ -127,9 +127,13 @@ pub fn psp_main() {
         // --- one-time world build ---
         let track = &mut *(&raw mut TRACK);
         Track::generate(track);
+        scratch::init();
         render::init(track);
         text::init();
         hud::init_minimap(track);
+        // init_minimap writes a static the GE reads every frame, and is the last thing to touch
+        // one, so the cache has to go out after it rather than before.
+        sys::sceKernelDcacheWritebackAll();
 
         audio::start();
 
@@ -219,10 +223,6 @@ pub fn psp_main() {
                 hud::debug_overlay(&diag, shots);
             }
             hud::end();
-
-            // The GE reads through uncached memory, so this frame's vertices have to leave the
-            // data cache before the list is kicked.
-            scratch::flush();
 
             // `sceGuFinish` reports how much of the display list this frame used; overrunning
             // the buffer corrupts GE state silently, so it is worth watching.
