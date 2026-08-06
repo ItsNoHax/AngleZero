@@ -1,5 +1,8 @@
 # Angle Zero
 
+![Angle Zero running on PPSSPP: the car descending Sekira Pass at night, street lamps pooling light
+on the road ahead](docs/screenshot.png)
+
 A night downhill drift game for the PSP, written in Rust with the [`psp`](https://crates.io/crates/psp)
 a mesh. Gravity does the driving — the car builds speed downhill with no throttle at all — and
 points come from holding a slide, with the guard rails there to take them away again.
@@ -248,8 +251,7 @@ Two things are approximations rather than omissions, both noted where they are d
   cylinders. At 2620 nodes the literal reading is several thousand cylinders; the wall still reads
   as continuous.
 
-Still missing: the additive ground pools under the street lamps and in the pull-off, and rail-impact
-audio (the design lists that one as optional).
+Nothing else from the design is outstanding.
 
 ## Performance
 
@@ -257,10 +259,14 @@ Measured in PPSSPP with the emulated microsecond clock, over a full-throttle des
 the CPU side — simulation plus building the display list — and not GE rasterisation, which is a
 separate unit and the thing this cannot measure from here.
 
-| Build | Peak frame cost | Budget at 30 fps |
-|---|---|---|
-| debug | 7.7 ms | 33 ms |
-| release | 1.4 ms | 33 ms |
+| Build | Typical frame | Worst seen | Budget at 30 fps |
+|---|---|---|---|
+| debug | ~7 ms | 7.7 ms | 33 ms |
+| release | ~1.1 ms | 9.7 ms | 33 ms |
+
+The worst case is not a startup transient — it persists with the first ninety frames excluded. It
+is the fixed-timestep accumulator catching up after a slow frame, which is capped at 40 substeps
+and so cannot run away.
 
 Static allocation is ~3.4 MB of `.bss`, against the PSP's 24 MB. Nothing is allocated per frame:
 the effect pools are fixed-size ring buffers and every dynamic vertex comes from a frame-lived
