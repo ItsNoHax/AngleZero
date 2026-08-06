@@ -876,6 +876,11 @@ pub fn draw_sky(camera: &Camera) {
         sys::sceGuDisable(GuState::DepthTest);
         sys::sceGuDisable(GuState::Texture2D);
         sys::sceGuDisable(GuState::Fog);
+        // And no culling: screen space has Y pointing down, so these quads wind the opposite way
+        // to everything in the world. With culling left on, the whole gradient is discarded and
+        // the background is simply whatever the buffer was cleared to — which looks close enough
+        // to a night sky to go unnoticed, until a hole in the scenery shows the same colour.
+        sys::sceGuDisable(GuState::CullFace);
 
         // #05070F at the zenith through to #1A2836 at the horizon.
         #[repr(C)]
@@ -928,7 +933,6 @@ pub fn draw_sky(camera: &Camera) {
         // never slide as the car turns. Depth writes off, and blended for the moon's halo.
         sys::sceGuEnable(GuState::DepthTest);
         sys::sceGuDepthMask(1);
-        sys::sceGuDisable(GuState::CullFace);
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
             sys::BlendOp::Add,
