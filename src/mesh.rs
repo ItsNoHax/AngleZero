@@ -12,7 +12,7 @@
 //!   strips, they are stitched with degenerate triangles instead, so a chunk costs one draw call
 //!   rather than one per station pair.
 
-use crate::math::{max, min, sqrt, Vec3};
+use crate::math::{max, min, sqrt, Vec2, Vec3};
 use crate::track::{Track, NODE_COUNT};
 
 /// Only every third centreline node becomes geometry.
@@ -241,6 +241,103 @@ pub fn build_box(
         }
     }
     w_i
+}
+
+/// Upright cylinder standing on `(cx, cy, cz)` — stacked tyres and lamp posts.
+pub fn build_upright_cylinder(
+    out: &mut [Vertex],
+    sides: usize,
+    radius: f32,
+    height: f32,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    color: u32,
+) -> usize {
+    let mut w = 0usize;
+    for i in 0..sides {
+        let a0 = (i as f32 / sides as f32) * crate::math::TAU;
+        let a1 = ((i + 1) as f32 / sides as f32) * crate::math::TAU;
+        let (x0, z0) = (cx + crate::math::cos(a0) * radius, cz + crate::math::sin(a0) * radius);
+        let (x1, z1) = (cx + crate::math::cos(a1) * radius, cz + crate::math::sin(a1) * radius);
+        let (lo, hi) = (cy, cy + height);
+
+        out[w] = Vertex::new(x0, lo, z0, color);
+        out[w + 1] = Vertex::new(x1, lo, z1, color);
+        out[w + 2] = Vertex::new(x1, hi, z1, color);
+        out[w + 3] = Vertex::new(x0, lo, z0, color);
+        out[w + 4] = Vertex::new(x1, hi, z1, color);
+        out[w + 5] = Vertex::new(x0, hi, z0, color);
+        w += 6;
+
+        // Top cap only; the underside is never visible on something sitting on the ground.
+        out[w] = Vertex::new(cx, hi, cz, color);
+        out[w + 1] = Vertex::new(x0, hi, z0, color);
+        out[w + 2] = Vertex::new(x1, hi, z1, color);
+        w += 3;
+    }
+    w
+}
+
+/// Upright cone standing on `(cx, cy, cz)` — traffic cones.
+pub fn build_cone(
+    out: &mut [Vertex],
+    sides: usize,
+    radius: f32,
+    height: f32,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    color: u32,
+) -> usize {
+    let mut w = 0usize;
+    let apex = Vertex::new(cx, cy + height, cz, color);
+    for i in 0..sides {
+        let a0 = (i as f32 / sides as f32) * crate::math::TAU;
+        let a1 = ((i + 1) as f32 / sides as f32) * crate::math::TAU;
+        let (x0, z0) = (cx + crate::math::cos(a0) * radius, cz + crate::math::sin(a0) * radius);
+        let (x1, z1) = (cx + crate::math::cos(a1) * radius, cz + crate::math::sin(a1) * radius);
+        out[w] = Vertex::new(x0, cy, z0, color);
+        out[w + 1] = Vertex::new(x1, cy, z1, color);
+        out[w + 2] = apex;
+        w += 3;
+    }
+    w
+}
+
+/// Flat quad lying on the ground, oriented by a forward and a lateral axis.
+#[allow(clippy::too_many_arguments)]
+pub fn build_ground_quad(
+    out: &mut [Vertex],
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    forward: Vec2,
+    half_length: f32,
+    half_width: f32,
+    color: u32,
+) -> usize {
+    let n = forward.lateral_normal();
+    let corner = |a: f32, b: f32| {
+        Vertex::new(
+            cx + forward.x * half_length * a + n.x * half_width * b,
+            cy,
+            cz + forward.z * half_length * a + n.z * half_width * b,
+            color,
+        )
+    };
+    let quad = [
+        corner(-1.0, -1.0),
+        corner(1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, 1.0),
+    ];
+    for (i, v) in quad.iter().enumerate() {
+        out[i] = *v;
+    }
+    quad.len()
 }
 
 /// Cylinder around the X axis — the shape used for tyres and rims. Returns vertices written.

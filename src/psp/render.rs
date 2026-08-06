@@ -13,7 +13,7 @@ use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
 use angle_zero::math::{cos, sin, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
-use angle_zero::track::{Track, BAY_FROM, BAY_SIDE, BAY_TO};
+use angle_zero::track::{Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
     self, GuPrimitive, GuState, MatrixMode, ScePspFMatrix4, ScePspFVector3, VertexType,
@@ -290,7 +290,7 @@ unsafe fn build_wheel() {
 ///
 /// Baked into one static, chunk-bucketed buffer in world space rather than instanced with a
 /// matrix per prop. There are over a thousand of them; a draw call each would dominate the frame.
-const PROPS_PER_CHUNK: usize = 1024;
+const PROPS_PER_CHUNK: usize = 3400;
 const PROP_VERTS: usize = PROPS_PER_CHUNK * mesh::CHUNK_COUNT;
 static mut PROP_MESH: psp::Align16<[Vertex; PROP_VERTS]> = psp::Align16([Vertex::ZERO; PROP_VERTS]);
 static mut PROP_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
@@ -302,6 +302,15 @@ static mut PROP_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
 
 const TREE_STRIDE: usize = 4;
 const LAMP_STRIDE: usize = 58;
+const CONE_STRIDE: usize = 11;
+const FLOODLIGHT_STRIDE: usize = 90;
+/// The design puts a tyre stack every third node of every corner. At 2620 nodes that is thousands
+/// of eight-sided cylinders, so they are thinned out — the wall still reads as continuous.
+const TYRE_WALL_STRIDE: usize = 15;
+
+const CONE_COLOR: u32 = rgb(0xE4, 0x62, 0x2F);
+const TYRE_STACK: u32 = rgb(0x16, 0x16, 0x1A);
+const FLOOD_PANEL: u32 = rgb(0xDA, 0xE4, 0xF2);
 
 const TREE_LOW: u32 = rgb(0x1A, 0x21, 0x1C);
 const TREE_HIGH: u32 = rgb(0x30, 0x39, 0x37);
@@ -423,6 +432,81 @@ unsafe fn build_props(track: &Track) {
                     note(&(*v), &mut lo, &mut hi);
                 }
             }
+
+            // --- cones, alternating sides of the road ---
+            if i % CONE_STRIDE == 0 && w + 18 <= budget {
+                let side = if (i / CONE_STRIDE) % 2 == 0 { -1.0 } else { 1.0 };
+                let lateral = 6.0 * side;
+                let before = w;
+                w += mesh::build_cone(
+                    &mut verts[w..],
+                    6,
+                    0.24,
+                    0.62,
+                    node.p.x + node.nrm.x * lateral,
+                    node.p.y,
+                    node.p.z + node.nrm.z * lateral,
+                    CONE_COLOR,
+                );
+                for v in &verts[before..w] {
+                    note(&(*v), &mut lo, &mut hi);
+                }
+            }
+
+            // --- tyre walls on the outside of corners ---
+            if i % TYRE_WALL_STRIDE == 0 && node.curv.abs() >= CORNER_CURVATURE {
+                // `curv` is signed by turn direction, so the outside of the corner is the side
+                // the car is pushed toward.
+                let side = if node.curv > 0.0 { 1.0 } else { -1.0 };
+                let lateral = 8.4 * side;
+                let (bx, bz) = (
+                    node.p.x + node.nrm.x * lateral,
+                    node.p.z + node.nrm.z * lateral,
+                );
+                for tier in 0..3 {
+                    if w + 72 > budget {
+                        break;
+                    }
+                    let before = w;
+                    w += mesh::build_upright_cylinder(
+                        &mut verts[w..],
+                        6,
+                        0.5,
+                        0.28,
+                        bx,
+                        node.p.y + tier as f32 * 0.28,
+                        bz,
+                        TYRE_STACK,
+                    );
+                    for v in &verts[before..w] {
+                        note(&(*v), &mut lo, &mut hi);
+                    }
+                }
+            }
+
+            // --- floodlight towers ---
+            if i % FLOODLIGHT_STRIDE == 0 && w + 108 <= budget {
+                let side = if (i / FLOODLIGHT_STRIDE) % 2 == 0 { -1.0 } else { 1.0 };
+                let lateral = 12.0 * side;
+                let bx = node.p.x + node.nrm.x * lateral;
+                let bz = node.p.z + node.nrm.z * lateral;
+                let before = w;
+                w += mesh::build_box(&mut verts[w..], 0.4, 12.0, 0.4, bx, node.p.y + 6.0, bz, LAMP_POLE);
+                w += mesh::build_box(&mut verts[w..], 2.6, 0.5, 0.6, bx, node.p.y + 12.2, bz, LAMP_POLE);
+                w += mesh::build_box(&mut verts[w..], 2.2, 0.3, 0.2, bx, node.p.y + 11.9, bz, FLOOD_PANEL);
+                for v in &verts[before..w] {
+                    note(&(*v), &mut lo, &mut hi);
+                }
+            }
+        }
+
+        // --- the emergency pull-off's furniture ---
+        if first_node <= BAY_NODE && BAY_NODE <= last_node {
+            let before = w;
+            w += build_bay_props(track, &mut verts[w..]);
+            for v in &verts[before..w] {
+                note(&(*v), &mut lo, &mut hi);
+            }
         }
 
         let count = w - start;
@@ -442,6 +526,95 @@ unsafe fn build_props(track: &Track) {
             radius,
         };
     }
+}
+
+/// The emergency pull-off. Gravel pad, apron, chevron boards, a tyre wall, a bin and a
+/// lamp. This is where the title screen parks the car, so it is the first thing anyone sees.
+fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
+    let node = &track.nodes[BAY_NODE];
+    let dir = node.dir;
+    let nrm = node.nrm;
+    let s = BAY_SIDE;
+    let mut w = 0usize;
+
+    // Somewhere `along` the road and `lateral` from the centreline, at the bay node.
+    let at = |along: f32, lateral: f32| {
+        (
+            node.p.x + dir.x * along + nrm.x * lateral * s,
+            node.p.z + dir.z * along + nrm.z * lateral * s,
+        )
+    };
+
+    // Gravel pad, 13 x 34 m, and the darker apron blending it into the road.
+    let (px, pz) = at(0.0, 11.5);
+    w += mesh::build_ground_quad(
+        &mut out[w..],
+        px,
+        node.p.y - 0.06,
+        pz,
+        dir,
+        17.0,
+        6.5,
+        rgb(0x3A, 0x38, 0x33),
+    );
+    let (ax, az) = at(0.0, 7.4);
+    w += mesh::build_ground_quad(
+        &mut out[w..],
+        ax,
+        node.p.y + 0.03,
+        az,
+        dir,
+        15.0,
+        3.0,
+        rgb(0x22, 0x22, 0x24),
+    );
+
+    // Three chevron hazard boards: a post and a striped panel each.
+    for along in [-12.0f32, 4.0, 14.0] {
+        let (bx, bz) = at(along, 15.2);
+        w += mesh::build_box(&mut out[w..], 0.16, 2.4, 0.16, bx, node.p.y + 1.2, bz, rgb(0x33, 0x33, 0x36));
+        // Alternating bands stand in for the diagonal-stripe texture.
+        for band in 0..4 {
+            let color = if band % 2 == 0 {
+                rgb(0xE8, 0xC0, 0x30)
+            } else {
+                rgb(0x1A, 0x1A, 0x1C)
+            };
+            let y = node.p.y + 2.0 + band as f32 * 0.21;
+            w += mesh::build_box(&mut out[w..], 2.6, 0.21, 0.1, bx, y, bz, color);
+        }
+    }
+
+    // Tyre wall: five columns, three high.
+    for col in 0..5 {
+        let along = -4.0 + col as f32 * 2.0;
+        let (tx, tz) = at(along, 17.4);
+        for tier in 0..3 {
+            w += mesh::build_upright_cylinder(
+                &mut out[w..],
+                6,
+                0.5,
+                0.28,
+                tx,
+                node.p.y + tier as f32 * 0.28,
+                tz,
+                TYRE_STACK,
+            );
+        }
+    }
+
+    // Waste bin.
+    let (nx, nz) = at(-9.0, 15.5);
+    w += mesh::build_box(&mut out[w..], 1.1, 1.3, 1.1, nx, node.p.y + 0.65, nz, rgb(0x2C, 0x3A, 0x30));
+
+    // Street lamp over the pad.
+    let (lx, lz) = at(14.0, 7.6);
+    w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, lx, node.p.y + 3.7, lz, LAMP_POLE);
+    let (hx, hz) = at(14.0, 9.8);
+    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (lx + hx) * 0.5, node.p.y + 7.3, (lz + hz) * 0.5, LAMP_POLE);
+    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, hx, node.p.y + 7.15, hz, LAMP_HEAD);
+
+    w
 }
 
 /// Mountain ring. Thirty four-sided cones ringing the track, drawn without fog as a

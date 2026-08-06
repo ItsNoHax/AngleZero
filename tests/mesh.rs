@@ -183,6 +183,55 @@ fn a_box_has_twelve_triangles() {
 }
 
 #[test]
+fn an_upright_cylinder_stands_on_the_point_it_is_given() {
+    let mut out = [mesh::Vertex::ZERO; 256];
+    let n = mesh::build_upright_cylinder(&mut out, 8, 0.5, 0.28, 10.0, -3.0, 4.0, 0xffff_ffff);
+    assert!(n > 0 && n <= out.len());
+    for v in &out[..n] {
+        // Sits between its base and its top, never below.
+        assert!(v.y >= -3.0 - 1e-4 && v.y <= -3.0 + 0.28 + 1e-4, "y {}", v.y);
+        let r = ((v.x - 10.0).powi(2) + (v.z - 4.0).powi(2)).sqrt();
+        assert!(r <= 0.5 + 1e-4, "radius {r}");
+    }
+    // The base ring is present, so the tyre does not float.
+    assert!(out[..n].iter().any(|v| (v.y + 3.0).abs() < 1e-4));
+}
+
+#[test]
+fn a_cone_tapers_to_a_point() {
+    let mut out = [mesh::Vertex::ZERO; 256];
+    let n = mesh::build_cone(&mut out, 6, 0.24, 0.62, 0.0, 0.0, 0.0, 0xffff_ffff);
+    assert!(n > 0);
+    let apexes = out[..n].iter().filter(|v| (v.y - 0.62).abs() < 1e-4).count();
+    assert_eq!(apexes, 6, "one apex vertex per side");
+    for v in &out[..n] {
+        let r = (v.x * v.x + v.z * v.z).sqrt();
+        // Radius shrinks to nothing at the tip.
+        let expected = 0.24 * (1.0 - v.y / 0.62);
+        assert!(r <= expected + 1e-3, "radius {r} at height {}", v.y);
+    }
+}
+
+#[test]
+fn a_ground_quad_is_flat_and_the_size_asked_for() {
+    let mut out = [mesh::Vertex::ZERO; 6];
+    let forward = angle_zero::math::Vec2::new(0.0, 1.0);
+    let n = mesh::build_ground_quad(&mut out, 5.0, -2.0, 7.0, forward, 17.0, 6.5, 0xffff_ffff);
+    assert_eq!(n, 6);
+    for v in &out[..n] {
+        assert!((v.y + 2.0).abs() < 1e-5, "quad is not flat");
+    }
+    let (min_z, max_z) = out[..n]
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v.z), b.max(v.z)));
+    let (min_x, max_x) = out[..n]
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v.x), b.max(v.x)));
+    assert!((max_z - min_z - 34.0).abs() < 1e-4, "length {}", max_z - min_z);
+    assert!((max_x - min_x - 13.0).abs() < 1e-4, "width {}", max_x - min_x);
+}
+
+#[test]
 fn a_cylinder_closes_on_itself() {
     let mut out = [mesh::Vertex::ZERO; 256];
     let sides = 9;
