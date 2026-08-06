@@ -7,6 +7,7 @@
 use crate::camera::Camera;
 use crate::effects::Effects;
 use crate::math::{atan2, clamp, cos, min, sin};
+use crate::save::Record;
 use crate::scoring::Scoring;
 use crate::track::{Track, BAY_NODE, BAY_SIDE};
 use crate::vehicle::{Input, Vehicle, FIXED_DT, MAX_FRAME_DT, MAX_SUBSTEPS};
@@ -70,6 +71,11 @@ pub struct Game {
     pub run_time: f32,
     pub result: RunResult,
 
+    /// Best time, score and combo across every run, loaded and stored by the shell.
+    pub record: Record,
+    /// Set when `record` has improved and needs writing back.
+    record_dirty: bool,
+
     pub toast: Option<Toast>,
     pub toast_timer: f32,
     /// Throttle applied on the last substep, which the rev counter reads.
@@ -101,6 +107,12 @@ impl Game {
                 score: 0.0,
                 best_combo: 1,
             },
+            record: Record {
+                best_time_cs: 0,
+                best_score: 0,
+                best_combo: 0,
+            },
+            record_dirty: false,
             toast: None,
             toast_timer: 0.0,
             last_throttle: 0.0,
@@ -302,5 +314,20 @@ impl Game {
             score: self.scoring.score,
             best_combo: self.scoring.best_combo,
         };
+        if self.record.merge_run(
+            self.result.time,
+            self.result.score,
+            self.result.best_combo,
+        ) {
+            self.record_dirty = true;
+        }
+    }
+
+    /// Whether the stored record needs writing back, clearing the flag. The shell owns the
+    /// filesystem, so it asks rather than the core reaching for it.
+    pub fn take_record_dirty(&mut self) -> bool {
+        let dirty = self.record_dirty;
+        self.record_dirty = false;
+        dirty
     }
 }

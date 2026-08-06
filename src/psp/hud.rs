@@ -219,19 +219,72 @@ fn pad2(buf: &mut [u8; 2], value: u32) -> &[u8] {
 
 pub fn draw(game: &Game, track: &Track) {
     match game.phase {
-        Phase::Title => draw_title(),
+        Phase::Title => draw_title(game),
         Phase::Run => draw_run(game, track),
         Phase::Results => draw_results(game),
     }
     draw_toast(game);
 }
 
-fn draw_title() {
+fn draw_title(game: &Game) {
     text::bind();
     // Kept clear of the middle of the frame so the orbiting car stays visible behind it.
     text::draw_centered(b"ANGLEZERO", SCREEN_W * 0.5, 26.0, 3.0, TEXT);
     text::draw_centered(b"SEKIRA DESCENT", SCREEN_W * 0.5, 58.0, 1.0, DIM);
     text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
+    draw_best(game, 250.0);
+}
+
+/// The stored record, shown once there is one to show.
+fn draw_best(game: &Game, y: f32) {
+    let r = &game.record;
+    if !r.has_time() {
+        return;
+    }
+    let mut line = [0u8; 48];
+    let mut w = 0usize;
+    let mut buf = [0u8; 12];
+    let mut p = [0u8; 2];
+
+    for &c in b"BEST " {
+        line[w] = c;
+        w += 1;
+    }
+    let (m, s, cs) = core_hud::split_time(r.best_time_cs as f32 / 100.0);
+    for &c in digits(&mut buf, m) {
+        line[w] = c;
+        w += 1;
+    }
+    line[w] = b':';
+    w += 1;
+    for &c in pad2(&mut p, s) {
+        line[w] = c;
+        w += 1;
+    }
+    line[w] = b'.';
+    w += 1;
+    for &c in pad2(&mut p, cs) {
+        line[w] = c;
+        w += 1;
+    }
+    for &c in b"  " {
+        line[w] = c;
+        w += 1;
+    }
+    let mut g = [0u8; 16];
+    for &c in grouped_digits(&mut g, r.best_score) {
+        line[w] = c;
+        w += 1;
+    }
+    for &c in b"  x" {
+        line[w] = c;
+        w += 1;
+    }
+    for &c in digits(&mut buf, r.best_combo) {
+        line[w] = c;
+        w += 1;
+    }
+    text::draw_centered(&line[..w], SCREEN_W * 0.5, y, 1.0, AMBER);
 }
 
 fn draw_results(game: &Game) {
@@ -293,7 +346,8 @@ fn draw_results(game: &Game) {
     }
     text::draw_centered(&combo_line[..w], SCREEN_W * 0.5, 150.0, 1.0, ACCENT);
 
-    text::draw_centered(b"PRESS TRIANGLE TO RUN AGAIN", SCREEN_W * 0.5, 196.0, 1.0, GREEN);
+    draw_best(game, 172.0);
+    text::draw_centered(b"PRESS TRIANGLE TO RUN AGAIN", SCREEN_W * 0.5, 208.0, 1.0, GREEN);
 }
 
 fn draw_run(game: &Game, track: &Track) {

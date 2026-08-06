@@ -7,6 +7,7 @@
 pub mod hud;
 pub mod render;
 pub mod scratch;
+pub mod storage;
 pub mod text;
 
 use core::ffi::c_void;
@@ -129,6 +130,7 @@ pub fn psp_main() {
         hud::init_minimap(track);
 
         let game = &mut *(&raw mut GAME);
+        game.record = storage::load();
         game.enter_title(track);
 
         let pad = &mut SceCtrlData::default();
@@ -146,6 +148,9 @@ pub fn psp_main() {
             last_tick = now;
 
             game.update(track, buttons, dt);
+            if game.take_record_dirty() {
+                storage::store(&game.record);
+            }
 
             // Every dynamically-built vertex buffer for this frame comes from here, and must
             // stay valid until the GE has run the list below.
