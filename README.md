@@ -64,9 +64,8 @@ Artifacts land in `target/mipsel-sony-psp/debug/`:
 - `angle-zero.EBOOT.PBP` — what a real PSP or the PPSSPP GUI runs
 - `angle-zero.prx` — what `PPSSPPHeadless` runs
 
-Use `cargo psp --release` for hardware: 402 KB instead of 7.8 MB, since the debug artifact is
-mostly debug info. Static allocation is ~2.3 MB of `.bss` (the centreline plus all the baked
-geometry), comfortably inside the PSP's 24 MB.
+Use `cargo psp --release` for hardware: it is a fraction of the size, since the debug artifact is
+mostly debug info, and about five times quicker per frame.
 
 The build prints `rust-lld: ... linking abicalls code with non-abicalls code` and
 `relocation refers to a discarded section` warnings. These are a known upstream issue
@@ -85,6 +84,9 @@ visible.
 | Steer | D-pad Left/Right, or the analog nub |
 | Reset to road | △ |
 | Start run / restart from results | ✕ / △ |
+
+Best time, score and combo persist to `ms0:/PSP/SAVEDATA/ANGLEZERO/RECORD.BIN` and show on the
+title and results screens.
 
 ## Two traps worth knowing about
 
@@ -231,15 +233,35 @@ The original is the source of truth where the two disagree, and in three places 
   frame it points to the car's *right*. The formula is kept exactly as the original has it, since
   every downstream sign convention is built on it; only the name is corrected.
 
-## What is not implemented yet
+## Where it stands against the design
 
-The simulation, screens and HUD are complete. Missing from the design's presentation layer:
+Everything in the design is implemented: track, physics, scoring, screens, HUD and minimap, the
+night look, skid marks and tyre smoke, the roadside and pull-off props, engine and tyre audio, and
+saved records.
 
-- Audio — no engine, tyre squeal or impact sounds.
-- Skid decals and tyre smoke.
-- The pull-off's props: gravel pad, chevron boards, tyre wall, bin, lamp. The bay itself
-  exists — the rail gap, the wider collision limit and the parked pose are all in.
-- Floodlight towers, roadside tyre walls and cones.
-- The sky is a vertical gradient plus a mountain ring rather than a textured skybox with stars and
-  a moon, and there is no scanline overlay.
-- Save data for best time/score/combo.
+Two things are approximations rather than omissions, both noted where they are done:
+
+- The sky is a vertical gradient plus geometry — a camera-following starfield, a moon and a
+  mountain ring — rather than a single 2048×1024 painted texture. It costs a few thousand
+  vertices instead of a texture upload, and the stars do not slide when the camera turns.
+- Tyre stacks on corners are thinned from every third node to every fifteenth, and use six-sided
+  cylinders. At 2620 nodes the literal reading is several thousand cylinders; the wall still reads
+  as continuous.
+
+Still missing: the additive ground pools under the street lamps and in the pull-off, and rail-impact
+audio (the design lists that one as optional).
+
+## Performance
+
+Measured in PPSSPP with the emulated microsecond clock, over a full-throttle descent. This covers
+the CPU side — simulation plus building the display list — and not GE rasterisation, which is a
+separate unit and the thing this cannot measure from here.
+
+| Build | Peak frame cost | Budget at 30 fps |
+|---|---|---|
+| debug | 7.7 ms | 33 ms |
+| release | 1.4 ms | 33 ms |
+
+Static allocation is ~3.4 MB of `.bss`, against the PSP's 24 MB. Nothing is allocated per frame:
+the effect pools are fixed-size ring buffers and every dynamic vertex comes from a frame-lived
+arena with a known ceiling.
