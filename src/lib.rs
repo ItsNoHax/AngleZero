@@ -13,6 +13,7 @@ pub mod camera;
 pub mod game;
 pub mod hud;
 pub mod math;
+pub mod mesh;
 pub mod scoring;
 pub mod track;
 pub mod vehicle;
