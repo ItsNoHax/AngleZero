@@ -1050,11 +1050,15 @@ pub fn draw_world(camera: &Camera) {
             );
         }
 
+        // The rails are double-sided. A two-station ribbon standing vertically has
+        // one winding, so with culling on it disappears when seen from behind — which for the
+        // left-hand rail is nearly always, since the chase camera sits inside the road.
+        sys::sceGuDisable(GuState::CullFace);
         draw_ribbon(&*(&raw const RAIL_L_MESH), eye, forward);
         draw_ribbon(&*(&raw const RAIL_R_MESH), eye, forward);
 
-        // Trees are crossed quads with no single facing, so they must not be back-face culled.
-        sys::sceGuDisable(GuState::CullFace);
+        // Trees are crossed quads with no single facing, so they must not be back-face culled
+        // either; culling stays off through to the end of the pass.
         let prop_verts = &raw const PROP_MESH as *const Vertex;
         let prop_chunks = &*(&raw const PROP_CHUNKS);
         for chunk in prop_chunks.iter() {
