@@ -115,6 +115,7 @@ pub fn psp_main() {
         sys::sceGuFrontFace(FrontFaceDirection::CounterClockwise);
         sys::sceGuShadeModel(ShadingModel::Smooth);
         sys::sceGuEnable(GuState::CullFace);
+        sys::sceGuEnable(GuState::ClipPlanes);
         sys::sceGuEnable(GuState::Fog);
         sys::sceGuFog(render::FOG_NEAR, render::FOG_FAR, render::FOG_COLOR);
 
