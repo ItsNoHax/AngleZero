@@ -358,3 +358,40 @@ fn the_terrain_ribbon_folds_over_itself_on_hairpins() {
          go back to culling it"
     );
 }
+
+/// Triangles must be the same size along the whole track.
+///
+/// The centreline is sampled at a uniform spline parameter, not a uniform arclength, so its nodes
+/// sit 2-3 m apart through the lead-in and about 1.34 m apart elsewhere. Indexing the mesh by node
+/// made the lead-in's triangles 6.89 m long against 5.20 m for the rest — 33% oversized — and the
+/// GE discards triangles that grow too large near the camera. That is why scenery dropped out
+/// along the bottom of the screen on the early part of the track and nowhere else.
+#[test]
+fn triangles_are_the_same_size_at_the_start_as_in_the_middle() {
+    let t = track();
+    let mut r = Box::new(Ribbon::<{ mesh::ribbon_capacity(5) }>::EMPTY);
+    r.build(&t, &ROAD);
+
+    let longest_step = |chunk: usize| {
+        let c = &r.chunks[chunk];
+        let (s, n) = (c.start as usize, c.count as usize);
+        let mut worst = 0.0f32;
+        for i in 0..n.saturating_sub(2) {
+            let (a, b) = (&r.verts[s + i], &r.verts[s + i + 2]);
+            let d = ((a.x - b.x).powi(2) + (a.z - b.z).powi(2)).sqrt();
+            // Skip the degenerate stitches between strips, which jump across the ribbon.
+            if d > worst && d < 50.0 {
+                worst = d;
+            }
+        }
+        worst
+    };
+
+    let lead_in = longest_step(0);
+    let middle = longest_step(14);
+    assert!(
+        (lead_in - middle).abs() < 0.6,
+        "lead-in triangles span {lead_in:.2} m against {middle:.2} m mid-track; \
+         uneven node spacing has crept back in"
+    );
+}

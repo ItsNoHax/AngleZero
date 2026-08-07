@@ -15,7 +15,8 @@
 use crate::math::{max, min, sqrt, Vec2, Vec3};
 use crate::track::{Track, NODE_COUNT};
 
-/// Only every third centreline node becomes geometry.
+/// How many centreline nodes there are per render node, on average. The mesh is not indexed by
+/// node any more — see `station_vertex` — but this still sets how many render nodes there are.
 pub const RENDER_STRIDE: usize = 2;
 pub const RENDER_NODES: usize = (NODE_COUNT + RENDER_STRIDE - 1) / RENDER_STRIDE;
 /// Nodes per cullable chunk.
@@ -226,33 +227,52 @@ fn in_gap(render_node: i32, gap: Option<(usize, usize)>) -> bool {
             if render_node < 0 {
                 return false;
             }
-            let i = render_node as usize * RENDER_STRIDE;
+            // The gap is given in centreline nodes, so scale it the same way the mesh is spaced.
+            let i = render_node as usize * NODE_COUNT / RENDER_NODES;
             i >= from && i <= to
         }
     }
 }
 
+/// The node nearest a given distance along the track, by binary search on cumulative arclength.
+fn node_at_arclength(track: &Track, s: f32) -> usize {
+    let (mut lo, mut hi) = (0usize, NODE_COUNT - 1);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if track.nodes[mid].s < s {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// Position of one station at one render node.
+///
+/// Render nodes are spaced evenly **by distance**, not by node index. The centreline is sampled
+/// at a uniform spline parameter rather than a uniform arclength, so its nodes are 2-3 m apart
+/// through the lead-in and about 1.34 m apart over the rest of the track. Indexing by node
+/// therefore built triangles twice as long at the start as everywhere else, and the GE discards
+/// triangles that get too large near the camera — which is why scenery dropped out along the
+/// bottom of the screen only on the early part of the track, and why halving the stride reduced
+/// the problem without cure. Even spacing makes every triangle the size of the ones that already
+/// render correctly.
 ///
 /// The index is signed and may run past either end of the track: those become the apron, laid
 /// along the tangent of the nearest real node so the extension carries on in the direction the
 /// road was already going.
 fn station_vertex(track: &Track, render_node: i32, st: &Station) -> Vertex {
-    let last = (NODE_COUNT - 1) as i32;
-    let raw = render_node * RENDER_STRIDE as i32;
+    let spacing = track.length / (RENDER_NODES - 1) as f32;
+    let target = render_node as f32 * spacing;
 
-    let (n, overshoot) = if raw < 0 {
-        (&track.nodes[0], raw as f32)
-    } else if raw > last {
-        (&track.nodes[NODE_COUNT - 1], (raw - last) as f32)
+    let (n, along) = if target < 0.0 {
+        (&track.nodes[0], target)
+    } else if target > track.length {
+        (&track.nodes[NODE_COUNT - 1], target - track.length)
     } else {
-        (&track.nodes[raw as usize], 0.0)
+        (&track.nodes[node_at_arclength(track, target)], 0.0)
     };
-
-    // Mean node spacing. Uniform-t sampling makes it vary, but the apron is short and only has to
-    // be continuous with the road, not exact.
-    let spacing = track.length / (NODE_COUNT - 1) as f32;
-    let along = overshoot * spacing;
 
     Vertex::new(
         n.p.x + n.dir.x * along + n.nrm.x * st.lateral,

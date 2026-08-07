@@ -143,7 +143,7 @@ const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
 /// available here, so the mechanism has to be identified on the console itself. Each mode turns
 /// off one suspect; whichever one makes the fault disappear names the cause.
-pub const DEBUG_MODES: u32 = 6;
+pub const DEBUG_MODES: u32 = 9;
 static mut DEBUG_MODE: u32 = 0;
 
 pub fn set_debug_mode(mode: u32) {
@@ -1176,10 +1176,18 @@ pub fn draw_world(camera: &Camera) {
         // see the sky through, on the inside of corners.
         sys::sceGuDisable(GuState::CullFace);
         STATS_SLOT = 1;
-        draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
+        // Mode 6 leaves the terrain out, so what remains is only the road: if the hole fills,
+        // the discarded triangles were the terrain's, which spans +-190 m and projects a long
+        // way off screen when it passes close to the camera.
+        if DEBUG_MODE != 6 {
+            draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
+        }
         sys::sceGuEnable(GuState::CullFace);
         STATS_SLOT = 0;
-        draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
+        // Mode 7 is the converse: terrain only.
+        if DEBUG_MODE != 7 {
+            draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
+        }
 
         // Markings sit fractions of a metre above the road; draw them after so they win ties.
         STATS_SLOT = 2;

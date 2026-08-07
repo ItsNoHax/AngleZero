@@ -267,7 +267,16 @@ pub fn psp_main() {
             hud::begin();
             #[cfg(feature = "devtools")]
             hud::debug_mode_label(render::debug_mode());
-            hud::draw(game, track);
+            // Mode 8 drops the whole 2D pass. The gaps are axis-aligned and 16-pixel aligned,
+            // which is what a screen-space draw looks like and not what a triangle looks like,
+            // so it is worth knowing whether the HUD is involved at all.
+            #[cfg(feature = "devtools")]
+            let skip_hud = render::debug_mode() == 8;
+            #[cfg(not(feature = "devtools"))]
+            let skip_hud = false;
+            if !skip_hud {
+                hud::draw(game, track);
+            }
             hud::scanlines();
             #[cfg(feature = "devtools")]
             if show_debug {
