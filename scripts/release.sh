@@ -39,6 +39,25 @@ PBP="target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP"
 echo ">> checking the tests still pass"
 cargo test --quiet
 
+# The diagnostics are behind the `devtools` feature, which is off by default — but "off by
+# default" is a promise the build makes, not one it checks. If someone adds devtools to a
+# default feature set, or leaves it enabled in a config, nothing else here would notice. So
+# look in the binary itself for strings that only exist when it is on, and refuse to package
+# a build that has them.
+echo ">> checking no diagnostics were built in"
+PRX="target/mipsel-sony-psp/release/angle-zero.prx"
+LEAKED=""
+for marker in "NO CULL" "NO DEPTH" "ms0:/ANGLEZERO/" "ATRAC.TXT" "TRACE.TXT"; do
+    if strings -a "$PRX" | grep -qF "$marker"; then
+        LEAKED="$LEAKED $marker"
+    fi
+done
+if [ -n "$LEAKED" ]; then
+    echo "REFUSING: the build carries devtools diagnostics:$LEAKED" >&2
+    echo "Build without --features devtools." >&2
+    exit 1
+fi
+
 echo ">> staging"
 mkdir -p "$STAGE/PSP/GAME/${NAME}"
 cp "$PBP" "$STAGE/PSP/GAME/${NAME}/EBOOT.PBP"

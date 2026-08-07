@@ -81,6 +81,11 @@ scripts/release.sh
 Builds without `devtools`, runs the tests, and writes `dist/AngleZero.<version>.zip`. The version
 comes from `Cargo.toml` unless you pass one (`scripts/release.sh 0.2.0`).
 
+Before it packages anything it greps the built `.prx` for strings that only exist when `devtools`
+is on — the render-mode labels, `ms0:/ANGLEZERO/`, the diagnostic filenames — and refuses to
+continue if it finds any. "Off by default" is a promise the build makes, not one it checks, and a
+release carrying the capture tooling and debug overlay would be easy to produce by accident.
+
 The archive holds a single file:
 
 ```
