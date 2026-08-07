@@ -596,6 +596,16 @@ unsafe fn build_props(track: &Track) {
         }
 
         // --- the emergency pull-off's furniture ---
+        if first_node <= angle_zero::track::FINISH_NODE
+            && angle_zero::track::FINISH_NODE <= last_node
+        {
+            let before = w;
+            w += build_finish(track, &mut verts[w..]);
+            for v in &verts[before..w] {
+                note(&(*v), &mut lo, &mut hi);
+            }
+        }
+
         if first_node <= BAY_NODE && BAY_NODE <= last_node {
             let before = w;
             w += build_bay_props(track, &mut verts[w..]);
@@ -667,6 +677,66 @@ unsafe fn build_props(track: &Track) {
 
 /// The emergency pull-off. Gravel pad, apron, chevron boards, a tyre wall, a bin and a
 /// lamp. This is where the title screen parks the car, so it is the first thing anyone sees.
+/// The finish: a gantry over the road with a lit banner, and a line painted across the tarmac.
+///
+/// Without it the road simply runs on into the dark and the results screen arrives unannounced.
+/// The line sits at `FINISH_NODE`, which is where the run actually ends — 98.5% of the centreline,
+/// not the last node — so crossing it and finishing are the same moment.
+fn build_finish(track: &Track, out: &mut [Vertex]) -> usize {
+    let node = &track.nodes[angle_zero::track::FINISH_NODE];
+    let dir = node.dir;
+    let nrm = node.nrm;
+    let y = node.p.y;
+    let mut w = 0usize;
+
+    let at = |along: f32, lateral: f32| {
+        (
+            node.p.x + dir.x * along + nrm.x * lateral,
+            node.p.z + dir.z * along + nrm.z * lateral,
+        )
+    };
+
+    // The line itself: a broad pale stripe across the full width of the road, laid flat.
+    w += mesh::build_ground_quad(
+        &mut out[w..],
+        node.p.x,
+        y + 0.05,
+        node.p.z,
+        dir,
+        0.7,
+        6.4,
+        rgb(0xE8, 0xE4, 0xD8),
+    );
+    // A darker leader a few metres before it, so the line reads as deliberate rather than as a
+    // stray marking.
+    let (lx, lz) = at(-6.0, 0.0);
+    w += mesh::build_ground_quad(
+        &mut out[w..],
+        lx,
+        y + 0.045,
+        lz,
+        dir,
+        0.25,
+        6.4,
+        rgb(0x8C, 0x7A, 0x45),
+    );
+
+    // Two posts and a beam across the top, carrying a lit panel.
+    for side in [-1.0f32, 1.0] {
+        let (px, pz) = at(0.0, 7.4 * side);
+        w += mesh::build_box(&mut out[w..], 0.34, 6.0, 0.34, px, y + 3.0, pz, rgb(0x3A, 0x3E, 0x44));
+        // A foot, so the post meets the ground rather than ending in mid-air on a camber.
+        w += mesh::build_box(&mut out[w..], 0.7, 0.3, 0.7, px, y + 0.15, pz, rgb(0x2A, 0x2E, 0x33));
+    }
+    let (bx, bz) = at(0.0, 0.0);
+    w += mesh::build_box(&mut out[w..], 15.2, 0.4, 0.4, bx, y + 5.9, bz, rgb(0x3A, 0x3E, 0x44));
+    // The banner: an emissive panel slung under the beam, bright enough to be the thing you aim at.
+    w += mesh::build_box(&mut out[w..], 9.0, 1.1, 0.18, bx, y + 5.1, bz, rgb(0xE8, 0xC0, 0x30));
+    w += mesh::build_box(&mut out[w..], 8.4, 0.5, 0.1, bx, y + 5.1, bz, rgb(0x1A, 0x1A, 0x1C));
+
+    w
+}
+
 fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     let node = &track.nodes[BAY_NODE];
     let dir = node.dir;

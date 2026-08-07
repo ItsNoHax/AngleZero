@@ -138,6 +138,12 @@ pub fn bay_shelf_blend(node: usize) -> f32 {
     1.0
 }
 
+/// The node the run ends on, and where the finish line stands.
+///
+/// A run finishes at 98.5% of the centreline rather than the very last node, so the line has to
+/// be there and not at the end of the road, or the player crosses it after the fact.
+pub const FINISH_NODE: usize = (NODE_COUNT - 1) * 985 / 1000;
+
 /// Lateral distance at which the guard rail stops the car.
 pub const RAIL_LIMIT: f32 = 7.15;
 /// The rail is missing across the bay, so containment opens up to the far edge of the pull-off.
