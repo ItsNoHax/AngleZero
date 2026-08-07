@@ -2,3 +2,6 @@
 /captures
 __pycache__/
 *.pyc
+
+# Release archives built by scripts/release.sh
+/dist/

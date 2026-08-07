@@ -71,3 +71,22 @@ memory-stick directory instead.
 
 Best time, score and combo persist to `ms0:/PSP/SAVEDATA/ANGLEZERO/RECORD.BIN` and show on the
 title and results screens.
+
+## Cutting a release
+
+```bash
+scripts/release.sh
+```
+
+Builds without `devtools`, runs the tests, and writes `dist/AngleZero.<version>.zip`. The version
+comes from `Cargo.toml` unless you pass one (`scripts/release.sh 0.2.0`).
+
+The archive holds a single file:
+
+```
+PSP/GAME/AngleZero/EBOOT.PBP
+```
+
+Unzip it at the root of a memory stick and the game is where the XMB looks for it. The `AngleZero`
+folder is not optional — a `.PBP` sitting directly in `PSP/GAME` is not listed, and the folder name
+is what the XMB shows under the icon.

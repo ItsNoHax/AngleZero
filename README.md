@@ -6,7 +6,7 @@ One car, one road: 3.5 km of switchbacks down Sekira Pass, generated at boot rat
 a mesh. Gravity does the driving — the car builds speed downhill with no throttle at all — and
 points come from holding a slide, with the guard rails there to take them away again.
 
-![The road down Sekira Pass](docs/screenshot.png)
+![Holding a slide through a right-hander on Sekira Pass](docs/screenshot.png)
 
 ## Quick start
 
