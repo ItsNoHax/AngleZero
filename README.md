@@ -28,6 +28,7 @@ cargo test
 
 | | |
 |---|---|
+| [The idea](docs/design.md) | What the game is and why it works the way it does |
 | [Building and running](docs/building.md) | Toolchain, build flags, controls, running under PPSSPP |
 | [Architecture](docs/architecture.md) | The crate split, and how the game is tested on the host |
 | [PSP hardware notes](docs/psp-notes.md) | Traps the hardware sets that emulators do not, and where the frame budget goes |
