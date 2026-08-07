@@ -6,6 +6,8 @@
 
 pub mod audio;
 #[cfg(feature = "devtools")]
+pub mod atractest;
+#[cfg(feature = "devtools")]
 pub mod capture;
 #[cfg(feature = "devtools")]
 pub mod trace;
@@ -143,6 +145,10 @@ pub fn psp_main() {
 
         audio::start();
 
+        // Ask the console's own decoder what it makes of the music, once at boot.
+        #[cfg(feature = "devtools")]
+        atractest::run();
+
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
         game.enter_title(track);
@@ -188,15 +194,16 @@ pub fn psp_main() {
                     && !prev_debug_buttons.contains(CtrlButtons::START);
                 let select_held = pad.buttons.contains(CtrlButtons::SELECT);
                 let select_edge = select_held && !prev_debug_buttons.contains(CtrlButtons::SELECT);
+                // L cycles a render-state override, for pinning down a fault that only appears
+                // on hardware. See `render::DEBUG_MODES`. Every edge here has to be read before
+                // `prev_debug_buttons` is updated, or it can never be true.
+                let l_edge = pad.buttons.contains(CtrlButtons::LTRIGGER)
+                    && !prev_debug_buttons.contains(CtrlButtons::LTRIGGER);
                 prev_debug_buttons = pad.buttons;
                 if start_edge {
                     show_debug = !show_debug;
                 }
-                // L cycles a render-state override, for pinning down a fault that only appears
-                // on hardware. See `render::DEBUG_MODES`.
-                if pad.buttons.contains(CtrlButtons::LTRIGGER)
-                    && !prev_debug_buttons.contains(CtrlButtons::LTRIGGER)
-                {
+                if l_edge {
                     debug_mode = (debug_mode + 1) % render::DEBUG_MODES;
                     render::set_debug_mode(debug_mode);
                 }

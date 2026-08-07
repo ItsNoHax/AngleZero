@@ -79,6 +79,32 @@ BAND_LIMITED="$WORK/source-15k5.wav"
 ffmpeg -y -v error -i "$SRC" -af "lowpass=f=15500" -c:a pcm_s16le "$BAND_LIMITED"
 "$WORK/atracdenc/build/atracdenc" -e atrac3_lp4 --container riff -i "$BAND_LIMITED" -o "$OUT" 2>/dev/null
 
+# Strip the `fact` chunk.
+#
+# atracdenc writes a sample count of exactly frames x 1024, which leaves no slack for ATRAC3's
+# decoder delay — a player that decodes to the claimed count runs out of frames. Sony's own files
+# either claim fewer samples than they carry (Mario 64 claims seven frames fewer) or omit the
+# chunk entirely (MasterBoy). The chunk is optional, and the file that omits it is known to play
+# on the target hardware, so match that rather than guess at a correct count.
+python3 - "$OUT" <<'ENDSTRIP'
+import struct, sys
+path = sys.argv[1]
+b = open(path, 'rb').read()
+assert b[:4] == b'RIFF' and b[8:12] == b'WAVE', "not a RIFF/WAVE file"
+out, pos, dropped = bytearray(b[:12]), 12, False
+while pos + 8 <= len(b):
+    cid, size = b[pos:pos+4], struct.unpack('<I', b[pos+4:pos+8])[0]
+    pad = size & 1
+    if cid == b'fact':
+        dropped = True
+    else:
+        out += b[pos:pos+8+size+pad]
+    pos += 8 + size + pad
+struct.pack_into('<I', out, 4, len(out) - 8)      # RIFF size must follow the chunk removal
+open(path, 'wb').write(out)
+print(f">> {'dropped the fact chunk' if dropped else 'no fact chunk to drop'}, {len(out)} bytes")
+ENDSTRIP
+
 # Round-trip through ffmpeg's decoder: a file the PSP cannot play is usually one ffmpeg cannot
 # read either, and it is cheap to catch that here rather than on the handheld.
 if command -v ffprobe >/dev/null; then
