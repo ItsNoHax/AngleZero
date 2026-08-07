@@ -395,3 +395,24 @@ fn triangles_are_the_same_size_at_the_start_as_in_the_middle() {
          uneven node spacing has crept back in"
     );
 }
+
+#[test]
+fn a_wall_segment_follows_the_line_it_is_given() {
+    use angle_zero::math::Vec3;
+    let mut out = [mesh::Vertex::ZERO; 64];
+    // A run that is aligned to neither world axis, which is where axis-aligned boxes fall apart.
+    let a = Vec3::new(10.0, -2.0, 5.0);
+    let b = Vec3::new(13.0, -2.0, 9.0);
+    let n = mesh::build_wall_segment(&mut out, a, b, 0.22, 0.78, 0.12, 0xff55554e, 0xff6e6e66);
+    assert!(n > 0 && n <= out.len());
+
+    for v in &out[..n] {
+        // Stands on its base and no higher than base + height + cap.
+        assert!(v.y >= -2.0 - 1e-4 && v.y <= -2.0 + 0.78 + 0.12 + 1e-4, "y {}", v.y);
+        // Never further from the line a->b than its own half-thickness.
+        let (dx, dz) = (b.x - a.x, b.z - a.z);
+        let len = (dx * dx + dz * dz).sqrt();
+        let off = ((v.x - a.x) * dz - (v.z - a.z) * dx).abs() / len;
+        assert!(off <= 0.22 + 1e-3, "vertex {off} m off the wall line");
+    }
+}

@@ -104,6 +104,70 @@ pub fn bay_shelf_offset(lateral: f32) -> f32 {
     -0.25 - crate::math::max(0.0, l - BAY_SHELF_INNER) * BAY_SHELF_FALL
 }
 
+/// Half the pull-off's length, in metres of arclength either side of [`BAY_NODE`].
+pub const BAY_HALF_LENGTH: f32 = 19.0;
+
+/// Where the road ribbon's outermost station sits, and so where the paving has to meet it.
+///
+/// The road is drawn as an extruded cross-section that ends at this lateral offset, level with
+/// the centreline. The lay-by's paving picks up from exactly here, which is the whole trick: it
+/// is not a pad placed near the road, it is the road's own surface continuing outwards.
+pub const ROAD_SHOULDER: f32 = 6.4;
+
+/// The paving's lateral extent: it starts just inside the shoulder so there is no seam to see,
+/// and runs out far enough to pass beneath the parapet.
+pub const BAY_APRON_INNER: f32 = 6.0;
+pub const BAY_APRON_OUTER: f32 = 19.8;
+
+/// The paving's crossfall — 2%, which is what a real road is built with.
+pub const BAY_APRON_FALL: f32 = 0.02;
+
+/// Height of the paved surface relative to the road, `lateral` metres from the centreline.
+///
+/// Level with the shoulder rather than stepped down onto the shelf, because the point of the
+/// lay-by is that it reads as the road simply getting wider. Past the shoulder it falls away
+/// gently so water runs off it instead of back across the carriageway. The shelf the terrain
+/// puts here stays a quarter of a metre below it throughout, so the paving always wins the depth
+/// test without needing a fudge factor.
+pub fn bay_apron_offset(lateral: f32) -> f32 {
+    -crate::math::max(0.0, crate::math::abs(lateral) - ROAD_SHOULDER) * BAY_APRON_FALL
+}
+
+/// The node the pull-off stands on, `along` metres of arclength from [`BAY_NODE`].
+///
+/// The pass drops 2.8 m over the pull-off's length, so nothing built on it may be laid out flat
+/// from a single node — a 38 m slab taken from [`BAY_NODE`] alone is buried 1.2 m in the hillside
+/// at its upper end and hangs 1.5 m in the air at its lower one, which is exactly what the first
+/// version of it did. Every piece takes its height from the node it actually stands above.
+pub fn bay_node_at(track: &Track, along: f32) -> &Node {
+    let s = track.nodes[BAY_NODE].s + along;
+    &track.nodes[node_at_arclength(track, s)]
+}
+
+/// A point on the paved surface, `along` metres down the pass and `lateral` metres out.
+pub fn bay_surface(track: &Track, along: f32, lateral: f32) -> Vec3 {
+    let n = bay_node_at(track, along);
+    Vec3::new(
+        n.p.x + n.nrm.x * lateral * BAY_SIDE,
+        n.p.y + bay_apron_offset(lateral),
+        n.p.z + n.nrm.z * lateral * BAY_SIDE,
+    )
+}
+
+/// The node nearest a given distance along the track, by binary search on cumulative arclength.
+pub fn node_at_arclength(track: &Track, s: f32) -> usize {
+    let (mut lo, mut hi) = (0usize, NODE_COUNT - 1);
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if track.nodes[mid].s < s {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    lo
+}
+
 /// How far past the shelf's edge the ground eases back into the natural hillside.
 ///
 /// Without this the terrain station at 22 m is lifted onto the shelf while the one at 48 m keeps

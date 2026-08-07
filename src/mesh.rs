@@ -250,19 +250,7 @@ fn in_gap(render_node: i32, gap: Option<(usize, usize)>) -> bool {
     }
 }
 
-/// The node nearest a given distance along the track, by binary search on cumulative arclength.
-fn node_at_arclength(track: &Track, s: f32) -> usize {
-    let (mut lo, mut hi) = (0usize, NODE_COUNT - 1);
-    while lo < hi {
-        let mid = (lo + hi) / 2;
-        if track.nodes[mid].s < s {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    lo
-}
+use crate::track::node_at_arclength;
 
 /// Position of one station at one render node.
 ///
@@ -417,50 +405,108 @@ pub fn build_cone(
     w
 }
 
-/// Flat quad lying on the ground, oriented by a forward and a lateral axis.
-#[allow(clippy::too_many_arguments)]
-/// As `build_ground_quad`, but with a different height at each lateral edge, so a surface can
-/// follow a cross-fall instead of lying flat.
+/// A length of low wall between two points, with a cap along the top.
 ///
-/// A flat pad laid on a sloping shelf only touches it along one line: it is buried on the high
-/// side and hangs in the air on the low side. The pull-off's gravel needs to fall away with the
-/// ground it sits on.
+/// `build_box` is axis-aligned in world space, so a run of boxes along a road that is not aligned
+/// to an axis scatters into loose blocks rather than reading as a wall. This takes the direction
+/// from the two points it is given, so it follows whatever the road is doing.
+///
+/// Emits the outer face, the inner face and the cap. The ends are left open, which is invisible
+/// once segments are chained.
 #[allow(clippy::too_many_arguments)]
-pub fn build_sloped_ground_quad(
+pub fn build_wall_segment(
     out: &mut [Vertex],
-    cx: f32,
-    cz: f32,
-    y_inner: f32,
-    y_outer: f32,
-    forward: Vec2,
-    half_length: f32,
-    half_width: f32,
-    color: u32,
+    a: Vec3,
+    b: Vec3,
+    half_thickness: f32,
+    height: f32,
+    cap: f32,
+    body_color: u32,
+    cap_color: u32,
 ) -> usize {
-    let n = forward.lateral_normal();
-    // `b` runs from the inner lateral edge (-1) to the outer (+1).
-    let corner = |a: f32, b: f32| {
-        Vertex::new(
-            cx + forward.x * half_length * a + n.x * half_width * b,
-            if b < 0.0 { y_inner } else { y_outer },
-            cz + forward.z * half_length * a + n.z * half_width * b,
-            color,
-        )
+    // Sideways from the run of the wall, in the ground plane.
+    let along = Vec2::new(b.x - a.x, b.z - a.z).normalized();
+    let n = along.lateral_normal();
+    let (ox, oz) = (n.x * half_thickness, n.z * half_thickness);
+    let mut w = 0usize;
+
+    let mut face = |p0: Vec3, p1: Vec3, y0: f32, y1: f32, color: u32| {
+        let quad = [
+            Vertex::new(p0.x, y0, p0.z, color),
+            Vertex::new(p1.x, y0, p1.z, color),
+            Vertex::new(p1.x, y1, p1.z, color),
+            Vertex::new(p0.x, y0, p0.z, color),
+            Vertex::new(p1.x, y1, p1.z, color),
+            Vertex::new(p0.x, y1, p0.z, color),
+        ];
+        for v in quad {
+            out[w] = v;
+            w += 1;
+        }
     };
+
+    let top = height;
+    // Outer and inner faces.
+    face(
+        Vec3::new(a.x + ox, 0.0, a.z + oz),
+        Vec3::new(b.x + ox, 0.0, b.z + oz),
+        a.y,
+        a.y + top,
+        body_color,
+    );
+    face(
+        Vec3::new(a.x - ox, 0.0, a.z - oz),
+        Vec3::new(b.x - ox, 0.0, b.z - oz),
+        a.y,
+        a.y + top,
+        body_color,
+    );
+    // The cap, as a flat ribbon across the top.
+    let (c0, c1) = (a.y + top, a.y + top + cap);
+    face(
+        Vec3::new(a.x + ox, 0.0, a.z + oz),
+        Vec3::new(b.x + ox, 0.0, b.z + oz),
+        c0,
+        c1,
+        cap_color,
+    );
+    face(
+        Vec3::new(a.x - ox, 0.0, a.z - oz),
+        Vec3::new(b.x - ox, 0.0, b.z - oz),
+        c0,
+        c1,
+        cap_color,
+    );
     let quad = [
-        corner(-1.0, -1.0),
-        corner(1.0, -1.0),
-        corner(1.0, 1.0),
-        corner(-1.0, -1.0),
-        corner(1.0, 1.0),
-        corner(-1.0, 1.0),
+        Vertex::new(a.x + ox, c1, a.z + oz, cap_color),
+        Vertex::new(b.x + ox, c1, b.z + oz, cap_color),
+        Vertex::new(b.x - ox, c1, b.z - oz, cap_color),
+        Vertex::new(a.x + ox, c1, a.z + oz, cap_color),
+        Vertex::new(b.x - ox, c1, b.z - oz, cap_color),
+        Vertex::new(a.x - ox, c1, a.z - oz, cap_color),
     ];
-    for (i, v) in quad.iter().enumerate() {
-        out[i] = *v;
+    for v in quad {
+        out[w] = v;
+        w += 1;
+    }
+    w
+}
+
+/// A quad from four explicit corners, wound `a b c` / `a c d`.
+///
+/// Used where a surface has to follow terrain that moves in both axes at once — a flat pad and
+/// even a cross-falling one only touch a descending hillside along a single line.
+pub fn build_quad(out: &mut [Vertex], a: Vec3, b: Vec3, c: Vec3, d: Vec3, color: u32) -> usize {
+    let v = |p: Vec3| Vertex::new(p.x, p.y, p.z, color);
+    let quad = [v(a), v(b), v(c), v(a), v(c), v(d)];
+    for (i, x) in quad.iter().enumerate() {
+        out[i] = *x;
     }
     quad.len()
 }
 
+/// Flat quad lying on the ground, oriented by a forward and a lateral axis.
+#[allow(clippy::too_many_arguments)]
 pub fn build_ground_quad(
     out: &mut [Vertex],
     cx: f32,

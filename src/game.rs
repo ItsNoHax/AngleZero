@@ -158,15 +158,16 @@ impl Game {
     pub fn enter_title(&mut self, track: &Track) {
         let n = &track.nodes[BAY_NODE];
         let road_heading = atan2(n.dir.x, n.dir.z);
-        // Centre of the gravel pad, then nudged forward and back toward the road.
+        // Parked on the apron, then nudged forward and back toward the road.
         let pad_x = n.p.x + n.nrm.x * BAY_SIDE * 11.5;
         let pad_z = n.p.z + n.nrm.z * BAY_SIDE * 11.5;
         let x = pad_x + sin(road_heading) * 2.5 - n.nrm.x * BAY_SIDE * 1.2;
         let z = pad_z + cos(road_heading) * 2.5 - n.nrm.z * BAY_SIDE * 1.2;
 
-        // On the shelf, not at road level: the hillside is cut away across the pull-off.
+        // On the paving, which is the road's own surface carried outwards — not on the shelf
+        // underneath it, which would sink the car a quarter of a metre into its own car park.
         let lateral = 11.5 - 1.2;
-        let y = n.p.y + crate::track::bay_shelf_offset(lateral);
+        let y = n.p.y + crate::track::bay_apron_offset(lateral);
         self.vehicle
             .place_at(track, x, y, z, road_heading + BAY_SIDE * 0.16, BAY_NODE);
         self.phase = Phase::Title;

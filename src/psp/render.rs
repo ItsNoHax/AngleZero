@@ -72,11 +72,11 @@ const TERRAIN_STATIONS: [Station; 12] = [
 ];
 
 const ROAD_STATIONS: [Station; 5] = [
-    Station::new(-6.4, 0.0, rgb(0x14, 0x16, 0x19)),
+    Station::new(-angle_zero::track::ROAD_SHOULDER, 0.0, rgb(0x14, 0x16, 0x19)),
     Station::new(-5.2, 0.02, ROAD_COLOR),
     Station::new(0.0, 0.03, rgb(0x1E, 0x20, 0x25)),
     Station::new(5.2, 0.02, ROAD_COLOR),
-    Station::new(6.4, 0.0, rgb(0x14, 0x16, 0x19)),
+    Station::new(angle_zero::track::ROAD_SHOULDER, 0.0, rgb(0x14, 0x16, 0x19)),
 ];
 
 // The two edge lines must be separate ribbons. Built as one four-station ribbon, the quad
@@ -624,12 +624,17 @@ unsafe fn build_props(track: &Track) {
             };
             if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
                 let g0 = gw;
-                let (px, pz) = at(11.0, 9.0);
-                let shelf = node.p.y + angle_zero::track::bay_shelf_offset(9.0);
-                push_ground_glow(glows, &mut gw, px, shelf + 0.06, pz, 13.0, LAMP_POOL);
-                let (hx, hz) = at(14.0, 9.8);
+                let (px, pz) = at(10.0, 10.0);
+                let shelf = node.p.y + angle_zero::track::bay_shelf_offset(10.0);
+                push_ground_glow(glows, &mut gw, px, shelf + 0.06, pz, 12.0, LAMP_POOL);
+                let (hx, hz) = at(12.0, 9.8);
                 let lamp_y = node.p.y + angle_zero::track::bay_shelf_offset(7.6);
                 push_blob_glow(glows, &mut gw, hx, lamp_y + 7.15, hz, 2.75, LAMP_GLOW);
+                // The vending machine throws a small warm pool of its own.
+                let (vx, vz) = at(-7.0, 14.6);
+                let vy = node.p.y + angle_zero::track::bay_shelf_offset(15.0);
+                push_ground_glow(glows, &mut gw, vx, vy + 0.07, vz, 4.2, LAMP_POOL);
+                push_blob_glow(glows, &mut gw, vx, vy + 1.25, vz, 1.5, LAMP_GLOW);
                 for v in &glows[g0..gw] {
                     note(&(*v), &mut glo, &mut ghi);
                 }
@@ -675,8 +680,6 @@ unsafe fn build_props(track: &Track) {
     }
 }
 
-/// The emergency pull-off. Gravel pad, apron, chevron boards, a tyre wall, a bin and a
-/// lamp. This is where the title screen parks the car, so it is the first thing anyone sees.
 /// The finish: a gantry over the road with a lit banner, and a line painted across the tarmac.
 ///
 /// Without it the road simply runs on into the dark and the results screen arrives unannounced.
@@ -698,27 +701,13 @@ fn build_finish(track: &Track, out: &mut [Vertex]) -> usize {
 
     // The line itself: a broad pale stripe across the full width of the road, laid flat.
     w += mesh::build_ground_quad(
-        &mut out[w..],
-        node.p.x,
-        y + 0.05,
-        node.p.z,
-        dir,
-        0.7,
-        6.4,
-        rgb(0xE8, 0xE4, 0xD8),
+        &mut out[w..], node.p.x, y + 0.05, node.p.z, dir, 0.7, 6.4, rgb(0xE8, 0xE4, 0xD8),
     );
-    // A darker leader a few metres before it, so the line reads as deliberate rather than as a
-    // stray marking.
+    // A marker a few metres before it, so the line reads as deliberate rather than as a stray
+    // piece of road marking.
     let (lx, lz) = at(-6.0, 0.0);
     w += mesh::build_ground_quad(
-        &mut out[w..],
-        lx,
-        y + 0.045,
-        lz,
-        dir,
-        0.25,
-        6.4,
-        rgb(0x8C, 0x7A, 0x45),
+        &mut out[w..], lx, y + 0.045, lz, dir, 0.25, 6.4, rgb(0x8C, 0x7A, 0x45),
     );
 
     // Two posts and a beam across the top, carrying a lit panel.
@@ -737,104 +726,77 @@ fn build_finish(track: &Track, out: &mut [Vertex]) -> usize {
     w
 }
 
+/// The viewpoint — the lay-by the title screen looks at.
+///
+/// A widened, paved shoulder rather than a gravel pad dropped onto the hillside: the surface is
+/// the same asphalt as the road and runs straight out of it, and a low stone parapet follows the
+/// outer edge. The parapet is the point of the thing. The hillside has to be cut back to make
+/// level ground here, and a raw cut looks like a mistake; a wall along it looks like a road
+/// engineer put it there, which is what a mountain lay-by actually has.
+///
+/// A lit vending machine does the rest of the work — it is the one warm light for a hundred
+/// metres, it says somebody comes up here, and it costs two boxes.
 fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
-    let node = &track.nodes[BAY_NODE];
-    let dir = node.dir;
-    let nrm = node.nrm;
-    let s = BAY_SIDE;
+    use angle_zero::track::{bay_surface, BAY_APRON_INNER, BAY_APRON_OUTER, BAY_HALF_LENGTH};
     let mut w = 0usize;
 
-    // Somewhere `along` the road and `lateral` from the centreline, at the bay node.
-    let at = |along: f32, lateral: f32| {
-        (
-            node.p.x + dir.x * along + nrm.x * lateral * s,
-            node.p.z + dir.z * along + nrm.z * lateral * s,
-        )
-    };
-    // Ground height at that distance out, so props stand on the shelf instead of hanging at
-    // road level over a slope that has been cut away beneath them.
-    let ground = |lateral: f32| node.p.y + angle_zero::track::bay_shelf_offset(lateral);
+    // Everything here is placed by arclength and takes its height from the node it stands above.
+    // The pass drops 2.8 m across the lay-by, so anything laid out flat from one node is buried
+    // at the top end and hanging in the air at the bottom — see `tests/bay.rs`.
+    let at = |along: f32, lateral: f32| bay_surface(track, along, lateral);
 
-    // Gravel pad, 13 x 34 m, and the darker apron blending it into the road.
-    // The gravel, following the shelf's cross-fall. `s` flips which lateral edge is the inner
-    // one, so the heights are picked to match.
-    let (px, pz) = at(0.0, 11.5);
-    let (pad_in, pad_out) = (ground(5.0) + 0.03, ground(18.0) + 0.03);
-    let (pad_a, pad_b) = if s > 0.0 { (pad_in, pad_out) } else { (pad_out, pad_in) };
-    w += mesh::build_sloped_ground_quad(
-        &mut out[w..],
-        px,
-        pz,
-        pad_a,
-        pad_b,
-        dir,
-        17.0,
-        6.5,
-        rgb(0x3A, 0x38, 0x33),
-    );
-    // The apron blending pad into road, on the same fall.
-    let (ax, az) = at(0.0, 7.4);
-    let (ap_in, ap_out) = (ground(4.4) + 0.05, ground(10.4) + 0.05);
-    let (ap_a, ap_b) = if s > 0.0 { (ap_in, ap_out) } else { (ap_out, ap_in) };
-    w += mesh::build_sloped_ground_quad(
-        &mut out[w..],
-        ax,
-        az,
-        ap_a,
-        ap_b,
-        dir,
-        15.0,
-        3.0,
-        rgb(0x22, 0x22, 0x24),
-    );
-
-    // Three chevron hazard boards: a post and a striped panel each.
-    for along in [-12.0f32, 4.0, 14.0] {
-        let (bx, bz) = at(along, 15.2);
-        let by = ground(15.2);
-        w += mesh::build_box(&mut out[w..], 0.16, 2.4, 0.16, bx, by + 1.2, bz, rgb(0x33, 0x33, 0x36));
-        // Alternating bands stand in for the diagonal-stripe texture.
-        for band in 0..4 {
-            let color = if band % 2 == 0 {
-                rgb(0xE8, 0xC0, 0x30)
-            } else {
-                rgb(0x1A, 0x1A, 0x1C)
-            };
-            let y = by + 2.0 + band as f32 * 0.21;
-            w += mesh::build_box(&mut out[w..], 2.6, 0.21, 0.1, bx, y, bz, color);
-        }
+    // The apron, as a ribbon of quads down the hill rather than one slab across it.
+    const STEPS: usize = 12;
+    let along_at = |i: usize| (i as f32 / STEPS as f32 * 2.0 - 1.0) * BAY_HALF_LENGTH;
+    for i in 0..STEPS {
+        let (a, b) = (along_at(i), along_at(i + 1));
+        w += mesh::build_quad(
+            &mut out[w..],
+            at(a, BAY_APRON_INNER),
+            at(b, BAY_APRON_INNER),
+            at(b, BAY_APRON_OUTER),
+            at(a, BAY_APRON_OUTER),
+            rgb(0x24, 0x26, 0x2A),
+        );
     }
 
-    // Tyre wall: five columns, three high.
-    for col in 0..5 {
-        let along = -4.0 + col as f32 * 2.0;
-        let (tx, tz) = at(along, 17.4);
-        let ty = ground(17.4);
-        for tier in 0..3 {
-            w += mesh::build_upright_cylinder(
-                &mut out[w..],
-                6,
-                0.5,
-                0.28,
-                tx,
-                ty + tier as f32 * 0.28,
-                tz,
-                TYRE_STACK,
-            );
-        }
+    // The parapet, chained so it follows both the curve of the road and the fall of the pass.
+    const WALL_LATERAL: f32 = 19.6;
+    for i in 0..STEPS {
+        w += mesh::build_wall_segment(
+            &mut out[w..],
+            at(along_at(i), WALL_LATERAL),
+            at(along_at(i + 1), WALL_LATERAL),
+            0.22,
+            0.78,
+            0.12,
+            rgb(0x55, 0x55, 0x4E),
+            rgb(0x6E, 0x6E, 0x66),
+        );
     }
 
-    // Waste bin.
-    let (nx, nz) = at(-9.0, 15.5);
-    w += mesh::build_box(&mut out[w..], 1.1, 1.3, 1.1, nx, ground(15.5) + 0.65, nz, rgb(0x2C, 0x3A, 0x30));
+    // The vending machine, and the crate of empties beside it.
+    let v = at(-7.0, 15.6);
+    w += mesh::build_box(&mut out[w..], 1.3, 2.0, 0.85, v.x, v.y + 1.0, v.z, rgb(0xC0, 0x2E, 0x2A));
+    // The lit front panel faces the road, which is the side the camera orbits.
+    let f = at(-7.0, 15.2);
+    w += mesh::build_box(&mut out[w..], 1.05, 1.35, 0.1, f.x, v.y + 1.25, f.z, rgb(0xFF, 0xEC, 0xBE));
+    w += mesh::build_box(&mut out[w..], 1.05, 0.3, 0.12, f.x, v.y + 0.42, f.z, rgb(0x2A, 0x2A, 0x2E));
+    let c = at(-8.6, 15.4);
+    w += mesh::build_box(&mut out[w..], 0.6, 0.5, 0.42, c.x, c.y + 0.25, c.z, rgb(0x2C, 0x3A, 0x30));
 
-    // Street lamp over the pad.
-    let (lx, lz) = at(14.0, 7.6);
-    let ly = ground(7.6);
-    w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, lx, ly + 3.7, lz, LAMP_POLE);
-    let (hx, hz) = at(14.0, 9.8);
-    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (lx + hx) * 0.5, ly + 7.3, (lz + hz) * 0.5, LAMP_POLE);
-    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, hx, ly + 7.15, hz, LAMP_HEAD);
+    // A route sign at the far end.
+    let s = at(13.0, 16.4);
+    w += mesh::build_box(&mut out[w..], 0.14, 2.2, 0.14, s.x, s.y + 1.1, s.z, rgb(0x3A, 0x3E, 0x44));
+    w += mesh::build_box(&mut out[w..], 2.0, 0.62, 0.1, s.x, s.y + 2.25, s.z, rgb(0x1C, 0x3A, 0x2C));
+    w += mesh::build_box(&mut out[w..], 1.7, 0.14, 0.12, s.x, s.y + 2.34, s.z, rgb(0xD8, 0xDE, 0xE4));
+
+    // The lamp over the apron, its head reaching out towards the road.
+    let l = at(12.0, 7.6);
+    w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, l.x, l.y + 3.7, l.z, LAMP_POLE);
+    let h = at(12.0, 9.8);
+    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (l.x + h.x) * 0.5, l.y + 7.3, (l.z + h.z) * 0.5, LAMP_POLE);
+    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, h.x, l.y + 7.15, h.z, LAMP_HEAD);
 
     w
 }
