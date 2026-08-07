@@ -1,2 +1,4 @@
 /target
 /captures
+__pycache__/
+*.pyc
