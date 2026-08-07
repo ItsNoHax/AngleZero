@@ -1,0 +1,32 @@
+# Cap ATRAC3 frames at three coded QMF bands, for PSP compatibility.
+#
+# Sony's encoder never codes the top band at LP2 or LP4: every frame of a stock PSP
+# SND0.AT3 carries bands_coded == 2. atracdenc always writes 3, and the PSP's hardware
+# decoder refuses the stream outright — the XMB simply plays nothing, while ffmpeg decodes
+# it happily, which is what made this hard to see.
+#
+# Against atracdenc 2ee62a6c6dfe5f7a0a40fccdc0bf3dd4635d1d4e
+--- a/src/atrac/at3/atrac3_bitstream.cpp
++++ b/src/atrac/at3/atrac3_bitstream.cpp
+@@ -386,7 +386,7 @@
+     const uint16_t bitsUsedOld = bitStream ? (uint16_t)bitStream->GetSizeInBits() : 0;
+     const std::vector<TTonalBlock>& tonalComponents = sce.TonalBlocks;
+     const TAtrac3Data::SubbandInfo& subbandInfo = sce.SubbandInfo;
+-    const uint32_t numQmfBand = subbandInfo.GetQmfNum();
++    const uint32_t numQmfBand = std::min<uint32_t>(subbandInfo.GetQmfNum(), 3);
+     uint16_t bitsUsed = 0;
+ 
+     //group tonal components with same quantizer and len
+@@ -781,7 +781,11 @@
+             bitStream->Write(0x28, 6); //0x28 - id
+         }
+ 
+-        const uint8_t numQmfBand = subbandInfo.GetQmfNum();
++        // PSP compatibility: Sony's encoder never codes the top QMF band at these bitrates —
++        // every frame of a stock SND0.AT3 has bands_coded == 2. atracdenc always writes 3, and
++        // the PSP's hardware decoder rejects the stream. Cap it so the header and the gain info
++        // below agree on three bands.
++        const uint8_t numQmfBand = std::min<uint8_t>(subbandInfo.GetQmfNum(), 3);
+         ASSERT(numQmfBand > 0);
+         bitStream->Write(numQmfBand - 1, 2);
+ 
