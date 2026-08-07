@@ -2,27 +2,54 @@
 
 A night-time downhill drift game for the Sony PSP, written in Rust.
 
-One car, one road: 3.5 km of switchbacks down Sekira Pass, generated at boot rather than shipped as
-a mesh. Gravity does the driving — the car builds speed downhill with no throttle at all — and
-points come from holding a slide, with the guard rails there to take them away again.
+Sekira Pass after dark. Sideways the whole way down.
 
-![Holding a slide through a right-hander on Sekira Pass](docs/screenshot.png)
+<br>
 
-## Quick start
+<p align="center">
+  <img src="docs/screenshot.png" width="880"
+       alt="Holding a slide through a right-hander on Sekira Pass">
+</p>
+
+<br>
+
+## Install
+
+Download `AngleZero.0.1.0.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases) and
+unzip it at the root of the memory stick. That is the whole installation — the archive holds one
+file, already in the right place:
+
+```
+PSP/GAME/AngleZero/EBOOT.PBP
+```
+
+Then it appears under Game → Memory Stick.
+
+It needs custom firmware. Stock firmware will not launch unsigned homebrew, and there is nothing
+this end can do about that.
+
+## Building from source
 
 ```bash
 cargo psp --release
 ```
 
 Copy `target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP` to `PSP/GAME/AngleZero/EBOOT.PBP` on a
-memory stick, renaming it to exactly `EBOOT.PBP`. It needs custom firmware; stock firmware will not
-launch unsigned homebrew.
+memory stick, renaming it to exactly `EBOOT.PBP`.
 
 To run the whole test suite, which needs no PSP and no emulator:
 
 ```bash
 cargo test
 ```
+
+To build the same archive the releases are cut from:
+
+```bash
+scripts/release.sh
+```
+
+Toolchain, emulator setup and controls are in [Building and running](docs/building.md).
 
 ## Documentation
 

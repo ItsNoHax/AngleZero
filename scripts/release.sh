@@ -5,9 +5,8 @@
 #
 #     PSP/GAME/AngleZero/EBOOT.PBP
 #
-# A PBP has to sit in its own folder under PSP/GAME — the folder name is what
-# the XMB lists — so unzipping this at the root of a memory stick puts the game
-# straight where it needs to be.
+# Unzipping that at the root of a memory stick puts the game straight where it
+# needs to be.
 #
 # The version comes from Cargo.toml unless one is given:
 #
