@@ -81,6 +81,63 @@ pub const BAY_SIDE: f32 = 1.0;
 pub const BAY_FROM: usize = 16;
 pub const BAY_TO: usize = 46;
 
+/// How far from the centreline the pull-off's shelf extends before the hillside resumes.
+pub const BAY_SHELF_OUTER: f32 = 24.0;
+/// Where the shelf starts falling away — the inner edge of the hillside beside the road.
+pub const BAY_SHELF_INNER: f32 = 7.2;
+/// Gentle cross-fall across the shelf, so it drains like real tarmac instead of reading as a
+/// flat card laid on the slope.
+pub const BAY_SHELF_FALL: f32 = 0.022;
+/// Centreline nodes over which the shelf blends into the natural hillside at each end, so the
+/// lay-off does not end in a cliff.
+pub const BAY_SHELF_BLEND: usize = 10;
+
+/// Height of the pull-off's shelf relative to the road surface, `lateral` metres from the
+/// centreline.
+///
+/// The hillside drops steeply away from the road — 0.9 m by 11 m out, 4.2 m by 22 m — so a flat
+/// pad laid at road level is buried at its inner edge and hangs in the air at its outer one. A
+/// real emergency stop area is cut into the slope, which is what this describes: level with the
+/// road, falling gently for drainage, out to `BAY_SHELF_OUTER`.
+pub fn bay_shelf_offset(lateral: f32) -> f32 {
+    let l = crate::math::abs(lateral);
+    -0.25 - crate::math::max(0.0, l - BAY_SHELF_INNER) * BAY_SHELF_FALL
+}
+
+/// How far past the shelf's edge the ground eases back into the natural hillside.
+///
+/// Without this the terrain station at 22 m is lifted onto the shelf while the one at 48 m keeps
+/// its natural -17 m, and the ground falls sixteen metres in twenty-six — a cliff along the whole
+/// outer edge of the pull-off.
+pub const BAY_SHELF_FADE: f32 = 40.0;
+
+/// Blend weight of the shelf at a given distance from the centreline.
+pub fn bay_shelf_lateral_blend(lateral: f32) -> f32 {
+    let l = crate::math::abs(lateral);
+    if l <= BAY_SHELF_OUTER {
+        1.0
+    } else if l >= BAY_SHELF_OUTER + BAY_SHELF_FADE {
+        0.0
+    } else {
+        1.0 - (l - BAY_SHELF_OUTER) / BAY_SHELF_FADE
+    }
+}
+
+/// How much the shelf applies at a given centreline node: 1.0 through the pull-off, easing to
+/// 0.0 over `BAY_SHELF_BLEND` nodes at each end.
+pub fn bay_shelf_blend(node: usize) -> f32 {
+    if node < BAY_FROM.saturating_sub(BAY_SHELF_BLEND) || node > BAY_TO + BAY_SHELF_BLEND {
+        return 0.0;
+    }
+    if node < BAY_FROM {
+        return (node - (BAY_FROM - BAY_SHELF_BLEND)) as f32 / BAY_SHELF_BLEND as f32;
+    }
+    if node > BAY_TO {
+        return 1.0 - (node - BAY_TO) as f32 / BAY_SHELF_BLEND as f32;
+    }
+    1.0
+}
+
 /// Lateral distance at which the guard rail stops the car.
 pub const RAIL_LIMIT: f32 = 7.15;
 /// The rail is missing across the bay, so containment opens up to the far edge of the pull-off.

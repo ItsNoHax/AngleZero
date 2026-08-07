@@ -158,3 +158,57 @@ fn normals_and_directions_stay_orthonormal_where_the_car_actually_drives() {
         assert!((d.length() - 1.0).abs() < 1e-3);
     }
 }
+
+// ------------------------------------------------------------------ the pull-off shelf
+
+#[test]
+fn the_pull_off_shelf_sits_just_below_the_road_and_falls_gently_outward() {
+    use angle_zero::track::{bay_shelf_offset, BAY_SHELF_INNER, BAY_SHELF_OUTER};
+    // Level with the road at its inner edge, so a car can roll off the tarmac onto it.
+    assert!((bay_shelf_offset(BAY_SHELF_INNER) + 0.25).abs() < 1e-4);
+    // Falling, but nothing like the 4.2 m the bare hillside drops by 22 m out.
+    let outer = bay_shelf_offset(BAY_SHELF_OUTER);
+    assert!(outer < -0.25, "shelf should fall away from the road, got {outer}");
+    assert!(outer > -0.7, "shelf falls too steeply to park on: {outer}");
+    // Monotonic, so there is no dip for the car to fall into.
+    let mut prev = 0.0f32;
+    let mut l = 0.0f32;
+    while l <= BAY_SHELF_OUTER {
+        let y = bay_shelf_offset(l);
+        assert!(y <= prev + 1e-6, "shelf rises at {l} m out");
+        prev = y;
+        l += 0.5;
+    }
+}
+
+#[test]
+fn the_shelf_eases_in_and_out_rather_than_ending_in_a_cliff() {
+    use angle_zero::track::{bay_shelf_blend, BAY_FROM, BAY_SHELF_BLEND, BAY_TO};
+    assert_eq!(bay_shelf_blend((BAY_FROM + BAY_TO) / 2), 1.0);
+    assert_eq!(bay_shelf_blend(BAY_FROM), 1.0);
+    assert_eq!(bay_shelf_blend(BAY_TO), 1.0);
+    // Zero well clear of the pull-off, and partial in between.
+    assert_eq!(bay_shelf_blend(BAY_FROM - BAY_SHELF_BLEND - 1), 0.0);
+    assert_eq!(bay_shelf_blend(BAY_TO + BAY_SHELF_BLEND + 1), 0.0);
+    let mid_in = bay_shelf_blend(BAY_FROM - BAY_SHELF_BLEND / 2);
+    assert!(mid_in > 0.0 && mid_in < 1.0, "blend in was {mid_in}");
+    let mid_out = bay_shelf_blend(BAY_TO + BAY_SHELF_BLEND / 2);
+    assert!(mid_out > 0.0 && mid_out < 1.0, "blend out was {mid_out}");
+}
+
+#[test]
+fn the_shelf_eases_out_sideways_instead_of_ending_in_a_cliff() {
+    use angle_zero::track::{bay_shelf_lateral_blend, BAY_SHELF_FADE, BAY_SHELF_OUTER};
+    assert_eq!(bay_shelf_lateral_blend(0.0), 1.0);
+    assert_eq!(bay_shelf_lateral_blend(BAY_SHELF_OUTER), 1.0);
+    assert_eq!(bay_shelf_lateral_blend(BAY_SHELF_OUTER + BAY_SHELF_FADE), 0.0);
+    // Partial in between, and monotonic, so the hillside never steps back up.
+    let mut prev = 1.0f32;
+    let mut l = BAY_SHELF_OUTER;
+    while l <= BAY_SHELF_OUTER + BAY_SHELF_FADE {
+        let b = bay_shelf_lateral_blend(l);
+        assert!(b <= prev + 1e-6, "shelf blend rises again at {l}");
+        prev = b;
+        l += 1.0;
+    }
+}

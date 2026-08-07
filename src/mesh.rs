@@ -136,7 +136,13 @@ impl<const V: usize> Ribbon<V> {
 
     /// Extrudes `stations` along the centreline into chunked triangle strips.
     pub fn build(&mut self, track: &Track, stations: &[Station]) {
-        self.build_gapped(track, stations, None)
+        self.build_shaped(track, stations, None, false)
+    }
+
+    /// As `build`, but cuts the emergency pull-off's shelf into the hillside — see
+    /// `track::bay_shelf_offset`. Only the terrain wants this; the road is already flat.
+    pub fn build_shelved(&mut self, track: &Track, stations: &[Station]) {
+        self.build_shaped(track, stations, None, true)
     }
 
     /// As `build`, but collapses the ribbon to zero width across `gap` (a range of *centreline*
@@ -146,6 +152,16 @@ impl<const V: usize> Ribbon<V> {
         track: &Track,
         stations: &[Station],
         gap: Option<(usize, usize)>,
+    ) {
+        self.build_shaped(track, stations, gap, false)
+    }
+
+    fn build_shaped(
+        &mut self,
+        track: &Track,
+        stations: &[Station],
+        gap: Option<(usize, usize)>,
+        shelf: bool,
     ) {
         let mut w = 0usize;
 
@@ -173,18 +189,18 @@ impl<const V: usize> Ribbon<V> {
                     let prev = self.verts[w - 1];
                     self.verts[w] = prev;
                     w += 1;
-                    let next = station_vertex(track, first, &stations[s]);
+                    let next = station_vertex(track, first, &stations[s], shelf);
                     self.verts[w] = next;
                     w += 1;
                 }
                 for n in first..=last {
-                    let a = station_vertex(track, n, &stations[s]);
+                    let a = station_vertex(track, n, &stations[s], shelf);
                     // Inside the gap both corners collapse onto the first station, so every
                     // triangle there has zero area and rasterises nothing.
                     let b = if in_gap(n, gap) {
                         a
                     } else {
-                        station_vertex(track, n, &stations[s + 1])
+                        station_vertex(track, n, &stations[s + 1], shelf)
                     };
                     self.verts[w] = a;
                     self.verts[w + 1] = b;
@@ -262,21 +278,34 @@ fn node_at_arclength(track: &Track, s: f32) -> usize {
 /// The index is signed and may run past either end of the track: those become the apron, laid
 /// along the tangent of the nearest real node so the extension carries on in the direction the
 /// road was already going.
-fn station_vertex(track: &Track, render_node: i32, st: &Station) -> Vertex {
+fn station_vertex(track: &Track, render_node: i32, st: &Station, shelf: bool) -> Vertex {
     let spacing = track.length / (RENDER_NODES - 1) as f32;
     let target = render_node as f32 * spacing;
 
-    let (n, along) = if target < 0.0 {
-        (&track.nodes[0], target)
+    let (index, n, along) = if target < 0.0 {
+        (0usize, &track.nodes[0], target)
     } else if target > track.length {
-        (&track.nodes[NODE_COUNT - 1], target - track.length)
+        (NODE_COUNT - 1, &track.nodes[NODE_COUNT - 1], target - track.length)
     } else {
-        (&track.nodes[node_at_arclength(track, target)], 0.0)
+        let i = node_at_arclength(track, target);
+        (i, &track.nodes[i], 0.0)
     };
+
+    // Across the pull-off the hillside is cut back to a shelf, so the ground the car parks on is
+    // real geometry rather than a flat pad laid over a slope.
+    let mut y = st.y;
+    if shelf && crate::math::signum(st.lateral) == crate::track::BAY_SIDE {
+        let blend =
+            crate::track::bay_shelf_blend(index) * crate::track::bay_shelf_lateral_blend(st.lateral);
+        if blend > 0.0 {
+            let cut = crate::track::bay_shelf_offset(st.lateral);
+            y = crate::math::lerp(st.y, cut, blend);
+        }
+    }
 
     Vertex::new(
         n.p.x + n.dir.x * along + n.nrm.x * st.lateral,
-        n.p.y + st.y,
+        n.p.y + y,
         n.p.z + n.dir.z * along + n.nrm.z * st.lateral,
         st.color,
     )
@@ -390,6 +419,48 @@ pub fn build_cone(
 
 /// Flat quad lying on the ground, oriented by a forward and a lateral axis.
 #[allow(clippy::too_many_arguments)]
+/// As `build_ground_quad`, but with a different height at each lateral edge, so a surface can
+/// follow a cross-fall instead of lying flat.
+///
+/// A flat pad laid on a sloping shelf only touches it along one line: it is buried on the high
+/// side and hangs in the air on the low side. The pull-off's gravel needs to fall away with the
+/// ground it sits on.
+#[allow(clippy::too_many_arguments)]
+pub fn build_sloped_ground_quad(
+    out: &mut [Vertex],
+    cx: f32,
+    cz: f32,
+    y_inner: f32,
+    y_outer: f32,
+    forward: Vec2,
+    half_length: f32,
+    half_width: f32,
+    color: u32,
+) -> usize {
+    let n = forward.lateral_normal();
+    // `b` runs from the inner lateral edge (-1) to the outer (+1).
+    let corner = |a: f32, b: f32| {
+        Vertex::new(
+            cx + forward.x * half_length * a + n.x * half_width * b,
+            if b < 0.0 { y_inner } else { y_outer },
+            cz + forward.z * half_length * a + n.z * half_width * b,
+            color,
+        )
+    };
+    let quad = [
+        corner(-1.0, -1.0),
+        corner(1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, 1.0),
+    ];
+    for (i, v) in quad.iter().enumerate() {
+        out[i] = *v;
+    }
+    quad.len()
+}
+
 pub fn build_ground_quad(
     out: &mut [Vertex],
     cx: f32,

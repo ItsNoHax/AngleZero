@@ -157,7 +157,7 @@ pub fn debug_mode() -> u32 {
 /// Builds every static mesh. Call once, after the track is generated.
 pub fn init(track: &Track) {
     unsafe {
-        (*(&raw mut TERRAIN_MESH)).build(track, &TERRAIN_STATIONS);
+        (*(&raw mut TERRAIN_MESH)).build_shelved(track, &TERRAIN_STATIONS);
         (*(&raw mut ROAD_MESH)).build(track, &ROAD_STATIONS);
         (*(&raw mut EDGE_L_MESH)).build(track, &EDGE_LEFT);
         (*(&raw mut EDGE_R_MESH)).build(track, &EDGE_RIGHT);
@@ -611,9 +611,11 @@ unsafe fn build_props(track: &Track) {
             if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
                 let g0 = gw;
                 let (px, pz) = at(11.0, 9.0);
-                push_ground_glow(glows, &mut gw, px, node.p.y + 0.05, pz, 13.0, LAMP_POOL);
+                let shelf = node.p.y + angle_zero::track::bay_shelf_offset(9.0);
+                push_ground_glow(glows, &mut gw, px, shelf + 0.06, pz, 13.0, LAMP_POOL);
                 let (hx, hz) = at(14.0, 9.8);
-                push_blob_glow(glows, &mut gw, hx, node.p.y + 7.15, hz, 2.75, LAMP_GLOW);
+                let lamp_y = node.p.y + angle_zero::track::bay_shelf_offset(7.6);
+                push_blob_glow(glows, &mut gw, hx, lamp_y + 7.15, hz, 2.75, LAMP_GLOW);
                 for v in &glows[g0..gw] {
                     note(&(*v), &mut glo, &mut ghi);
                 }
@@ -675,25 +677,37 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
             node.p.z + dir.z * along + nrm.z * lateral * s,
         )
     };
+    // Ground height at that distance out, so props stand on the shelf instead of hanging at
+    // road level over a slope that has been cut away beneath them.
+    let ground = |lateral: f32| node.p.y + angle_zero::track::bay_shelf_offset(lateral);
 
     // Gravel pad, 13 x 34 m, and the darker apron blending it into the road.
+    // The gravel, following the shelf's cross-fall. `s` flips which lateral edge is the inner
+    // one, so the heights are picked to match.
     let (px, pz) = at(0.0, 11.5);
-    w += mesh::build_ground_quad(
+    let (pad_in, pad_out) = (ground(5.0) + 0.03, ground(18.0) + 0.03);
+    let (pad_a, pad_b) = if s > 0.0 { (pad_in, pad_out) } else { (pad_out, pad_in) };
+    w += mesh::build_sloped_ground_quad(
         &mut out[w..],
         px,
-        node.p.y - 0.06,
         pz,
+        pad_a,
+        pad_b,
         dir,
         17.0,
         6.5,
         rgb(0x3A, 0x38, 0x33),
     );
+    // The apron blending pad into road, on the same fall.
     let (ax, az) = at(0.0, 7.4);
-    w += mesh::build_ground_quad(
+    let (ap_in, ap_out) = (ground(4.4) + 0.05, ground(10.4) + 0.05);
+    let (ap_a, ap_b) = if s > 0.0 { (ap_in, ap_out) } else { (ap_out, ap_in) };
+    w += mesh::build_sloped_ground_quad(
         &mut out[w..],
         ax,
-        node.p.y + 0.03,
         az,
+        ap_a,
+        ap_b,
         dir,
         15.0,
         3.0,
@@ -703,7 +717,8 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     // Three chevron hazard boards: a post and a striped panel each.
     for along in [-12.0f32, 4.0, 14.0] {
         let (bx, bz) = at(along, 15.2);
-        w += mesh::build_box(&mut out[w..], 0.16, 2.4, 0.16, bx, node.p.y + 1.2, bz, rgb(0x33, 0x33, 0x36));
+        let by = ground(15.2);
+        w += mesh::build_box(&mut out[w..], 0.16, 2.4, 0.16, bx, by + 1.2, bz, rgb(0x33, 0x33, 0x36));
         // Alternating bands stand in for the diagonal-stripe texture.
         for band in 0..4 {
             let color = if band % 2 == 0 {
@@ -711,7 +726,7 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
             } else {
                 rgb(0x1A, 0x1A, 0x1C)
             };
-            let y = node.p.y + 2.0 + band as f32 * 0.21;
+            let y = by + 2.0 + band as f32 * 0.21;
             w += mesh::build_box(&mut out[w..], 2.6, 0.21, 0.1, bx, y, bz, color);
         }
     }
@@ -720,6 +735,7 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     for col in 0..5 {
         let along = -4.0 + col as f32 * 2.0;
         let (tx, tz) = at(along, 17.4);
+        let ty = ground(17.4);
         for tier in 0..3 {
             w += mesh::build_upright_cylinder(
                 &mut out[w..],
@@ -727,7 +743,7 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
                 0.5,
                 0.28,
                 tx,
-                node.p.y + tier as f32 * 0.28,
+                ty + tier as f32 * 0.28,
                 tz,
                 TYRE_STACK,
             );
@@ -736,14 +752,15 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
 
     // Waste bin.
     let (nx, nz) = at(-9.0, 15.5);
-    w += mesh::build_box(&mut out[w..], 1.1, 1.3, 1.1, nx, node.p.y + 0.65, nz, rgb(0x2C, 0x3A, 0x30));
+    w += mesh::build_box(&mut out[w..], 1.1, 1.3, 1.1, nx, ground(15.5) + 0.65, nz, rgb(0x2C, 0x3A, 0x30));
 
     // Street lamp over the pad.
     let (lx, lz) = at(14.0, 7.6);
-    w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, lx, node.p.y + 3.7, lz, LAMP_POLE);
+    let ly = ground(7.6);
+    w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, lx, ly + 3.7, lz, LAMP_POLE);
     let (hx, hz) = at(14.0, 9.8);
-    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (lx + hx) * 0.5, node.p.y + 7.3, (lz + hz) * 0.5, LAMP_POLE);
-    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, hx, node.p.y + 7.15, hz, LAMP_HEAD);
+    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (lx + hx) * 0.5, ly + 7.3, (lz + hz) * 0.5, LAMP_POLE);
+    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, hx, ly + 7.15, hz, LAMP_HEAD);
 
     w
 }

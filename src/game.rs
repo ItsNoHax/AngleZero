@@ -164,8 +164,11 @@ impl Game {
         let x = pad_x + sin(road_heading) * 2.5 - n.nrm.x * BAY_SIDE * 1.2;
         let z = pad_z + cos(road_heading) * 2.5 - n.nrm.z * BAY_SIDE * 1.2;
 
+        // On the shelf, not at road level: the hillside is cut away across the pull-off.
+        let lateral = 11.5 - 1.2;
+        let y = n.p.y + crate::track::bay_shelf_offset(lateral);
         self.vehicle
-            .place_at(track, x, n.p.y, z, road_heading + BAY_SIDE * 0.16, BAY_NODE);
+            .place_at(track, x, y, z, road_heading + BAY_SIDE * 0.16, BAY_NODE);
         self.phase = Phase::Title;
         self.camera.orbit_angle = 0.0;
         self.toast = None;
