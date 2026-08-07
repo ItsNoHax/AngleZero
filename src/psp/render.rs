@@ -143,13 +143,17 @@ const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
 /// available here, so the mechanism has to be identified on the console itself. Each mode turns
 /// off one suspect; whichever one makes the fault disappear names the cause.
+#[cfg(feature = "devtools")]
 pub const DEBUG_MODES: u32 = 9;
+#[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
+#[cfg(feature = "devtools")]
 pub fn set_debug_mode(mode: u32) {
     unsafe { DEBUG_MODE = mode % DEBUG_MODES }
 }
 
+#[cfg(feature = "devtools")]
 pub fn debug_mode() -> u32 {
     unsafe { DEBUG_MODE }
 }
@@ -905,6 +909,7 @@ unsafe fn build_starfield() {
 /// Draws the night sky: a vertical gradient behind everything, then the mountain silhouette.
 pub fn draw_sky(camera: &Camera) {
     unsafe {
+        #[cfg(feature = "devtools")]
         if DEBUG_MODE == 5 {
             return;
         }
@@ -1165,6 +1170,7 @@ fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
 
 /// Draws the world. The car is drawn separately so it can carry its own transform.
 pub fn draw_world(camera: &Camera) {
+    #[cfg(feature = "devtools")]
     unsafe {
         match DEBUG_MODE {
             1 => sys::sceGuDisable(GuState::CullFace),
@@ -1193,16 +1199,22 @@ pub fn draw_world(camera: &Camera) {
         // see the sky through, on the inside of corners.
         sys::sceGuDisable(GuState::CullFace);
         STATS_SLOT = 1;
-        // Mode 6 leaves the terrain out, so what remains is only the road: if the hole fills,
-        // the discarded triangles were the terrain's, which spans +-190 m and projects a long
-        // way off screen when it passes close to the camera.
-        if DEBUG_MODE != 6 {
+        // Mode 6 leaves the terrain out, so what remains is only the road.
+        #[cfg(feature = "devtools")]
+        let skip_terrain = DEBUG_MODE == 6;
+        #[cfg(not(feature = "devtools"))]
+        let skip_terrain = false;
+        if !skip_terrain {
             draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
         }
         sys::sceGuEnable(GuState::CullFace);
         STATS_SLOT = 0;
         // Mode 7 is the converse: terrain only.
-        if DEBUG_MODE != 7 {
+        #[cfg(feature = "devtools")]
+        let skip_road = DEBUG_MODE == 7;
+        #[cfg(not(feature = "devtools"))]
+        let skip_road = false;
+        if !skip_road {
             draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
         }
 
