@@ -138,6 +138,22 @@ const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
     VertexType::COLOR_8888.bits() | VertexType::VERTEX_32BITF.bits() | VertexType::TRANSFORM_3D.bits(),
 );
 
+/// Render-state overrides for diagnosing hardware-only faults, cycled with the L trigger.
+///
+/// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
+/// available here, so the mechanism has to be identified on the console itself. Each mode turns
+/// off one suspect; whichever one makes the fault disappear names the cause.
+pub const DEBUG_MODES: u32 = 6;
+static mut DEBUG_MODE: u32 = 0;
+
+pub fn set_debug_mode(mode: u32) {
+    unsafe { DEBUG_MODE = mode % DEBUG_MODES }
+}
+
+pub fn debug_mode() -> u32 {
+    unsafe { DEBUG_MODE }
+}
+
 /// Builds every static mesh. Call once, after the track is generated.
 pub fn init(track: &Track) {
     unsafe {
@@ -872,6 +888,9 @@ unsafe fn build_starfield() {
 /// Draws the night sky: a vertical gradient behind everything, then the mountain silhouette.
 pub fn draw_sky(camera: &Camera) {
     unsafe {
+        if DEBUG_MODE == 5 {
+            return;
+        }
         // The gradient is 2D, so it needs no camera and cannot be occluded by anything.
         sys::sceGuDisable(GuState::DepthTest);
         sys::sceGuDisable(GuState::Texture2D);
@@ -1129,6 +1148,19 @@ fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
 
 /// Draws the world. The car is drawn separately so it can carry its own transform.
 pub fn draw_world(camera: &Camera) {
+    unsafe {
+        match DEBUG_MODE {
+            1 => sys::sceGuDisable(GuState::CullFace),
+            2 => sys::sceGuDisable(GuState::DepthTest),
+            3 => sys::sceGuDisable(GuState::Fog),
+            4 => {
+                sys::sceGuDisable(GuState::CullFace);
+                sys::sceGuDisable(GuState::DepthTest);
+                sys::sceGuDisable(GuState::Fog);
+            }
+            _ => {}
+        }
+    }
     let eye = camera.pos;
     // Where the camera actually points, including its downward tilt onto the road.
     let forward = camera.look_at.sub(eye).normalized();

@@ -280,6 +280,25 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     text::draw_shadowed(&l[..w], 4.0, 262.0, 1.0, color);
 }
 
+/// Names the active render-state override, top-right, so a photograph of the screen records
+/// which one was on. Always shown, because the fault it is chasing is easiest to see with the
+/// rest of the debug overlay off.
+#[cfg(feature = "devtools")]
+pub fn debug_mode_label(mode: u32) {
+    const NAMES: [&[u8]; 6] = [
+        b"MODE 0 NORMAL",
+        b"MODE 1 NO CULL",
+        b"MODE 2 NO DEPTH",
+        b"MODE 3 NO FOG",
+        b"MODE 4 NO CULL+DEPTH+FOG",
+        b"MODE 5 NO SKY",
+    ];
+    let name = NAMES[(mode as usize) % NAMES.len()];
+    let colour = if mode == 0 { DIM } else { GREEN };
+    text::bind();
+    text::draw_shadowed(name, SCREEN_W - text::width(name, 1.0) - 4.0, 40.0, 1.0, colour);
+}
+
 pub fn draw(game: &Game, track: &Track) {
     match game.phase {
         Phase::Title => draw_title(game),

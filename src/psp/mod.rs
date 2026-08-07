@@ -167,6 +167,8 @@ pub fn psp_main() {
         let mut burst: u32 = 0;
         #[cfg(feature = "devtools")]
         let mut prev_debug_buttons = CtrlButtons::empty();
+        #[cfg(feature = "devtools")]
+        let mut debug_mode: u32 = 0;
 
         loop {
             sys::sceCtrlReadBufferPositive(pad, 1);
@@ -189,6 +191,14 @@ pub fn psp_main() {
                 prev_debug_buttons = pad.buttons;
                 if start_edge {
                     show_debug = !show_debug;
+                }
+                // L cycles a render-state override, for pinning down a fault that only appears
+                // on hardware. See `render::DEBUG_MODES`.
+                if pad.buttons.contains(CtrlButtons::LTRIGGER)
+                    && !prev_debug_buttons.contains(CtrlButtons::LTRIGGER)
+                {
+                    debug_mode = (debug_mode + 1) % render::DEBUG_MODES;
+                    render::set_debug_mode(debug_mode);
                 }
                 if select_edge {
                     burst = 0;
@@ -248,6 +258,8 @@ pub fn psp_main() {
             }
 
             hud::begin();
+            #[cfg(feature = "devtools")]
+            hud::debug_mode_label(render::debug_mode());
             hud::draw(game, track);
             hud::scanlines();
             #[cfg(feature = "devtools")]
