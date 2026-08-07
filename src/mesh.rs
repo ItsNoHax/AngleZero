@@ -16,7 +16,7 @@ use crate::math::{max, min, sqrt, Vec2, Vec3};
 use crate::track::{Track, NODE_COUNT};
 
 /// Only every third centreline node becomes geometry.
-pub const RENDER_STRIDE: usize = 3;
+pub const RENDER_STRIDE: usize = 2;
 pub const RENDER_NODES: usize = (NODE_COUNT + RENDER_STRIDE - 1) / RENDER_STRIDE;
 /// Nodes per cullable chunk.
 pub const CHUNK_NODES: usize = 32;

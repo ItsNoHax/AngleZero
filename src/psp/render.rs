@@ -1081,10 +1081,37 @@ unsafe fn tally(slot: u8, verts: u32) {
     STATS.verts = STATS.verts.saturating_add(verts);
 }
 
+/// First and last chunk that survives culling, or `None` if the ribbon is entirely off screen.
+///
+/// Chunks run in order along the track, so what the player can see is a contiguous run of them.
+/// The per-chunk test does not produce one: it compares `distance - radius`, and a chunk's
+/// bounding sphere grows with how much the track curves through it, so a nearer chunk can be
+/// rejected while a farther one is kept. That leaves a chunk-shaped hole with scenery on both
+/// sides of it.
+///
+/// Drawing the whole span between the first and last survivor is hole-free by construction, and
+/// costs only the handful of chunks it fills in.
+fn visible_span<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) -> Option<(usize, usize)> {
+    let mut lo = None;
+    let mut hi = 0usize;
+    for (index, chunk) in r.chunks.iter().enumerate() {
+        if visible(chunk, eye, forward) {
+            if lo.is_none() {
+                lo = Some(index);
+            }
+            hi = index;
+        }
+    }
+    lo.map(|l| (l, hi))
+}
+
 fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
     unsafe {
+        let Some((lo, hi)) = visible_span(r, eye, forward) else {
+            return;
+        };
         for (index, chunk) in r.chunks.iter().enumerate() {
-            if !visible(chunk, eye, forward) {
+            if index < lo || index > hi || chunk.count == 0 {
                 continue;
             }
             tally(STATS_SLOT, chunk.count);
