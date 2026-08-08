@@ -624,15 +624,17 @@ unsafe fn build_props(track: &Track) {
             };
             if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
                 let g0 = gw;
+                // These sit on the paving, not on the shelf cut underneath it. The two are a
+                // quarter of a metre apart, which is enough to bury a ground pool completely.
                 let (px, pz) = at(10.0, 10.0);
-                let shelf = node.p.y + angle_zero::track::bay_shelf_offset(10.0);
-                push_ground_glow(glows, &mut gw, px, shelf + 0.06, pz, 12.0, LAMP_POOL);
+                let pave = node.p.y + angle_zero::track::bay_apron_offset(10.0);
+                push_ground_glow(glows, &mut gw, px, pave + 0.06, pz, 12.0, LAMP_POOL);
                 let (hx, hz) = at(12.0, 9.8);
-                let lamp_y = node.p.y + angle_zero::track::bay_shelf_offset(7.6);
+                let lamp_y = node.p.y + angle_zero::track::bay_apron_offset(7.6);
                 push_blob_glow(glows, &mut gw, hx, lamp_y + 7.15, hz, 2.75, LAMP_GLOW);
                 // The vending machine throws a small warm pool of its own.
                 let (vx, vz) = at(-7.0, 14.6);
-                let vy = node.p.y + angle_zero::track::bay_shelf_offset(15.0);
+                let vy = node.p.y + angle_zero::track::bay_apron_offset(15.0);
                 push_ground_glow(glows, &mut gw, vx, vy + 0.07, vz, 4.2, LAMP_POOL);
                 push_blob_glow(glows, &mut gw, vx, vy + 1.25, vz, 1.5, LAMP_GLOW);
                 for v in &glows[g0..gw] {
