@@ -8,6 +8,11 @@ description: Build this PSP homebrew project and capture what it renders as an i
 Captures the emulated PSP framebuffer to an image without opening a window, so rendering changes can
 be verified visually.
 
+Two neighbouring skills cover the jobs this one is the wrong tool for: **`psp-glitch`** for anything
+that only goes wrong on *some* frames (flicker, pop-in, surfaces fighting over depth) — a single
+overwritten screenshot cannot show a frame-to-frame difference — and **`psp-deploy`** for getting a
+build onto the console and captures back off it.
+
 ## Prerequisites
 
 A `PPSSPPHeadless` binary is required. Resolve it once per session, honouring an override so this
