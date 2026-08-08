@@ -1180,11 +1180,18 @@ fn visible_span<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) -> Opti
     lo.map(|l| (l, hi))
 }
 
-fn draw_ribbon<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) {
+/// Draws a ribbon over a span decided once for the whole world.
+///
+/// Every ribbon used to cull itself, and `chunk_visible` scales its threshold by the chunk's
+/// bounding radius. A terrain chunk reaches 190 m to either side of the centreline, so its sphere
+/// has a radius of a couple of hundred metres; a road chunk is twelve metres wide and has a radius
+/// of forty-odd. The terrain therefore survived culling in places the road did not, and the
+/// hillside was drawn over ground the tarmac should have covered — a hard-edged wedge of grass
+/// lying across the road, worst on the title screen where the camera swings low and wide.
+/// `tests/ribbon_spans.rs` pins the two together.
+fn draw_ribbon<const V: usize>(r: &Ribbon<V>, span: (usize, usize)) {
     unsafe {
-        let Some((lo, hi)) = visible_span(r, eye, forward) else {
-            return;
-        };
+        let (lo, hi) = span;
         for (index, chunk) in r.chunks.iter().enumerate() {
             if index < lo || index > hi || chunk.count == 0 {
                 continue;
@@ -1222,6 +1229,12 @@ pub fn draw_world(camera: &Camera) {
     // Where the camera actually points, including its downward tilt onto the road.
     let forward = camera.look_at.sub(eye).normalized();
 
+    // One decision for the whole world, taken from the terrain because it is the widest ribbon
+    // and so the most generous. Everything else sits on it and must be drawn wherever it is.
+    let Some(span) = visible_span(unsafe { &*(&raw const TERRAIN_MESH) }, eye, forward) else {
+        return;
+    };
+
     unsafe {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
@@ -1239,7 +1252,7 @@ pub fn draw_world(camera: &Camera) {
         #[cfg(not(feature = "devtools"))]
         let skip_terrain = false;
         if !skip_terrain {
-            draw_ribbon(&*(&raw const TERRAIN_MESH), eye, forward);
+            draw_ribbon(&*(&raw const TERRAIN_MESH), span);
         }
         sys::sceGuEnable(GuState::CullFace);
         STATS_SLOT = 0;
@@ -1249,18 +1262,18 @@ pub fn draw_world(camera: &Camera) {
         #[cfg(not(feature = "devtools"))]
         let skip_road = false;
         if !skip_road {
-            draw_ribbon(&*(&raw const ROAD_MESH), eye, forward);
+            draw_ribbon(&*(&raw const ROAD_MESH), span);
         }
 
         // Markings sit fractions of a metre above the road; draw them after so they win ties.
         STATS_SLOT = 2;
-        draw_ribbon(&*(&raw const EDGE_L_MESH), eye, forward);
-        draw_ribbon(&*(&raw const EDGE_R_MESH), eye, forward);
+        draw_ribbon(&*(&raw const EDGE_L_MESH), span);
+        draw_ribbon(&*(&raw const EDGE_R_MESH), span);
 
         let dash_verts = &raw const DASH_MESH as *const Vertex;
         let dash_chunks = &*(&raw const DASH_CHUNKS);
-        for chunk in dash_chunks.iter() {
-            if !visible(chunk, eye, forward) {
+        for (index, chunk) in dash_chunks.iter().enumerate() {
+            if index < span.0 || index > span.1 || chunk.count == 0 {
                 continue;
             }
             tally(4, chunk.count);
@@ -1278,8 +1291,8 @@ pub fn draw_world(camera: &Camera) {
         // left-hand rail is nearly always, since the chase camera sits inside the road.
         sys::sceGuDisable(GuState::CullFace);
         STATS_SLOT = 3;
-        draw_ribbon(&*(&raw const RAIL_L_MESH), eye, forward);
-        draw_ribbon(&*(&raw const RAIL_R_MESH), eye, forward);
+        draw_ribbon(&*(&raw const RAIL_L_MESH), span);
+        draw_ribbon(&*(&raw const RAIL_R_MESH), span);
 
         // Trees are crossed quads with no single facing, so they must not be back-face culled
         // either; culling stays off through to the end of the pass.
