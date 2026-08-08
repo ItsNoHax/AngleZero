@@ -46,7 +46,7 @@ cargo test --quiet
 echo ">> checking no diagnostics were built in"
 PRX="target/mipsel-sony-psp/release/angle-zero.prx"
 LEAKED=""
-for marker in "NO CULL" "NO DEPTH" "ms0:/ANGLEZERO/" "ATRAC.TXT" "TRACE.TXT"; do
+for marker in "NO CULL" "NO DEPTH" "ms0:/ANGLEZERO/" "ATRAC.TXT" "TRACE.TXT" "SCRIPT.TXT"; do
     if strings -a "$PRX" | grep -qF "$marker"; then
         LEAKED="$LEAKED $marker"
     fi

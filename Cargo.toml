@@ -10,6 +10,12 @@ edition = "2021"
 # hardware builds are release builds.
 devtools = []
 
+# A reproducible, self-driving run for the automated glitch hunt: fixed frame delta, input replayed
+# from a script keyed to the frame counter, and a burst of consecutive frames captured to the
+# memory stick (which under PPSSPPHeadless is a host directory). Implies `devtools` because it is
+# built on the same capture and trace plumbing. Never ship this — it ignores the controller.
+harness = ["devtools"]
+
 [lib]
 name = "angle_zero"
 path = "src/lib.rs"

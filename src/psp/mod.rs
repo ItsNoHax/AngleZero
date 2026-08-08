@@ -9,6 +9,8 @@ pub mod audio;
 pub mod atractest;
 #[cfg(feature = "devtools")]
 pub mod capture;
+#[cfg(feature = "harness")]
+pub mod harness;
 #[cfg(feature = "devtools")]
 pub mod trace;
 pub mod hud;
@@ -42,7 +44,9 @@ static mut GAME: Game = Game::new();
 /// Ask the emulator to capture the display framebuffer. PPSSPP writes it to whatever path was
 /// passed to `--screenshot-save`; on real hardware this devctl simply fails and does nothing —
 /// which is exactly why a shipping build should not be issuing it twice a second.
+/// A harness build writes its own frames, one per frame of the burst, so it never asks for this.
 #[cfg(feature = "devtools")]
+#[cfg_attr(feature = "harness", allow(dead_code))]
 fn emit_screenshot() {
     const EMULATOR_DEVCTL_EMIT_SCREENSHOT: u32 = 0x20;
 
@@ -59,6 +63,10 @@ fn emit_screenshot() {
 }
 
 /// Reads the pad into the core's controller struct.
+///
+/// A harness build never calls this — its input comes from a script keyed to the frame counter —
+/// but it stays compiled so the two builds share one definition of what each button means.
+#[cfg_attr(feature = "harness", allow(dead_code))]
 fn read_buttons(pad: &SceCtrlData) -> Buttons {
     let b = pad.buttons;
     // The nub reads 0..255 with 128 at centre; positive steer is left, so the sign flips.
@@ -153,42 +161,77 @@ pub fn psp_main() {
         game.record = storage::load();
         game.enter_title(track);
 
+        // The scripted run, loaded before the first frame so frame 0 already has its buttons.
+        #[cfg(feature = "harness")]
+        {
+            harness::init();
+            render::set_debug_mode(harness::mode());
+        }
+
         let pad = &mut SceCtrlData::default();
         let mut frame: u32 = 0;
+        #[cfg(not(feature = "harness"))]
         let mut last_tick = sys::sceKernelGetSystemTimeLow();
 
         // Hardware-only diagnostics: START toggles the readout, SELECT saves a frame and its
         // counters to ms0:/ANGLEZERO/. Both are edge-triggered off the raw pad, deliberately
         // outside the game's own input mapping so they cannot affect driving.
+        // Without the overlay reading it at the top of the frame, a harness build only ever reads
+        // this after the assignment further down, so its initial value really is dead there.
         #[cfg(feature = "devtools")]
+        #[cfg_attr(feature = "harness", allow(unused_assignments))]
         let mut diag = capture::Diagnostics::default();
-        #[cfg(feature = "devtools")]
+        #[cfg(all(feature = "devtools", not(feature = "harness")))]
         let mut show_debug = false;
         #[cfg(feature = "devtools")]
         let mut shots: u32 = 0;
         // Each capture is half a megabyte; enough for a burst, not enough to fill a stick.
-        #[cfg(feature = "devtools")]
+        #[cfg(all(feature = "devtools", not(feature = "harness")))]
         const MAX_SHOTS: u32 = 40;
-        #[cfg(feature = "devtools")]
+        // A harness run writes to a host filesystem rather than a memory stick, and wants a long
+        // enough window that a two-frame artifact cannot fall outside it.
+        #[cfg(feature = "harness")]
+        const MAX_SHOTS: u32 = 64;
+        #[cfg(all(feature = "devtools", not(feature = "harness")))]
         let mut burst: u32 = 0;
-        #[cfg(feature = "devtools")]
+        #[cfg(all(feature = "devtools", not(feature = "harness")))]
         let mut prev_debug_buttons = CtrlButtons::empty();
-        #[cfg(feature = "devtools")]
+        #[cfg(all(feature = "devtools", not(feature = "harness")))]
         let mut debug_mode: u32 = 0;
 
         loop {
             sys::sceCtrlReadBufferPositive(pad, 1);
+            #[cfg(not(feature = "harness"))]
             let buttons = read_buttons(pad);
+            // A harness run ignores the pad and replays its script off the frame counter, so that
+            // input lands on the same frame every time.
+            #[cfg(feature = "harness")]
+            let buttons = harness::buttons_for(frame);
 
             // Microsecond clock, so the fixed-timestep accumulator sees real elapsed time
             // rather than an assumed 60 Hz.
-            let now = sys::sceKernelGetSystemTimeLow();
-            let dt = (now.wrapping_sub(last_tick)) as f32 / 1_000_000.0;
-            last_tick = now;
+            #[cfg(not(feature = "harness"))]
+            let dt = {
+                let now = sys::sceKernelGetSystemTimeLow();
+                let dt = (now.wrapping_sub(last_tick)) as f32 / 1_000_000.0;
+                last_tick = now;
+                dt
+            };
+            // Fixed instead, so the run does not depend on how long the host took to write the
+            // last half-megabyte capture. See `harness::DT`.
+            #[cfg(feature = "harness")]
+            let dt = harness::DT;
+
+            // A scripted run captures a fixed window of *consecutive* frames instead. The
+            // interactive burst below samples one frame in four, which is fine for eyeballing but
+            // steps straight over a one-frame blink — and a blink is exactly what the host-side
+            // detector looks for.
+            #[cfg(feature = "harness")]
+            let want_capture = harness::capturing(frame) && shots < MAX_SHOTS;
 
             // A tap saves one frame; holding SELECT saves a burst, which is the only practical
             // way to catch something that flickers for a few frames while you are also driving.
-            #[cfg(feature = "devtools")]
+            #[cfg(all(feature = "devtools", not(feature = "harness")))]
             let want_capture = {
                 let start_edge = pad.buttons.contains(CtrlButtons::START)
                     && !prev_debug_buttons.contains(CtrlButtons::START);
@@ -218,6 +261,15 @@ pub fn psp_main() {
                 }
                 (select_edge || due) && shots < MAX_SHOTS
             };
+
+            // Before the update, so the frame that gets rendered is one step of settled physics
+            // after the placement rather than the raw pose.
+            #[cfg(feature = "harness")]
+            if let Some((node, speed)) = harness::place_at(frame) {
+                game.vehicle
+                    .place_at_node(track, node.min(angle_zero::track::NODE_COUNT - 1));
+                game.vehicle.state.vx = speed;
+            }
 
             #[cfg(feature = "devtools")]
             let work_start = sys::sceKernelGetSystemTimeLow();
@@ -265,7 +317,9 @@ pub fn psp_main() {
             }
 
             hud::begin();
-            #[cfg(feature = "devtools")]
+            // Both of these draw over the frame, so a harness build leaves them out: the detector
+            // compares pixels, and a diagnostic overlay is just more pixels to explain.
+            #[cfg(all(feature = "devtools", not(feature = "harness")))]
             hud::debug_mode_label(render::debug_mode());
             // Mode 8 drops the whole 2D pass. The gaps are axis-aligned and 16-pixel aligned,
             // which is what a screen-space draw looks like and not what a triangle looks like,
@@ -278,7 +332,7 @@ pub fn psp_main() {
                 hud::draw(game, track);
             }
             hud::scanlines();
-            #[cfg(feature = "devtools")]
+            #[cfg(all(feature = "devtools", not(feature = "harness")))]
             if show_debug {
                 hud::debug_overlay(&diag, shots);
             }
@@ -317,20 +371,27 @@ pub fn psp_main() {
             #[cfg(feature = "devtools")]
             {
                 trace::record(frame, &stats, game, diag.frame_us);
-                if want_capture {
-                    // The ring covers the ten seconds *before* the press, so it holds the
-                    // artifact even when the screenshot lands on a clean frame.
-                    if shots == 0 || burst == 1 {
-                        trace::dump(shots);
-                    }
-                    if capture::capture(game, &diag).is_some() {
-                        shots += 1;
-                    }
+                // After the burst, so the ring covers the frames that were captured.
+                #[cfg(feature = "harness")]
+                let dump_trace = harness::burst_ends(frame);
+                #[cfg(not(feature = "harness"))]
+                let dump_trace = want_capture && (shots == 0 || burst == 1);
+                if dump_trace {
+                    trace::dump(shots);
+                }
+                if want_capture && capture::capture(game, &diag).is_some() {
+                    shots += 1;
                 }
             }
 
             frame += 1;
-            #[cfg(feature = "devtools")]
+            // The script has run out, and a harness run has nobody watching it — so end the
+            // process rather than leaving headless to sit out the rest of its `--timeout`.
+            #[cfg(feature = "harness")]
+            if harness::finished(frame) {
+                sys::sceKernelExitGame();
+            }
+            #[cfg(all(feature = "devtools", not(feature = "harness")))]
             if frame % 30 == 0 {
                 emit_screenshot();
             }

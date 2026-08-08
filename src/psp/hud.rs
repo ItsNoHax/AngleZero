@@ -232,14 +232,17 @@ fn pad2(buf: &mut [u8; 2], value: u32) -> &[u8] {
 ///
 /// `SCF` is the one to watch. It counts refused vertex-arena allocations, and any non-zero value
 /// means draws were silently dropped — which looks like flickering geometry, not like an error.
-#[cfg(feature = "devtools")]
+///
+/// Left out of a harness build: nobody is there to press START, and anything drawn over the frame
+/// is one more thing the pixel differ would have to be taught to ignore.
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
 static mut SUM: u64 = 0;
-#[cfg(feature = "devtools")]
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
 static mut N: u64 = 0;
-#[cfg(feature = "devtools")]
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
 static mut PK: u32 = 0;
 
-#[cfg(feature = "devtools")]
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
 pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     let mut l = [0u8; 96];
     let mut w = 0usize;
@@ -283,9 +286,9 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
 /// Names the active render-state override, top-right, so a photograph of the screen records
 /// which one was on. Always shown, because the fault it is chasing is easiest to see with the
 /// rest of the debug overlay off.
-#[cfg(feature = "devtools")]
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
 pub fn debug_mode_label(mode: u32) {
-    const NAMES: [&[u8]; 9] = [
+    const NAMES: [&[u8]; 13] = [
         b"MODE 0 NORMAL",
         b"MODE 1 NO CULL",
         b"MODE 2 NO DEPTH",
@@ -295,6 +298,10 @@ pub fn debug_mode_label(mode: u32) {
         b"MODE 6 ROAD ONLY",
         b"MODE 7 TERRAIN ONLY",
         b"MODE 8 NO HUD",
+        b"MODE 9 NO BEAMS",
+        b"MODE 10 NO LAMP GLOWS",
+        b"MODE 11 NO EFFECTS",
+        b"MODE 12 NO ROAD POOLS",
     ];
     let name = NAMES[(mode as usize) % NAMES.len()];
     let colour = if mode == 0 { DIM } else { GREEN };

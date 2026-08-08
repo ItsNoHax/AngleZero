@@ -118,3 +118,42 @@ buttons still down. `--debugger` also implies `startBreak`, so the script sends 
 pressing anything.
 
 Claude Code users: the `/psp-preview` skill wraps this whole flow.
+
+## Hunting flicker automatically
+
+A single screenshot cannot show flicker: the artifact only exists as a difference between consecutive
+frames. `--screenshot-save` overwrites one file, so it cannot show it either.
+
+The `harness` feature turns a run into something comparable frame to frame. It fixes the frame delta
+at 1/60 s, so nothing depends on the clock or on how long the host took to write the last capture;
+replays input from a script keyed to the frame counter rather than to wall-clock seconds; captures
+*consecutive* frames rather than every fourth; and exits when its script is done. Nothing else in the
+game reads a clock or a random number, so two runs of the same script are byte-identical — which is
+what makes a before/after comparison mean anything.
+
+```bash
+scripts/psp_glitch.py --node 1200 --burst 60 --frames 40 --label hairpin
+```
+
+About ten seconds end to end. It builds, runs headless, harvests the frames the guest wrote to
+`ms0:/ANGLEZERO/` (a host directory under headless), and reports two independent things:
+
+- **A pixel comparison.** A tile that differs from the frame before *and* the frame after, while
+  those two agree, is a one-frame blink. Two filters keep ordinary motion out of it: a shift search,
+  because a lamp post passing close by sweeps wider than itself in a frame and otherwise looks
+  exactly like a blink; and a bracket test, because a pixel in a smoothly moving scene stays between
+  what it was and what it will be, even when the motion is accelerating. Treat its output as leads,
+  not verdicts — it still flags the moment one lamp's pool hands over to the next.
+- **The draw tally**, from `trace.rs`. This one is exact, because it records the draw call rather
+  than its result: holes in the road and terrain chunk sets, any chunk set that blinked, a refused
+  vertex-arena allocation, a display list near its 1 MB buffer.
+
+When the two disagree, the tally wins. Identical masks and vertex counts across the frames either
+side of a blink is what tells you nothing was dropped and the fault is downstream of submission.
+
+`--node` drops the car anywhere on the centreline, so a corner two thirds of the way down can be
+looked at without driving there and surviving every corner in between. `--mode N` runs under a
+`render::DEBUG_MODES` override, which is how a cause gets narrowed down: run the same frames with one
+suspect removed and see whether the artifact survives. Modes 9 to 12 exist for exactly that — they
+drop the headlight beams, the car's lamp glows, the effects, and the roadside light pools, which all
+land on the road on top of each other.

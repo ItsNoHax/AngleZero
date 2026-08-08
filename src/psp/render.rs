@@ -143,8 +143,12 @@ const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
 /// available here, so the mechanism has to be identified on the console itself. Each mode turns
 /// off one suspect; whichever one makes the fault disappear names the cause.
+///
+/// Interactively these are cycled with the L trigger. A harness run sets one from its script
+/// instead, which is what makes the overrides usable as a bisection: run the same frames with one
+/// suspect disabled and see whether the artifact survives.
 #[cfg(feature = "devtools")]
-pub const DEBUG_MODES: u32 = 9;
+pub const DEBUG_MODES: u32 = 13;
 #[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
@@ -342,6 +346,10 @@ const LAMP_GLOW: u32 = rgba(0xFF, 0xEC, 0xBE, 0x8C);
 /// Ground pools are wide and faint; at 0.55 opacity across 19 m a flat quad would wash the road
 /// out, so these fade from the centre like the sprites they stand in for.
 const LAMP_POOL: u32 = rgba(0xFF, 0xE4, 0xB0, 0x54);
+/// How far toward the camera the ground-pool pass is biased, out of the 65535 the depth range
+/// spans. Enough to win a tie against the facet a pool lies on; small enough that a pool cannot
+/// climb in front of something genuinely nearer, such as the car or a guard rail.
+const POOL_DEPTH_BIAS: i32 = 64;
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
 const TREE_STRIDE: usize = 4;
@@ -1110,6 +1118,11 @@ pub struct DrawStats {
     /// variation. A hole between set bits is unambiguous.
     pub road_mask: u32,
     pub terrain_mask: u32,
+    /// The same, for the two passes that still decide chunk by chunk. Worth its own bits: these
+    /// carry the light pools, and a pool blinking out is the artifact that reads as the road
+    /// surface itself flickering.
+    pub prop_mask: u32,
+    pub glow_mask: u32,
 }
 
 static mut STATS: DrawStats = DrawStats {
@@ -1122,6 +1135,8 @@ static mut STATS: DrawStats = DrawStats {
     verts: 0,
     road_mask: 0,
     terrain_mask: 0,
+    prop_mask: 0,
+    glow_mask: 0,
 };
 /// Which counter `draw_ribbon` should attribute its chunks to.
 static mut STATS_SLOT: u8 = 0;
@@ -1298,11 +1313,12 @@ pub fn draw_world(camera: &Camera) {
         // either; culling stays off through to the end of the pass.
         let prop_verts = &raw const PROP_MESH as *const Vertex;
         let prop_chunks = &*(&raw const PROP_CHUNKS);
-        for chunk in prop_chunks.iter() {
+        for (index, chunk) in prop_chunks.iter().enumerate() {
             if !visible(chunk, eye, forward) {
                 continue;
             }
             tally(5, chunk.count);
+            STATS.prop_mask |= 1 << (index & 31);
             sys::sceGumDrawArray(
                 GuPrimitive::Triangles,
                 VERTEX_FORMAT,
@@ -1315,6 +1331,15 @@ pub fn draw_world(camera: &Camera) {
 
         // Light pools and lamp glows, added on top of the world they fall on. Depth-tested so a
         // pool is hidden by a hill in front of it, but never written, so nothing behind is lost.
+        //
+        // A ground pool is a flat disc and the road it lies on is a strip of flat facets, so 4 cm of
+        // clearance is not a margin at all: over most of the disc the two surfaces are within a
+        // depth step of each other, and which one wins is decided facet by facet. Driving past, the
+        // lit area marches down the screen and snaps back once per centreline node — the road
+        // appearing to flicker under the car. Biasing the pass toward the camera settles it without
+        // moving any geometry, and unlike raising the disc it works just as well at the far end of
+        // the track, where a 16-bit depth buffer has far coarser steps than 4 cm.
+        sys::sceGuDepthOffset(POOL_DEPTH_BIAS);
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
             sys::BlendOp::Add,
@@ -1327,11 +1352,20 @@ pub fn draw_world(camera: &Camera) {
         sys::sceGuDisable(GuState::CullFace);
 
         let glow_verts = &raw const PROP_GLOW_MESH as *const Vertex;
+        // Mode 12 drops the roadside pools. They are the only warm light on the road that is not in
+        // one of the passes above, so removing them is the last step of narrowing down something
+        // bright and blinking down there.
+        #[cfg(feature = "devtools")]
+        let skip_glows = DEBUG_MODE == 12;
+        #[cfg(not(feature = "devtools"))]
+        let skip_glows = false;
+
         let glow_chunks = &*(&raw const PROP_GLOW_CHUNKS);
-        for chunk in glow_chunks.iter() {
-            if !visible(chunk, eye, forward) {
+        for (index, chunk) in glow_chunks.iter().enumerate() {
+            if skip_glows || !visible(chunk, eye, forward) {
                 continue;
             }
+            STATS.glow_mask |= 1 << (index & 31);
             sys::sceGumDrawArray(
                 GuPrimitive::Triangles,
                 VERTEX_FORMAT,
@@ -1344,6 +1378,9 @@ pub fn draw_world(camera: &Camera) {
         sys::sceGuEnable(GuState::CullFace);
         sys::sceGuDepthMask(0);
         sys::sceGuDisable(GuState::Blend);
+        // Back to no bias: this is context state, not a per-draw flag, and everything after it —
+        // the car, the effects, the next frame's world — would otherwise inherit it.
+        sys::sceGuDepthOffset(0);
     }
 }
 
@@ -1406,6 +1443,11 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 /// Both come out of fixed pools in the core, so the worst case is known up front and the whole
 /// lot fits in one draw call each.
 pub fn draw_effects(effects: &Effects, camera: &Camera) {
+    // Mode 11 drops them.
+    #[cfg(feature = "devtools")]
+    if debug_mode() == 11 {
+        return;
+    }
     unsafe {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
@@ -1619,6 +1661,11 @@ unsafe fn alloc_verts(n: usize) -> Option<*mut Vertex> {
 /// Additive glows around the head and tail lamps. The tail lamps jump in size and
 /// brightness under braking, which is most of what tells you what the car ahead is doing.
 pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
+    // Mode 10 drops them.
+    #[cfg(feature = "devtools")]
+    if debug_mode() == 10 {
+        return;
+    }
     unsafe {
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
@@ -1695,6 +1742,13 @@ pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
 
 /// The two additive ground beams that stand in for a real headlight spot.
 pub fn draw_headlight_beams(st: &CarState) {
+    // Mode 9 drops them. The additive passes all land on the road in front of the car, on top of
+    // each other, so telling which one is responsible for something there means removing them one
+    // at a time.
+    #[cfg(feature = "devtools")]
+    if debug_mode() == 9 {
+        return;
+    }
     unsafe {
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
@@ -1706,12 +1760,21 @@ pub fn draw_headlight_beams(st: &CarState) {
         );
         sys::sceGuDepthMask(1); // no depth write for the glow
         sys::sceGuDisable(GuState::Fog);
-
+        // These quads are wound right-then-forward, which faces away from a camera looking down at
+        // the road, so with culling on they were thrown away and the headlights lit nothing at all.
+        // Every other additive ground pass here draws double-sided for the same reason: a flat quad
+        // has one winding and the camera can be on either side of it.
+        sys::sceGuDisable(GuState::CullFace);
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
+        // Clearance measured against what is actually under here rather than guessed: the road is
+        // crowned, so `ROAD_STATIONS` puts its centre 3 cm above the centreline the car's `y`
+        // follows, and the edge-line ribbons sit at 5 cm. The old 4 cm left the beam *below* the
+        // paint and one centimetre off the tarmac — survivable in the software rasteriser, but
+        // hardware has a real 16-bit depth buffer, which is where that kind of margin stops holding.
         sys::sceGumTranslate(&ScePspFVector3 {
             x: st.x,
-            y: st.y + 0.04,
+            y: st.y + 0.08,
             z: st.z,
         });
         // The beam steers with the wheels.
@@ -1753,6 +1816,7 @@ pub fn draw_headlight_beams(st: &CarState) {
         sys::sceGuDepthMask(0);
         sys::sceGuDisable(GuState::Blend);
         sys::sceGuEnable(GuState::Fog);
+        sys::sceGuEnable(GuState::CullFace);
     }
 }
 

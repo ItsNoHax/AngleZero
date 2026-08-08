@@ -32,6 +32,8 @@ pub struct Frame {
     pub frame_us: u32,
     pub road_mask: u32,
     pub terrain_mask: u32,
+    pub prop_mask: u32,
+    pub glow_mask: u32,
 }
 
 static mut RING: [Frame; FRAMES] = [Frame {
@@ -48,6 +50,8 @@ static mut RING: [Frame; FRAMES] = [Frame {
     frame_us: 0,
     road_mask: 0,
     terrain_mask: 0,
+    prop_mask: 0,
+    glow_mask: 0,
 }; FRAMES];
 static mut WRITE: usize = 0;
 static mut FILLED: usize = 0;
@@ -70,6 +74,8 @@ pub fn record(index: u32, stats: &DrawStats, game: &Game, frame_us: u32) {
             frame_us,
             road_mask: stats.road_mask,
             terrain_mask: stats.terrain_mask,
+            prop_mask: stats.prop_mask,
+            glow_mask: stats.glow_mask,
         };
         WRITE += 1;
         if FILLED < FRAMES {
@@ -145,7 +151,7 @@ pub fn dump(index: u32) -> bool {
         push_str(
             &mut buf,
             &mut w,
-            b"# frame road terrain lines rails dashes props verts node kph us roadmask terrainmask\n",
+            b"# frame road terrain lines rails dashes props verts node kph us roadmask terrainmask propmask glowmask\n",
         );
         sys::sceIoWrite(fd, buf.as_ptr() as *const _, w);
 
@@ -153,7 +159,9 @@ pub fn dump(index: u32) -> bool {
         let start = if FILLED < FRAMES { 0 } else { WRITE % FRAMES };
         for i in 0..FILLED {
             let f = RING[(start + i) % FRAMES];
-            let mut line = [0u8; 96];
+            // Fifteen columns, four of them 10-digit masks. `push_num` truncates rather than
+            // overflowing, so a buffer that is merely close would silently corrupt the trace.
+            let mut line = [0u8; 192];
             let mut w = 0usize;
             for v in [
                 f.index,
@@ -169,6 +177,8 @@ pub fn dump(index: u32) -> bool {
                 f.frame_us,
                 f.road_mask,
                 f.terrain_mask,
+                f.prop_mask,
+                f.glow_mask,
             ] {
                 push_num(&mut line, &mut w, v);
                 push_str(&mut line, &mut w, b" ");
