@@ -114,9 +114,21 @@ pub const BAY_HALF_LENGTH: f32 = 19.0;
 /// is not a pad placed near the road, it is the road's own surface continuing outwards.
 pub const ROAD_SHOULDER: f32 = 6.4;
 
-/// The paving's lateral extent: it starts just inside the shoulder so there is no seam to see,
-/// and runs out far enough to pass beneath the parapet.
-pub const BAY_APRON_INNER: f32 = 6.0;
+/// The paving's lateral extent: it picks up exactly where the road ribbon stops, and runs out far
+/// enough to pass beneath the parapet.
+///
+/// This used to start 0.4 m *inside* the shoulder, so the paving ran under the carriageway and
+/// there could be no seam between them. That overlap is what made the title screen flicker. Both
+/// surfaces are piecewise-linear approximations of the same falling centreline, but they were cut
+/// at different intervals — the road ribbon every 2.68 m, the apron every 3.17 m — so across the
+/// pull-off they sat within 18 mm of each other and the paving broke up through the road at a
+/// quarter of the samples. A 16-bit depth buffer at a 0.4 m near plane resolves 8.6 mm at 15 m and
+/// 34 mm at 30 m, so which surface won was decided per pixel and changed as the camera orbited.
+///
+/// A butt joint is only a seam when the two edges are cut in different places. They are not: the
+/// apron is now cut on the same nodes the road ribbon uses, so the joint shares its vertices and
+/// is watertight. See `build_bay_props` and `tests/bay.rs`.
+pub const BAY_APRON_INNER: f32 = ROAD_SHOULDER;
 pub const BAY_APRON_OUTER: f32 = 19.8;
 
 /// The paving's crossfall — 2%, which is what a real road is built with.

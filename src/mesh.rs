@@ -106,6 +106,30 @@ pub fn chunk_visible(chunk: &Chunk, eye: Vec3, forward: Vec3, fog_far: f32) -> b
     to_chunk.dot(forward) > -(chunk.radius + 12.0)
 }
 
+/// Arclength between the ribbon's samples. It takes every `RENDER_STRIDE`-th centreline node, so
+/// this is the spacing of every edge it can share with anything else.
+pub fn ribbon_spacing(track: &Track) -> f32 {
+    track.length / (RENDER_NODES - 1) as f32
+}
+
+/// The run of ribbon samples lying strictly inside `centre ± half` metres of arclength, as a
+/// half-open range of sample indices.
+///
+/// A surface that butts against the ribbon over some span has to put its cuts exactly here.
+/// Anywhere else meets the ribbon in the middle of an edge, and a T-junction is a crack you can
+/// see the sky through — which is why the pull-off's paving used to be slid under the road
+/// instead, and why that overlap then fought for the depth buffer. Snapping inwards keeps the
+/// butting surface inside the span it was given rather than overhanging it.
+///
+/// Lives here rather than next to the renderer because it is the ribbon's own tessellation, and
+/// the whole point is that the two agree — see `tests/bay.rs`.
+pub fn ribbon_samples_within(track: &Track, centre: f32, half: f32) -> (usize, usize) {
+    let spacing = ribbon_spacing(track);
+    let first = ((centre - half) / spacing) as usize + 1;
+    let last = ((centre + half) / spacing) as usize;
+    (first, last)
+}
+
 /// Worst-case vertex count for a ribbon with `stations` columns.
 pub const fn ribbon_capacity(stations: usize) -> usize {
     // One node of overlap keeps chunks watertight, so a chunk spans CHUNK_NODES + 1 nodes. The

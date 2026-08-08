@@ -51,13 +51,27 @@ const TAILLAMP: u32 = rgb(0xFF, 0x4A, 0x3C);
 const TYRE: u32 = rgb(0x18, 0x18, 0x1C);
 const RIM: u32 = rgb(0x9A, 0xA4, 0xAD);
 
+/// How far the terrain ribbon reaches to either side of the centreline.
+///
+/// The road is on a pass with the ground falling away on both sides, so from a camera near the
+/// surface a sight line can leave the ribbon sideways and never come back down to it — the ground
+/// drops at about 0.4 m per metre out here, which is steeper than the shallow rays, so they escape.
+/// Widening the ribbon does not fix that: it only moves the escape further out. Measured across
+/// five orbit angles, 380 m still left the worst one untouched, and 1200 m — enough to close it —
+/// costs 30 terrain chunks and 52k vertices a frame against 14 and 31k.
+///
+/// So the ribbon stays the size the *scenery* wants to be, and [`draw_ground_backdrop`] deals with
+/// what is behind it.
+const TERRAIN_HALF_WIDTH: f32 = 190.0;
+const TERRAIN_EDGE_DROP: f32 = -78.0;
+
 /// The hillside, shaded darker as it falls away so the slope reads at night.
 const fn terrain(lateral: f32, y: f32, shade: u32) -> Station {
     Station::new(lateral, y, rgb(shade * 34 / 100, shade * 48 / 100, shade * 28 / 100))
 }
 
 const TERRAIN_STATIONS: [Station; 12] = [
-    terrain(-190.0, -78.0, 34),
+    terrain(-TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
     terrain(-96.0, -40.0, 44),
     terrain(-48.0, -17.0, 58),
     terrain(-22.0, -4.2, 74),
@@ -68,7 +82,7 @@ const TERRAIN_STATIONS: [Station; 12] = [
     terrain(22.0, -4.2, 74),
     terrain(48.0, -17.0, 58),
     terrain(96.0, -40.0, 44),
-    terrain(190.0, -78.0, 34),
+    terrain(TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
 ];
 
 const ROAD_STATIONS: [Station; 5] = [
@@ -110,8 +124,8 @@ static mut EDGE_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut RAIL_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut RAIL_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 
-/// 22 boxes, 36 vertices each.
-const CAR_BOX_COUNT: usize = 22;
+/// 26 boxes, 36 vertices each.
+const CAR_BOX_COUNT: usize = 26;
 const CAR_VERTS: usize = CAR_BOX_COUNT * 36;
 static mut CAR_MESH: psp::Align16<[Vertex; CAR_VERTS]> = psp::Align16([Vertex::ZERO; CAR_VERTS]);
 
@@ -286,15 +300,31 @@ unsafe fn build_car() {
     add(1.56, 0.44, 1.94, 0.0, 1.16, -0.22, GLASS); // greenhouse
     add(1.50, 0.10, 1.80, 0.0, 1.38, -0.30, PAINT); // roof
     add(1.30, 0.26, 0.16, 0.0, 1.44, -1.22, PAINT); // roof spoiler
-    add(0.10, 0.34, 1.70, -0.78, 1.16, -0.24, PAINT); // pillars
-    add(0.10, 0.34, 1.70, 0.78, 1.16, -0.24, PAINT);
+    // Pillars, and the side windows are whatever they leave uncovered.
+    //
+    // This used to be one 1.70 m slab a side, which is not a pillar, it is the whole flank: it
+    // covered the glass from just behind the screen to the back of the rear quarter, so the
+    // aperture came out body-coloured with a five-centimetre glass outline round it. That outline
+    // is what the side windows have always been. Three posts leave a door glass and a rear quarter
+    // light either side, which is what the shape of the roof already implies.
+    //
+    // Each is a touch taller than the greenhouse and straddles its flank rather than sitting flush,
+    // because a face laid exactly on another is the one thing the depth buffer cannot settle.
+    for side in [-0.78f32, 0.78] {
+        add(0.10, 0.46, 0.18, side, 1.16, 0.68, PAINT); // A, behind the screen
+        add(0.10, 0.46, 0.12, side, 1.16, -0.16, PAINT); // B, between the doors
+        add(0.10, 0.46, 0.18, side, 1.16, -1.13, PAINT); // C, into the rear quarter
+    }
     add(1.74, 0.22, 0.14, 0.0, 0.86, 2.10, TRIM); // grille
     add(1.62, 0.12, 0.10, 0.0, 1.00, 2.06, CHROME); // chrome bar
-    add(0.46, 0.14, 0.10, -0.60, 0.99, 2.09, HEADLAMP); // headlights
-    add(0.46, 0.14, 0.10, 0.60, 0.99, 2.09, HEADLAMP);
+    // Dropped a centimetre off the chrome bar: level with it, the two shared a top face and fought.
+    add(0.46, 0.14, 0.10, -0.60, 0.98, 2.09, HEADLAMP); // headlights
+    add(0.46, 0.14, 0.10, 0.60, 0.98, 2.09, HEADLAMP);
     add(0.40, 0.16, 0.08, -0.64, 1.00, -2.02, TAILLAMP); // tail lights
     add(0.40, 0.16, 0.08, 0.64, 1.00, -2.02, TAILLAMP);
-    add(1.66, 0.20, 0.12, 0.0, 0.72, -2.06, TRIM); // rear valance
+    // Set 2 cm proud of the tail. Flush, it shared its back face with the body's and its front face
+    // with the shoulder's — 0.46 m2 of coplanar panel, the worst pair on the car.
+    add(1.66, 0.20, 0.12, 0.0, 0.72, -2.08, TRIM); // rear valance
     add(0.16, 0.10, 0.12, -0.52, 0.42, -2.10, CHROME); // exhaust tips
     add(0.16, 0.10, 0.12, 0.52, 0.42, -2.10, CHROME);
     add(1.90, 0.12, 0.30, 0.0, 0.30, 1.86, TRIM); // front splitter
@@ -622,29 +652,26 @@ unsafe fn build_props(track: &Track) {
             }
 
             // The 26 m pool over the pad, and a glow on the lamp head above it.
-            let node = &track.nodes[BAY_NODE];
-            let s = BAY_SIDE;
-            let at = |along: f32, lateral: f32| {
-                (
-                    node.p.x + node.dir.x * along + node.nrm.x * lateral * s,
-                    node.p.z + node.dir.z * along + node.nrm.z * lateral * s,
-                )
-            };
+            //
+            // Everything here is placed by arclength through `bay_surface`, the same way the paving
+            // and the props it lights are. Extrapolating from `BAY_NODE` along its `dir` instead —
+            // which is what this did — runs straight while the road curves, and holds one height
+            // while the pass drops 7.4 cm a metre, so the pool sat the best part of a metre off the
+            // ground it was supposed to be lying on.
             if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
+                use angle_zero::track::bay_surface;
                 let g0 = gw;
                 // These sit on the paving, not on the shelf cut underneath it. The two are a
                 // quarter of a metre apart, which is enough to bury a ground pool completely.
-                let (px, pz) = at(10.0, 10.0);
-                let pave = node.p.y + angle_zero::track::bay_apron_offset(10.0);
-                push_ground_glow(glows, &mut gw, px, pave + 0.06, pz, 12.0, LAMP_POOL);
-                let (hx, hz) = at(12.0, 9.8);
-                let lamp_y = node.p.y + angle_zero::track::bay_apron_offset(7.6);
-                push_blob_glow(glows, &mut gw, hx, lamp_y + 7.15, hz, 2.75, LAMP_GLOW);
+                push_bay_pool(track, glows, &mut gw, 10.0, 10.0, 12.0, 0.06, LAMP_POOL);
+                // The head of the lamp built in `build_bay_props`, which stands at lateral 7.6.
+                let head = bay_surface(track, 12.0, 9.8);
+                let foot = bay_surface(track, 12.0, 7.6);
+                push_blob_glow(glows, &mut gw, head.x, foot.y + 7.15, head.z, 2.75, LAMP_GLOW);
                 // The vending machine throws a small warm pool of its own.
-                let (vx, vz) = at(-7.0, 14.6);
-                let vy = node.p.y + angle_zero::track::bay_apron_offset(15.0);
-                push_ground_glow(glows, &mut gw, vx, vy + 0.07, vz, 4.2, LAMP_POOL);
-                push_blob_glow(glows, &mut gw, vx, vy + 1.25, vz, 1.5, LAMP_GLOW);
+                push_bay_pool(track, glows, &mut gw, -7.0, 14.6, 4.2, 0.07, LAMP_POOL);
+                let v = bay_surface(track, -7.0, 15.6);
+                push_blob_glow(glows, &mut gw, v.x, v.y + 1.25, v.z, 1.5, LAMP_GLOW);
                 for v in &glows[g0..gw] {
                     note(&(*v), &mut glo, &mut ghi);
                 }
@@ -755,10 +782,24 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     // at the top end and hanging in the air at the bottom — see `tests/bay.rs`.
     let at = |along: f32, lateral: f32| bay_surface(track, along, lateral);
 
+    // Where the paving is cut across the pass.
+    //
+    // Its inner edge *is* the road ribbon's outer edge, so the two must be cut on the same
+    // centreline nodes — the ribbon samples every `RENDER_STRIDE`-th one. Sharing the vertices is
+    // what makes the butt joint watertight, and it is the only way to meet the road without either
+    // a crack or an overlap. Cutting the two independently, which is what a fixed step count did,
+    // is precisely what the old 0.4 m overlap existed to hide, and that overlap fought.
+    //
+    // The ends snap *inwards* to a node: the shelf is only fully cut through the pull-off proper,
+    // and paving that ran past it would sit on ground the hillside is still climbing back into.
+    let spacing = mesh::ribbon_spacing(track);
+    let s0 = track.nodes[BAY_NODE].s;
+    let (first, last) = mesh::ribbon_samples_within(track, s0, BAY_HALF_LENGTH);
+    let steps = last - first;
+    let along_at = |i: usize| (first + i) as f32 * spacing - s0;
+
     // The apron, as a ribbon of quads down the hill rather than one slab across it.
-    const STEPS: usize = 12;
-    let along_at = |i: usize| (i as f32 / STEPS as f32 * 2.0 - 1.0) * BAY_HALF_LENGTH;
-    for i in 0..STEPS {
+    for i in 0..steps {
         let (a, b) = (along_at(i), along_at(i + 1));
         w += mesh::build_quad(
             &mut out[w..],
@@ -770,9 +811,11 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
         );
     }
 
-    // The parapet, chained so it follows both the curve of the road and the fall of the pass.
+    // The parapet, chained so it follows both the curve of the road and the fall of the pass. On
+    // the same cuts as the paving, so the wall starts and ends where the paving does rather than
+    // overhanging it onto the shelf.
     const WALL_LATERAL: f32 = 19.6;
-    for i in 0..STEPS {
+    for i in 0..steps {
         w += mesh::build_wall_segment(
             &mut out[w..],
             at(along_at(i), WALL_LATERAL),
@@ -1012,6 +1055,10 @@ pub fn draw_sky(camera: &Camera) {
             verts as *const c_void,
         );
 
+        // Everything below the horizon that the scenery does not reach. Before the stars and the
+        // mountains, so both still paint over it.
+        draw_ground_backdrop(camera);
+
         // Stars and moon sit on a dome centred on the camera, so they never come closer and
         // never slide as the car turns. Depth writes off, and blended for the moon's halo.
         sys::sceGuEnable(GuState::DepthTest);
@@ -1051,9 +1098,65 @@ pub fn draw_sky(camera: &Camera) {
             core::ptr::null(),
             &raw const MOUNTAINS as *const c_void,
         );
+
         sys::sceGuDepthMask(0);
         sys::sceGuEnable(GuState::Fog);
     }
+}
+
+/// Everything below the horizon that the scenery does not reach, in the colour distance already is.
+///
+/// The terrain ribbon is a strip 190 m to either side of the road, and on a pass with the ground
+/// falling away it is possible to look past its edge — not because the ribbon is too small, but
+/// because a shallow sight line and a 0.4-per-metre slope diverge. Behind it sat the sky gradient,
+/// several times brighter than ground the fog has taken almost to [`SKY_CLEAR`], so the gap read as
+/// a hard blue wedge with the hillside stopping dead against it rather than as distance.
+///
+/// A disc in [`FOG_COLOR`] settles it for good, for a fixed two dozen triangles. Chasing the same
+/// result with geometry meant a ribbon six times wider and 68% more vertices in every frame of the
+/// game — to cover ground nobody can make out, at a distance where fog has flattened it to one flat
+/// colour anyway.
+///
+/// It is drawn in the sky pass, which writes no depth at all, so this cannot occlude anything: the
+/// world is drawn afterwards and paints straight over it. That also means it needs no depth test of
+/// its own — painter's order does the work, and the depth buffer is cleared to 0 here, which a disc
+/// two kilometres out could not be relied on to pass.
+///
+/// The disc has to sit *below* the eye. A plane through the camera projects to a line, not an area,
+/// which is worth knowing before spending a build wondering why nothing changed. A metre is plenty:
+/// at this radius it puts the rim within a twentieth of a degree of the true horizon.
+unsafe fn draw_ground_backdrop(camera: &Camera) {
+    // Just inside the far plane, so it is behind every piece of real scenery without being clipped.
+    const R: f32 = DRAW_DISTANCE * 0.9;
+    const DROP: f32 = 1.0;
+    const SEGMENTS: usize = 24;
+
+    let verts = super::scratch::alloc::<Vertex>(SEGMENTS * 3);
+    if verts.is_null() {
+        return;
+    }
+    let (cx, cy, cz) = (camera.pos.x, camera.pos.y - DROP, camera.pos.z);
+    let rim = |k: usize| {
+        let a = (k % SEGMENTS) as f32 / SEGMENTS as f32 * TAU;
+        Vertex::new(cx + cos(a) * R, cy, cz + sin(a) * R, FOG_COLOR)
+    };
+    let mut w = 0usize;
+    for k in 0..SEGMENTS {
+        *verts.add(w) = Vertex::new(cx, cy, cz, FOG_COLOR);
+        *verts.add(w + 1) = rim(k);
+        *verts.add(w + 2) = rim(k + 1);
+        w += 3;
+    }
+    // Culling and the depth test are already off for the gradient, and the fan is seen from below.
+    sys::sceGumMatrixMode(MatrixMode::Model);
+    sys::sceGumLoadIdentity();
+    sys::sceGumDrawArray(
+        GuPrimitive::Triangles,
+        VERTEX_FORMAT,
+        w as i32,
+        core::ptr::null(),
+        verts as *const c_void,
+    );
 }
 
 /// Sets the projection and view matrices for this frame.
@@ -1614,6 +1717,45 @@ unsafe fn push_ground_glow(
     }
 }
 
+/// A ground pool laid on the pull-off's paving rather than on a horizontal plane.
+///
+/// [`push_ground_glow`] puts every vertex at one height, which is right on the flat but wrong here:
+/// the pass falls 7.4 cm per metre, so a 12 m disc pinned to a single node is buried nearly a metre
+/// at its uphill rim and hangs well over a metre in the air at its downhill one. Where it crosses
+/// the paving the depth comparison is marginal, and the crossing line crawls and shimmers as the
+/// camera orbits — the flicker on the tarmac.
+///
+/// Laying it out in the pull-off's own `(along, lateral)` frame fixes both halves of that at once:
+/// every vertex takes its height from the node it actually stands above, exactly as the paving
+/// does, and the disc follows the road's curve instead of running straight off it.
+#[allow(clippy::too_many_arguments)]
+unsafe fn push_bay_pool(
+    track: &Track,
+    out: &mut [Vertex],
+    w: &mut usize,
+    along: f32,
+    lateral: f32,
+    radius: f32,
+    lift: f32,
+    color: u32,
+) {
+    use angle_zero::track::bay_surface;
+    let rim = color & 0x00ff_ffff;
+    let c = bay_surface(track, along, lateral);
+    let centre = Vertex::new(c.x, c.y + lift, c.z, color);
+    let edge = |k: usize| {
+        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+        let p = bay_surface(track, along + cos(a) * radius, lateral + sin(a) * radius);
+        Vertex::new(p.x, p.y + lift, p.z, rim)
+    };
+    for k in 0..GLOW_SEGMENTS {
+        out[*w] = centre;
+        out[*w + 1] = edge(k);
+        out[*w + 2] = edge(k + 1);
+        *w += 3;
+    }
+}
+
 /// A glow around a lamp head, built as two crossed vertical fans. Baked rather than billboarded:
 /// these are fixed to the scenery, and a crossed pair reads from any angle without needing to be
 /// rebuilt every frame for every lamp on the track.
@@ -1777,8 +1919,11 @@ pub fn draw_headlight_beams(st: &CarState) {
             y: st.y + 0.08,
             z: st.z,
         });
-        // The beam steers with the wheels.
-        sys::sceGumRotateY(st.yaw + st.steer * 0.55);
+        // The beam is bolted to the body, so it points where the car points. It used to be swung by
+        // `steer` as well, which read as the lamps tracking the front wheels — they are fixed units
+        // behind a fixed grille, and a car that is sliding should have its beams pointing where its
+        // nose is, not where its tyres are.
+        sys::sceGumRotateY(st.yaw);
 
         // Two 3.6 x 22 m quads, bright at the car and fading out ahead.
         let near = rgba(0xFF, 0xF3, 0xD2, 0x50);
