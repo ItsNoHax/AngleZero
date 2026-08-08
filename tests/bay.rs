@@ -80,10 +80,21 @@ fn the_paving_sits_above_the_shelf_it_is_laid_on_everywhere() {
             let terrain = n.p.y + bay_shelf_offset(lateral);
             let paving = bay_surface(&t, along, lateral).y;
             let clearance = paving - terrain;
+            // The floor is not just a matter of which surface is on top: the console has a
+            // 16-bit depth buffer and a 0.4 m near plane, so two surfaces this far apart stop
+            // being distinguishable at
+            //
+            //     65535 * near * far * clearance / (dist^2 * (far - near))  <  1 unit
+            //
+            // The pull-off's first version laid its gravel 0.03 m over the shelf, which goes
+            // unresolvable at 28 m — and the title camera orbits at 10.5 m looking across
+            // 38 m of it, so the far half tore into grass and flickered with every frame.
+            // 0.15 m holds out to 60 m, which is further than any of this is ever seen from.
             assert!(
-                (0.02..=0.4).contains(&clearance),
+                (0.15..=0.4).contains(&clearance),
                 "at along {along:.1} lateral {lateral:.1} the paving clears the shelf by \
-                 {clearance:+.3} m — it is either buried in it or floating over it",
+                 {clearance:+.3} m — under 0.15 m the depth buffer cannot keep them apart and \
+                 the grass tears through the surface",
             );
         }
     }
