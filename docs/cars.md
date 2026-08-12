@@ -91,7 +91,8 @@ A car carries three copies of itself: LOD0 for the one being driven, LOD1 beyond
 carries one decimation's error and not three.
 
 With eight cars on screen this halves the vertex load — 260,223 to 138,225 a frame — for 0.05% of
-pixels differing at all. It costs file size: the E36 is 156 KB at one level and 257 KB at three.
+pixels differing at all. It costs file size: of the E36's 479 KB, 346 KB is geometry across three
+levels against 208 KB for LOD0 alone, and 129 KB is the texture.
 
 ## Measuring
 
@@ -107,13 +108,33 @@ rasteriser and are only good for comparing one run against another — it is fil
 console is not, so it under-reports what vertices cost. Real numbers come off the hardware, from
 the `CAR` and `US` fields in the on-device overlay.
 
-## What is not in the format yet
+## The texture
 
-Textures. Every model here carries them and the converter extracts them, but the compiled car is
-vertex-coloured: the header reserves `TEXTURE_COUNT` and `TEXTURES_AT`, and the material records
-carry `NO_TEXTURE`. On the E36 this costs the headlight lenses, badges and interior detail; on the
-AE86 it costs the side decals. Adding them means carrying UVs through the weld and decimate stages,
-which currently drop them.
+One per car, 256×256, and every source material has a tile in it. The runtime merges parts into six
+materials, so a draw call covers the paint and the badges on it at once — a texture per material
+could not be bound. Packing means the console binds once per car and never switches.
+
+Materials with no image get a white tile. That is what keeps the whole thing additive: glTF's base
+colour is `texture × factor`, the factor is already baked into the vertex alongside the light term,
+so a white tile multiplies to exactly the colour that vertex had before textures existed. Anything
+untextured looks the same as it always did.
+
+```bash
+anglezero-asset convert ... --atlas /tmp/atlas.png    # look at what was packed
+```
+
+Worth doing on a new car. The atlas says at a glance whether the material sort found the right
+images, and a texture that is wrong is far quicker to recognise by looking at it than by reading a
+report about it.
+
+Two stages had to be taught that UVs exist. Welding keys on the texture coordinate as well as the
+position and colour, because two vertices at a point with different UVs are a seam somebody put
+there deliberately. Decimation uses meshoptimizer's attribute-aware simplifier, because the
+collapse it likes best on a flat panel is the one that drags a decal across it — the shape does not
+change and the texture slides.
+
+UVs outside the unit square are clamped. In an atlas a repeated texture would sample the material
+packed next door, so a tiling pattern shows its edge rather than somebody else's paint.
 
 ## Licences
 
