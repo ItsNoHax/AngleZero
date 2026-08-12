@@ -61,15 +61,17 @@ Toolchain, emulator setup and controls are in [Building and running](docs/buildi
 | [PSP hardware notes](docs/psp-notes.md) | Traps the hardware sets that emulators do not, and where the frame budget goes |
 | [Diagnostics](docs/diagnostics.md) | Capturing frames and traces from the console, and headless screenshots |
 | [Assets](docs/assets.md) | The XMB icon, background and music, and how the ATRAC3 is encoded |
+| [Cars](docs/cars.md) | Turning a 400k-triangle model into a car the console draws, and adding another |
 
 ## Layout
 
 ```
 src/            game core — no PSP dependency, runs and is tested on the host
 src/psp/        the shell: GU setup, rendering, audio, save data, diagnostics
-tests/          158 tests, all host-side
-scripts/        music encoding, pulling captures off a PSP
-assets/         XMB icon, background, music, and the music's source
+tools/          the car asset compiler — host-only, never built for the console
+tests/          237 tests, all host-side
+scripts/        music encoding, the glitch hunt, pulling captures off a PSP
+assets/         XMB icon, background, music, and the car models in three stages
 docs/           everything above
 ```
 
@@ -77,3 +79,16 @@ The split is the point: `src/` knows nothing about the PSP, so track generation,
 the camera and the screen flow are all ordinary Rust that `cargo test` exercises directly. Only
 `src/psp/` needs hardware, and it holds no game logic. See
 [Architecture](docs/architecture.md).
+
+The same split runs the other way for content. `tools/anglezero-asset` compiles a car model into a
+`.azcar` on a development machine; the console opens that file and draws it. Adding a car is a
+model, a config file and a conversion — no renderer code. See [Cars](docs/cars.md).
+
+## Credits
+
+The car models are other people's work, used under licences that require attribution. The game
+shows each car's credit on the title screen, read out of the compiled asset rather than written
+into the source.
+
+* **BMW 3-Series E36** by [Black Snow](https://sketchfab.com/BlackSnow02) — [CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/)
+* **Toyota AE86 Trueno** by Stanbox — CC-BY-NC-4.0 (non-commercial)

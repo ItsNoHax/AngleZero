@@ -10,8 +10,9 @@ The crate is split so that almost all of the game can be tested on a normal mach
 |---|---|
 | `src/*.rs` | `no_std`, target-agnostic game core — track, physics, scoring, camera, screen flow, HUD numbers, mesh building. No PSP dependency. |
 | `src/psp/` | The PSP shell: GU bring-up, controller, renderer, 2D overlay. Only compiled for `target_os = "psp"`. |
+| `tools/anglezero-asset/` | The car asset compiler. A workspace member, and the game is the only default member, so `cargo psp` never tries to build glTF parsing for mipsel. See [Cars](cars.md). |
 | `tests/` | Host tests. Everything in `src/*.rs` is exercised here. |
-| `scripts/` | Music encoding, and pulling captures off a console. |
+| `scripts/` | Music encoding, the glitch hunt, and pulling captures off a console. |
 
 The `psp` crate is a target-specific dependency, so `cargo test` never builds it, and `src/main.rs`
 compiles to an empty `main` off-target. That is what makes `cargo test` work at all.

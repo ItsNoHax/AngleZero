@@ -1,6 +1,7 @@
 # Assets
 
-What the XMB shows for the game, and how the music is made.
+What the XMB shows for the game, and how the music is made. The cars are a pipeline of their own —
+see [Cars](cars.md).
 
 ## The three slots
 
