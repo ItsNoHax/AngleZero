@@ -64,6 +64,7 @@ centring, which of 57 materials is glass — the converter works out.
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
 | `[materials]` | The category guesser does not speak this model's language. |
 | `[reduce]` | A category deserves more or less of the budget than its screen area suggests. |
+| `[reduce] drop` | Parts to leave out entirely — detail the sweep can see but that is not worth a triangle. |
 | `[handling]` | The car should not drive like the one the game was tuned around. |
 
 ## Where the budget goes
@@ -76,6 +77,19 @@ That ordering is the whole trick. The E36's engine is 137,000 triangles behind a
 decimator handed the `body` category as one lump takes a third of the paint's detail with it. The
 report prints where every triangle went, what each category cost in error, and warns when a
 category is losing its shape.
+
+### What the sweep does not answer
+
+It measures whether a part is on screen, not whether it is worth drawing, and those come apart in
+one specific place: detail behind an opening. Each of the E36's alloys has 4,762 triangles of brake
+disc and caliper behind it, visible through the gaps between the spokes — so the sweep gives it a
+share of the corner's budget, and the alloy in front is left with about 150 triangles. At 150 a
+five-spoke wheel is a disc, because the spoke windows are the first thing an edge collapse closes.
+
+`[reduce] drop` is the answer: name the part and it is left out. The wheel then gets the whole
+corner, the gaps read as gaps, and the report says how many triangles were dropped by name so it
+cannot happen quietly. Worth checking on any car whose wheels look like blobs — rendering the
+compiled wheel side-on next to the source is how this one was found.
 
 The body saturates. Sweeping the E36's budget from 5,000 to 40,000 moves the bodywork from 2,616
 to 4,876 triangles and no further — past that the converter can already draw every panel within
