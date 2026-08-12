@@ -25,6 +25,10 @@ name = "BMW E36"
 # which does not show at 480x272.
 triangles = 15000
 
+# No `[handling]` table on purpose. The descent was tuned around a 1420 kg saloon and this is that
+# saloon, so the E36 takes the defaults — and a car that says nothing about how it drives is the
+# case most worth having an example of. `toyota_ae86.toml` is the other one.
+
 [wheels]
 # Each corner is three assemblies with three unrelated names, and all of them must turn together:
 #   Object_4.001-.004         the tyres, 13,166 triangles each

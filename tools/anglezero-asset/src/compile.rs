@@ -144,6 +144,18 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Everything the runtime needs to name a mesh, a material or a wheel — and the attribution
     // line, which is written first so that a car whose credit matters has it near the front of the
     // table whatever else is in there.
+    // Refused here rather than on the console: a car with a zero mass puts the vehicle at infinity
+    // on its first substep, and the runtime's own check would silently fall back to the default,
+    // which looks like a config file that is being ignored.
+    let handling = config.handling.resolve();
+    report.handling = handling;
+    if !handling.is_sane() {
+        return Err(format!(
+            "invalid handling: {handling:?}. Mass, inertia, axle distances, top speed, steering \
+             lock and grip must all be above zero."
+        ));
+    }
+
     let mut strings = Strings::default();
     // Folded to uppercase for the same reason as the credit: the console's font has no lowercase
     // and draws what it lacks as blanks.
@@ -443,6 +455,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         &strings.bytes,
         credit_at,
         name_at,
+        handling,
         bounds,
     );
     report.note_size(&bytes);
@@ -783,6 +796,7 @@ fn write(
     strings: &[u8],
     credit: u32,
     name: u32,
+    handling: angle_zero::vehicle::CarHandling,
     bounds: Bounds,
 ) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_BYTES];
@@ -812,6 +826,20 @@ fn write(
     }
     let strings_at = pad(&mut out);
     out.extend_from_slice(strings);
+    let handling_at = pad(&mut out);
+    for v in [
+        handling.mass,
+        handling.inertia,
+        handling.front_axle,
+        handling.rear_axle,
+        handling.engine,
+        handling.top_speed,
+        handling.brake,
+        handling.steer_lock,
+        handling.grip,
+    ] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
     pad(&mut out);
 
     use azcar::field as f;
@@ -848,6 +876,7 @@ fn write(
     put_u32(&mut out, f::LODS_AT, 0);
     put_u32(&mut out, f::CREDIT, credit);
     put_u32(&mut out, f::NAME, name);
+    put_u32(&mut out, f::HANDLING_AT, handling_at as u32);
     let total = out.len() as u32;
     put_u32(&mut out, f::LENGTH, total);
     out
@@ -902,6 +931,49 @@ mod tests {
         assert_eq!(car.vertex_count(), report.out_vertices);
         assert_eq!(car.wheel_count(), 4);
         assert!(car.mesh_count() >= 5, "a body and four wheels at least");
+    }
+
+    /// Handling survives the trip out to a file and back, and a car that says nothing gets the
+    /// numbers the game was tuned with rather than zeroes.
+    #[test]
+    fn what_a_car_drives_like_is_carried_by_the_asset() {
+        use angle_zero::vehicle::CarHandling;
+
+        let (bytes, _) = compile_test_car(10_000);
+        let car = angle_zero::azcar::Car::parse(&bytes).unwrap();
+        assert_eq!(car.handling(), CarHandling::DEFAULT);
+
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        config.handling.mass = 940.0;
+        config.handling.engine = 4900.0;
+        config.handling.grip = 0.94;
+        let compiled = compile(&mut model, &config, 10_000).unwrap();
+        let car = angle_zero::azcar::Car::parse(&compiled.bytes).unwrap();
+        let h = car.handling();
+        assert_eq!(h.mass, 940.0);
+        assert_eq!(h.engine, 4900.0);
+        assert_eq!(h.grip, 0.94);
+        // Left out of the config, so derived from the mass rather than left at the saloon's.
+        assert!(
+            (h.inertia - 940.0 * (CarHandling::DEFAULT.inertia / CarHandling::DEFAULT.mass)).abs()
+                < 1e-3,
+            "inertia was {}",
+            h.inertia
+        );
+    }
+
+    /// A car whose numbers would break the simulation is refused, rather than written out and
+    /// found on a handheld.
+    #[test]
+    fn handling_that_would_break_the_simulation_is_refused() {
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        config.handling.mass = 0.0;
+        let Err(err) = compile(&mut model, &config, 10_000) else {
+            panic!("a zero mass must be refused");
+        };
+        assert!(err.contains("handling"), "unhelpful message: {err}");
     }
 
     /// The car has to arrive where the game drives it from: wheels on the road, wheelbase centred.

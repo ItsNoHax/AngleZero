@@ -20,6 +20,27 @@ triangles = 15000
 # wheels are inside, and the converter cuts them into corners by where each triangle sits.
 match = ["pneu", "jante"]
 
+# The one part of a car that cannot be measured off its model: nothing in a mesh says what an
+# engine produces. Left out entirely, a car drives exactly like the E36, which is the car the
+# descent was tuned around — so this table is the AE86 opting out of being a 1420 kg saloon.
+#
+# The numbers are the real car's, scaled into the units the simulation uses. A 4A-GE Trueno is
+# about 940 kg against the BMW's 1420, has less power rather than more, runs out of top end at
+# 185 km/h, and rides on 185-section tyres that let go earlier than anything modern. The point is
+# not that it is quicker — it is slower — but that it is lighter, which in a game scored on slides
+# is the interesting difference.
+[handling]
+mass = 940.0
+# inertia is left out: derived from the mass at the tuned car's ratio, which is nearer right than
+# leaving a 940 kg car with a 1420 kg car's reluctance to rotate.
+front_axle = 1.13
+rear_axle = 1.27
+engine = 4900.0
+top_speed = 51.0
+brake = 7400.0
+steer_lock = 0.66
+grip = 0.94
+
 [materials]
 # `pneu` is a tyre, `jante` a wheel rim, `carrosserie` the bodywork, `vitre` glass, `phares`
 # headlights, `miroir` a mirror. None of these are words the converter's built-in list knows, and

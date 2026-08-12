@@ -51,6 +51,8 @@ pub struct Report {
     pub out_materials: usize,
     pub out_wheels: usize,
     pub wheel_radius: f32,
+    /// What the car will drive like, after the config's defaults have been filled in.
+    pub handling: angle_zero::vehicle::CarHandling,
     pub bounds: Bounds,
     pub bytes: usize,
     pub mesh_bytes: usize,
@@ -79,6 +81,7 @@ impl Report {
             out_materials: 0,
             out_wheels: 0,
             wheel_radius: 0.0,
+            handling: angle_zero::vehicle::CarHandling::DEFAULT,
             bounds: Bounds::EMPTY,
             bytes: 0,
             mesh_bytes: 0,
@@ -262,6 +265,20 @@ impl Report {
         println!(
             "Ground at y = {:.3}, which is where it should be for wheels to touch the road",
             self.bounds.min[1]
+        );
+        println!();
+
+        // Printed whether or not the config said anything, because "this car drives like the
+        // default one" is the fact most worth seeing, and it is invisible in the config file.
+        let h = self.handling;
+        let default = h == angle_zero::vehicle::CarHandling::DEFAULT;
+        println!(
+            "Handling: {:.0} kg, {:.0} N, top {:.0} km/h, {:.0}% grip{}",
+            h.mass,
+            h.engine,
+            h.top_speed * 3.6,
+            h.grip * 100.0,
+            if default { "  (the game's default car)" } else { "" }
         );
         println!();
 

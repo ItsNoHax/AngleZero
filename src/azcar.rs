@@ -35,6 +35,8 @@ pub const HEADER_BYTES: usize = 112;
 pub const MESH_BYTES: usize = 32;
 pub const MATERIAL_BYTES: usize = 16;
 pub const WHEEL_BYTES: usize = 32;
+/// Nine `f32`, padded to the section alignment.
+pub const HANDLING_BYTES: usize = 48;
 
 /// Vertex layout tag written into the header. One value today; the field exists so that a compact
 /// vertex format can be introduced later and refused cleanly by an older build rather than drawn
@@ -292,6 +294,12 @@ pub mod field {
     pub const CREDIT: usize = 92;
     /// Offset into the string table of the car's name, as a person would say it.
     pub const NAME: usize = 96;
+    /// Where the handling record is, or zero for "this car does not say".
+    ///
+    /// Added after version 1 shipped, in the space the header already reserved, which is exactly
+    /// what that space was for: a build that predates it reads zero and drives the car with the
+    /// default numbers, which is what it did anyway.
+    pub const HANDLING_AT: usize = 100;
 }
 
 /// The car carries no attribution line.
@@ -314,6 +322,7 @@ pub struct Car<'a> {
     vertices_at: usize,
     indices_at: usize,
     strings: (usize, usize),
+    handling_at: usize,
     bounds: [f32; 6],
 }
 
@@ -355,6 +364,7 @@ impl<'a> Car<'a> {
         let indices_at = le_u32(bytes, field::INDICES_AT) as usize;
         let strings_at = le_u32(bytes, field::STRINGS_AT) as usize;
         let strings_bytes = le_u32(bytes, field::STRINGS_BYTES) as usize;
+        let handling_at = le_u32(bytes, field::HANDLING_AT) as usize;
 
         let car = Car {
             bytes,
@@ -369,6 +379,7 @@ impl<'a> Car<'a> {
             vertices_at,
             indices_at,
             strings: (strings_at, strings_bytes),
+            handling_at,
             bounds: [
                 le_f32(bytes, field::BOUNDS),
                 le_f32(bytes, field::BOUNDS + 4),
@@ -391,6 +402,13 @@ impl<'a> Car<'a> {
             ),
             (indices_at, index_count * 2, true),
             (strings_at, strings_bytes, false),
+            // Zero means the car does not carry one, which is the only optional section so far —
+            // hence the length rather than the offset saying so.
+            (
+                handling_at,
+                if handling_at == 0 { 0 } else { HANDLING_BYTES },
+                true,
+            ),
         ] {
             if len == 0 {
                 continue;
@@ -549,6 +567,37 @@ impl<'a> Car<'a> {
             return crate::vehicle::CarShape::DEFAULT;
         }
         crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count])
+    }
+
+    /// What this car drives like, or the default if it does not say.
+    ///
+    /// Refused rather than trusted: a car whose config had a typo in it — a zero mass, a negative
+    /// wheelbase — would not drive oddly, it would put the vehicle at infinity on the first
+    /// substep. A car that fails this check drives like the default one, which is a car that
+    /// drives.
+    pub fn handling(&self) -> crate::vehicle::CarHandling {
+        use crate::vehicle::CarHandling;
+        if self.handling_at == 0 {
+            return CarHandling::DEFAULT;
+        }
+        let at = self.handling_at;
+        let f = |i: usize| le_f32(self.bytes, at + i * 4);
+        let h = CarHandling {
+            mass: f(0),
+            inertia: f(1),
+            front_axle: f(2),
+            rear_axle: f(3),
+            engine: f(4),
+            top_speed: f(5),
+            brake: f(6),
+            steer_lock: f(7),
+            grip: f(8),
+        };
+        if h.is_sane() {
+            h
+        } else {
+            CarHandling::DEFAULT
+        }
     }
 
     /// What the car is called. `BMW E36`, not `bmw_e36.azcar`.

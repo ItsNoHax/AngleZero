@@ -50,15 +50,17 @@ pub fn car_fault() -> Option<car::LoadError> {
     unsafe { CAR_LOAD }
 }
 
-/// Takes the vehicle's proportions off whichever car it is now driving.
+/// Takes the vehicle's proportions and its handling off whichever car it is now driving.
 ///
 /// The wheels have to roll at the speed the car is going and the tyre marks have to land under the
-/// tyres, and both of those are measurements of the model rather than of the physics — so they
-/// have to be taken again whenever the model changes. Handling does not change with the car: the
-/// simulation drives every one of them the same.
-fn refresh_car_shape(game: &mut Game) {
+/// tyres, and both of those are measurements of the model. What a car drives like is not — nothing
+/// in a mesh says what an engine produces, so it is authored in the car's config and compiled in
+/// beside the geometry — but it changes at the same moment and for the same reason, so it is taken
+/// here too. A car that carries neither gets the numbers the game was tuned with.
+fn refresh_car(game: &mut Game) {
     if let Some(car) = car::get(game.vehicle.model) {
         game.vehicle.shape = car.shape();
+        game.vehicle.handling = car.handling();
     }
 }
 
@@ -184,7 +186,7 @@ pub fn psp_main() {
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
         game.car_count = car::count().max(1);
-        refresh_car_shape(game);
+        refresh_car(game);
         game.enter_title(track);
 
         // The scripted run, loaded before the first frame so frame 0 already has its buttons.
@@ -304,7 +306,7 @@ pub fn psp_main() {
             // The title screen can swap the car. Re-measure only when it actually changed, rather
             // than every frame for a value that almost never moves.
             if game.vehicle.model != driving {
-                refresh_car_shape(game);
+                refresh_car(game);
             }
             if game.take_record_dirty() {
                 storage::store(&game.record);

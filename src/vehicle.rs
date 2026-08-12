@@ -72,10 +72,81 @@ impl Default for CarShape {
     }
 }
 
-const MASS: f32 = 1420.0;
-const LF: f32 = 1.18;
-const LR: f32 = 1.42;
-const IZ: f32 = 1950.0;
+/// What a car is like to drive, as data rather than as constants.
+///
+/// The shape of a car is measured off its model; how it drives cannot be, because nothing in a
+/// mesh says what an engine produces. So these come from the car's config file, are compiled into
+/// the asset beside the geometry, and are read back by the game — which means a car that handles
+/// differently is a different file and not a different build.
+///
+/// Every field defaults to the numbers the game was tuned with, and an asset that carries none
+/// gets exactly those. That is deliberate: the descent is balanced around this car, and a new
+/// model should have to ask before it changes how the game plays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarHandling {
+    /// Kerb mass, kg.
+    pub mass: f32,
+    /// Yaw inertia, kg·m². How reluctant the car is to start and stop rotating.
+    pub inertia: f32,
+    /// Front axle ahead of the centre of mass, m.
+    pub front_axle: f32,
+    /// Rear axle behind it, m.
+    pub rear_axle: f32,
+    /// Drive force at full throttle from rest, N.
+    pub engine: f32,
+    /// Where that force has tailed off to its floor, m/s. The top speed in all but name.
+    pub top_speed: f32,
+    /// Braking force, N.
+    pub brake: f32,
+    /// Steering lock at a standstill, radians.
+    pub steer_lock: f32,
+    /// Multiplies cornering stiffness and the friction limit. Below 1.0 slides earlier.
+    pub grip: f32,
+}
+
+impl CarHandling {
+    pub const DEFAULT: CarHandling = CarHandling {
+        mass: 1420.0,
+        inertia: 1950.0,
+        front_axle: 1.18,
+        rear_axle: 1.42,
+        engine: 8200.0,
+        top_speed: 58.0,
+        brake: 11000.0,
+        steer_lock: 0.60,
+        grip: 1.0,
+    };
+
+    /// Steering lock available at a given speed — less lock the faster you go.
+    #[inline]
+    pub fn steer_max(&self, speed: f32) -> f32 {
+        self.steer_lock * (1.0 - 0.55 * min(1.0, speed / 55.0))
+    }
+
+    /// Rejects anything that would make the simulation misbehave rather than merely drive oddly.
+    ///
+    /// A zero mass divides by zero on the first substep and puts the car at infinity; a negative
+    /// wheelbase inverts the yaw response and the car spins on its own axis. Both are typos in a
+    /// config file, and both are much easier to explain here than to diagnose on a handheld.
+    pub fn is_sane(&self) -> bool {
+        self.mass > 1.0
+            && self.inertia > 1.0
+            && self.front_axle > 0.0
+            && self.rear_axle > 0.0
+            && self.engine >= 0.0
+            && self.top_speed > 1.0
+            && self.brake >= 0.0
+            && self.steer_lock > 0.0
+            && self.grip > 0.0
+    }
+}
+
+impl Default for CarHandling {
+    fn default() -> Self {
+        CarHandling::DEFAULT
+    }
+}
+
 const G: f32 = 9.81;
 
 /// Slip angle beyond which the car counts as drifting.
@@ -149,6 +220,8 @@ pub struct Vehicle {
     pub model: usize,
     /// What that asset measures, for the parts of the game that have to agree with it.
     pub shape: CarShape,
+    /// What that asset says it drives like. `CarHandling::DEFAULT` until a car says otherwise.
+    pub handling: CarHandling,
 
     // --- derived each substep, for the renderer, HUD and scoring ---
     pub on_road: bool,
@@ -189,6 +262,7 @@ impl Vehicle {
             grip_assist: 1.0,
             model: 0,
             shape: CarShape::DEFAULT,
+            handling: CarHandling::DEFAULT,
             on_road: false,
             slip_angle: 0.0,
             drifting: false,
@@ -197,8 +271,8 @@ impl Vehicle {
 
     /// Steering lock available at a given speed — less lock the faster you go.
     #[inline]
-    pub fn steer_max(speed: f32) -> f32 {
-        0.60 * (1.0 - 0.55 * min(1.0, speed / 55.0))
+    pub fn steer_max(&self, speed: f32) -> f32 {
+        self.handling.steer_max(speed)
     }
 
     /// Lateral limit at a node. The bay side of the pull-off has no rail, so it opens up.
@@ -267,9 +341,12 @@ impl Vehicle {
         // the bay limits mid-step; written back before containment runs.
         let mut st = self.state;
 
+        // The car's own numbers, taken once: every force below is scaled by one of them.
+        let car = self.handling;
+
         // --- steering ------------------------------------------------------------------
         let speed = hypot(st.vx, st.vy);
-        let target = input.steer_in * Self::steer_max(speed);
+        let target = input.steer_in * car.steer_max(speed);
         // Winding on is slower than letting go; the tyres load up either way.
         let rate = if abs(target) > abs(st.steer) { 6.0 } else { 9.0 };
         st.steer += clamp(target - st.steer, -rate * dt, rate * dt);
@@ -278,43 +355,51 @@ impl Vehicle {
         let near = self.locator.nearest(track, st.x, st.z);
         let on_road = abs(near.lat) < TARMAC_HALF_WIDTH;
         let surface = if on_road { 1.0 } else { 0.62 };
-        let grip = surface * (0.92 + 0.22 * self.grip_assist);
+        let grip = surface * (0.92 + 0.22 * self.grip_assist) * car.grip;
         self.on_road = on_road;
 
         let cf = 105_000.0 * grip;
         let cr = 118_000.0 * grip * if input.handbrake { 0.34 } else { 1.0 };
-        let max_ff = 0.5 * MASS * G * 1.42 * grip;
+        let max_ff = 0.5 * car.mass * G * 1.42 * grip;
         let max_fr = max_ff * if input.handbrake { 0.30 } else { 1.0 };
 
         // --- tyre forces ---------------------------------------------------------------
         // Floor the longitudinal speed used for slip so the model does not blow up at rest.
         let vxs = crate::math::max(2.2, abs(st.vx));
         let dir_sign = if st.vx == 0.0 { 1.0 } else { signum(st.vx) };
-        let slip_f = atan2(st.vy + st.yaw_rate * LF, vxs) - st.steer * dir_sign;
-        let slip_r = atan2(st.vy - st.yaw_rate * LR, vxs);
+        let slip_f = atan2(st.vy + st.yaw_rate * car.front_axle, vxs) - st.steer * dir_sign;
+        let slip_r = atan2(st.vy - st.yaw_rate * car.rear_axle, vxs);
         let ff = clamp(-cf * slip_f, -max_ff, max_ff);
         let fr = clamp(-cr * slip_r, -max_fr, max_fr);
 
         // --- longitudinal forces -------------------------------------------------------
         // Engine, tailing off toward ~58 m/s.
-        let mut fx = input.throttle * 8200.0 * crate::math::max(0.08, 1.0 - abs(st.vx) / 58.0);
+        let mut fx =
+            input.throttle * car.engine * crate::math::max(0.08, 1.0 - abs(st.vx) / car.top_speed);
         if input.handbrake {
             fx *= 0.35;
         }
         if input.brake {
-            fx -= if st.vx > 0.5 { 11000.0 } else { 4200.0 };
+            // Reverse is a fraction of forward braking, so that holding the brake at a standstill
+            // backs the car off a rail rather than launching it.
+            fx -= if st.vx > 0.5 {
+                car.brake
+            } else {
+                car.brake * 0.38
+            };
         }
         fx -= 1.05 * st.vx * abs(st.vx); // aero drag
         fx -= if on_road { 210.0 } else { 900.0 } * signum(st.vx) * min(1.0, abs(st.vx) / 3.0);
         // The downhill pull. This is what makes the game a descent rather than a track day.
-        fx += -G * sin(near.node_pitch(track)) * MASS * 0.85;
+        fx += -G * sin(near.node_pitch(track)) * car.mass * 0.85;
 
         // --- integrate -----------------------------------------------------------------
-        let ax = fx / MASS - ff * sin(st.steer) / MASS + st.yaw_rate * st.vy;
-        let ay = (ff * cos(st.steer) + fr) / MASS - st.yaw_rate * st.vx;
+        let ax = fx / car.mass - ff * sin(st.steer) / car.mass + st.yaw_rate * st.vy;
+        let ay = (ff * cos(st.steer) + fr) / car.mass - st.yaw_rate * st.vx;
         st.vx += ax * dt;
         st.vy += ay * dt;
-        st.yaw_rate += ((LF * ff * cos(st.steer) - LR * fr) / IZ) * dt;
+        st.yaw_rate +=
+            ((car.front_axle * ff * cos(st.steer) - car.rear_axle * fr) / car.inertia) * dt;
         st.yaw_rate *= 1.0 - 1.6 * dt;
 
         st.yaw += st.yaw_rate * dt;

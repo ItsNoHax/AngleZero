@@ -3,7 +3,7 @@
 
 use angle_zero::math::{atan2, hypot, wrap_pi};
 use angle_zero::track::{Locator, Track, BAY_FROM, BAY_TO, NODE_COUNT, RAIL_LIMIT};
-use angle_zero::vehicle::{CarShape, Input, Vehicle, FIXED_DT};
+use angle_zero::vehicle::{CarHandling, CarShape, Input, Vehicle, FIXED_DT};
 
 fn track() -> Box<Track> {
     let mut t = Box::new(Track::EMPTY);
@@ -41,11 +41,102 @@ fn speed(v: &Vehicle) -> f32 {
 
 #[test]
 fn steering_lock_shrinks_as_speed_rises() {
-    // 0.60 rad at rest, falling to 0.60 * 0.45 by 55 m/s and no further.
-    assert!((Vehicle::steer_max(0.0) - 0.60).abs() < 1e-4);
-    assert!((Vehicle::steer_max(55.0) - 0.60 * 0.45).abs() < 1e-4);
-    assert!((Vehicle::steer_max(200.0) - 0.60 * 0.45).abs() < 1e-4);
-    assert!(Vehicle::steer_max(20.0) < Vehicle::steer_max(5.0));
+    // 0.60 rad at rest, falling to 0.60 * 0.45 by 55 m/s and no further. The lock itself is the
+    // car's now, so this asks the default one — which is the car the game was tuned around.
+    let car = CarHandling::DEFAULT;
+    assert!((car.steer_max(0.0) - 0.60).abs() < 1e-4);
+    assert!((car.steer_max(55.0) - 0.60 * 0.45).abs() < 1e-4);
+    assert!((car.steer_max(200.0) - 0.60 * 0.45).abs() < 1e-4);
+    assert!(car.steer_max(20.0) < car.steer_max(5.0));
+}
+
+/// A car that says nothing about how it drives must drive exactly like the game always has.
+///
+/// This is the guarantee that made it safe to turn five constants into data: the descent is
+/// balanced around these numbers, and the default is not a plausible set of values, it is the set
+/// the game was tuned with.
+#[test]
+fn the_default_car_is_the_one_the_game_was_tuned_with() {
+    let d = CarHandling::DEFAULT;
+    assert_eq!(d.mass, 1420.0);
+    assert_eq!(d.inertia, 1950.0);
+    assert_eq!(d.front_axle, 1.18);
+    assert_eq!(d.rear_axle, 1.42);
+    assert_eq!(d.engine, 8200.0);
+    assert_eq!(d.top_speed, 58.0);
+    assert_eq!(d.brake, 11000.0);
+    assert_eq!(d.steer_lock, 0.60);
+    assert_eq!(d.grip, 1.0);
+    assert_eq!(Vehicle::new().handling, d);
+    assert!(d.is_sane());
+}
+
+#[test]
+fn a_car_with_numbers_that_would_break_the_simulation_is_not_sane() {
+    for bad in [
+        CarHandling {
+            mass: 0.0,
+            ..CarHandling::DEFAULT
+        },
+        CarHandling {
+            inertia: 0.0,
+            ..CarHandling::DEFAULT
+        },
+        CarHandling {
+            rear_axle: -1.42,
+            ..CarHandling::DEFAULT
+        },
+        CarHandling {
+            top_speed: 0.0,
+            ..CarHandling::DEFAULT
+        },
+        CarHandling {
+            steer_lock: 0.0,
+            ..CarHandling::DEFAULT
+        },
+        CarHandling {
+            grip: 0.0,
+            ..CarHandling::DEFAULT
+        },
+    ] {
+        assert!(!bad.is_sane(), "{bad:?} should have been refused");
+    }
+}
+
+/// The point of the feature: a lighter car with more grip corners harder.
+#[test]
+fn a_lighter_grippier_car_holds_a_tighter_line() {
+    let track = track();
+    let corner = |handling| {
+        let mut v = Vehicle::new();
+        v.handling = handling;
+        v.place_at_node(&track, 200);
+        v.state.vx = 22.0;
+        for _ in 0..240 {
+            v.step(
+                &track,
+                Input {
+                    throttle: 0.5,
+                    steer_in: 1.0,
+                    ..Default::default()
+                },
+                FIXED_DT,
+            );
+        }
+        v.state.yaw_rate.abs()
+    };
+
+    let heavy = corner(CarHandling::DEFAULT);
+    let light = corner(CarHandling {
+        mass: 950.0,
+        inertia: 1200.0,
+        grip: 1.15,
+        ..CarHandling::DEFAULT
+    });
+    assert!(
+        light > heavy,
+        "the lighter car turned at {light} rad/s against {heavy}"
+    );
 }
 
 #[test]
