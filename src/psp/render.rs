@@ -1103,9 +1103,19 @@ unsafe fn draw_ground_backdrop(camera: &Camera) {
     );
 }
 
+/// Where the camera was put this frame, for the handful of decisions that are about distance from
+/// the eye rather than about the world. Kept here rather than passed down: the alternative is
+/// threading a camera through every draw call that might one day want to know.
+static mut EYE: Vec3 = Vec3::ZERO;
+
+fn camera_eye() -> [f32; 3] {
+    unsafe { [EYE.x, EYE.y, EYE.z] }
+}
+
 /// Sets the projection and view matrices for this frame.
 pub fn set_camera(camera: &Camera) {
     unsafe {
+        EYE = camera.pos;
         sys::sceGumMatrixMode(MatrixMode::Projection);
         sys::sceGumLoadIdentity();
         // 480x272 is 16:9. Far is deliberately short — fog hides everything past
@@ -1479,10 +1489,16 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 
 /// The extra cars a benchmark mode puts on screen, as (position, heading).
 ///
-/// Laid out in the player's own frame: two lanes abreast, spaced back down the road, which is the
-/// arrangement a field of traffic would actually take. Their height is the player's rather than
-/// the road's — on a 7% slope the furthest is most of a metre off the surface — because this
-/// measures what the renderer costs, and a car in the air costs exactly what one on the road does.
+/// Laid out ahead of the player, two lanes abreast and receding, so that every one of them is on
+/// screen at a different distance. That matters more than it sounds: the first version of this put
+/// them behind the player, where the chase camera left five of the seven behind the eye — they
+/// still cost their draw calls, so the vertex numbers looked right, but they painted nothing and
+/// the level-of-detail comparison came out pixel-identical because the only cars whose level
+/// changed were ones nobody could see.
+///
+/// Their height is the player's rather than the road's — on a 7% slope the furthest is most of a
+/// metre off the surface — because this measures what the renderer costs, and a car in the air
+/// costs what one on the road does.
 #[cfg(feature = "devtools")]
 fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
     let extras = match debug_mode() {
@@ -1492,9 +1508,9 @@ fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
     };
     let (s, c) = (sin(st.yaw), cos(st.yaw));
     (0..extras).map(move |i| {
-        // Alternating sides, receding: 3.2 m out and 7 m further back each pair.
+        // Alternating sides, receding: 3.2 m out and 9 m further up the road each pair.
         let lateral = if i % 2 == 0 { 3.2 } else { -3.2 };
-        let along = -7.0 * (1 + i / 2) as f32;
+        let along = 9.0 * (1 + i / 2) as f32;
         (
             [
                 st.x + lateral * c + along * s,
@@ -1512,6 +1528,10 @@ fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
 static mut BENCH_SLOT: usize = 0;
 
 /// One car, at a pose. Everything car-specific comes out of the asset.
+///
+/// The level of detail is chosen from how far the car is from the camera, which is the only thing
+/// here that depends on where it is rather than on what it is. A car with one level always picks
+/// that one.
 unsafe fn draw_one_car(
     car: &azcar::Car<'static>,
     st: &CarState,
@@ -1521,6 +1541,11 @@ unsafe fn draw_one_car(
     roll: f32,
 ) {
     {
+        let eye = camera_eye();
+        let d = [at[0] - eye[0], at[1] - eye[1], at[2] - eye[2]];
+        let lod = car.lod_for_distance(sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
+        let meshes = lod.first_mesh as usize..lod.first_mesh as usize + lod.mesh_count as usize;
+
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
         sys::sceGumTranslate(&ScePspFVector3 {
@@ -1546,7 +1571,7 @@ unsafe fn draw_one_car(
             }
             let mut culling = true;
 
-            for i in 0..car.mesh_count() {
+            for i in meshes.clone() {
                 let mesh = car.mesh(i);
                 let material = car.material(mesh.material as usize);
                 if material.blended() != blended {

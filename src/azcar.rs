@@ -37,6 +37,9 @@ pub const MATERIAL_BYTES: usize = 16;
 pub const WHEEL_BYTES: usize = 32;
 /// Nine `f32`, padded to the section alignment.
 pub const HANDLING_BYTES: usize = 48;
+/// The level table's own header, before the per-level records.
+pub const LOD_HEADER_BYTES: usize = 16;
+pub const LOD_BYTES: usize = 16;
 
 /// Vertex layout tag written into the header. One value today; the field exists so that a compact
 /// vertex format can be introduced later and refused cleanly by an older build rather than drawn
@@ -323,7 +326,19 @@ pub struct Car<'a> {
     indices_at: usize,
     strings: (usize, usize),
     handling_at: usize,
+    /// Offset of the level table and how many levels it holds, or `(0, 0)` for a car with one.
+    lods: (usize, usize),
     bounds: [f32; 6],
+}
+
+/// One level of detail: a run of meshes, and how far away it is good enough.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Lod {
+    pub first_mesh: u32,
+    pub mesh_count: u16,
+    /// Use this level beyond this many metres. LOD0's is zero.
+    pub min_distance: f32,
+    pub triangles: u32,
 }
 
 impl<'a> Car<'a> {
@@ -365,6 +380,14 @@ impl<'a> Car<'a> {
         let strings_at = le_u32(bytes, field::STRINGS_AT) as usize;
         let strings_bytes = le_u32(bytes, field::STRINGS_BYTES) as usize;
         let handling_at = le_u32(bytes, field::HANDLING_AT) as usize;
+        let lods_at = le_u32(bytes, field::LODS_AT) as usize;
+        // The count lives in the section rather than the header, because the header had one field
+        // left for this and the section is the thing that grows.
+        let lod_count = if lods_at != 0 && lods_at + LOD_HEADER_BYTES <= bytes.len() {
+            le_u16(bytes, lods_at) as usize
+        } else {
+            0
+        };
 
         let car = Car {
             bytes,
@@ -380,6 +403,7 @@ impl<'a> Car<'a> {
             indices_at,
             strings: (strings_at, strings_bytes),
             handling_at,
+            lods: (lods_at, lod_count),
             bounds: [
                 le_f32(bytes, field::BOUNDS),
                 le_f32(bytes, field::BOUNDS + 4),
@@ -402,11 +426,20 @@ impl<'a> Car<'a> {
             ),
             (indices_at, index_count * 2, true),
             (strings_at, strings_bytes, false),
-            // Zero means the car does not carry one, which is the only optional section so far —
-            // hence the length rather than the offset saying so.
+            // Zero means the car does not carry one. Both optional sections say so with the
+            // offset, so the length is what has to be zeroed to skip the check.
             (
                 handling_at,
                 if handling_at == 0 { 0 } else { HANDLING_BYTES },
+                true,
+            ),
+            (
+                lods_at,
+                if lod_count == 0 {
+                    0
+                } else {
+                    LOD_HEADER_BYTES + lod_count * LOD_BYTES
+                },
                 true,
             ),
         ] {
@@ -429,7 +462,19 @@ impl<'a> Car<'a> {
             return Err(Error::BadSection);
         }
 
-        for i in 0..mesh_count {
+        // Every mesh, not just LOD0's: the coarser levels live past `mesh_count` in the same array
+        // and are just as capable of dangling. `total_meshes` is what the level table reaches.
+        let mut total_meshes = mesh_count;
+        for i in 0..lod_count {
+            let at = lods_at + LOD_HEADER_BYTES + i * LOD_BYTES;
+            let end = le_u32(bytes, at) as usize + le_u16(bytes, at + 4) as usize;
+            total_meshes = total_meshes.max(end);
+        }
+        if meshes_at + total_meshes * MESH_BYTES > bytes.len() {
+            return Err(Error::BadSection);
+        }
+
+        for i in 0..total_meshes {
             let m = car.mesh(i);
             let end = m.first_index as usize + m.index_count as usize;
             if end > index_count || m.index_count % 3 != 0 {
@@ -463,7 +508,23 @@ impl<'a> Car<'a> {
         self.index_count
     }
 
+    /// Triangles in the car as it is drawn up close — LOD0 only.
+    ///
+    /// Not the whole index array: the coarser levels live in it too, and a car that reported 14,774
+    /// triangles because it carries three copies of itself would be answering a question nobody
+    /// asked. What the budget was spent on, and what the console draws for the player's car, is
+    /// this one.
     pub fn triangle_count(&self) -> usize {
+        let lod0 = self.lod(0);
+        let mut indices = 0;
+        for i in 0..lod0.mesh_count as usize {
+            indices += self.mesh(lod0.first_mesh as usize + i).index_count as usize;
+        }
+        indices / 3
+    }
+
+    /// Triangles across every level, which is what the file actually costs to hold.
+    pub fn total_triangle_count(&self) -> usize {
         self.index_count / 3
     }
 
@@ -567,6 +628,47 @@ impl<'a> Car<'a> {
             return crate::vehicle::CarShape::DEFAULT;
         }
         crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count])
+    }
+
+    /// How many levels of detail the car carries. One means only the meshes `mesh_count` covers.
+    pub fn lod_count(&self) -> usize {
+        self.lods.1.max(1)
+    }
+
+    /// One level. Level 0 is always the full-detail car, whether or not a table was written.
+    pub fn lod(&self, i: usize) -> Lod {
+        if i >= self.lods.1 {
+            return Lod {
+                first_mesh: 0,
+                mesh_count: self.mesh_count as u16,
+                min_distance: 0.0,
+                triangles: (self.index_count / 3) as u32,
+            };
+        }
+        let at = self.lods.0 + LOD_HEADER_BYTES + i * LOD_BYTES;
+        Lod {
+            first_mesh: le_u32(self.bytes, at),
+            mesh_count: le_u16(self.bytes, at + 4),
+            min_distance: le_f32(self.bytes, at + 8),
+            triangles: le_u32(self.bytes, at + 12),
+        }
+    }
+
+    /// The coarsest level that is still good enough at this distance.
+    ///
+    /// Walked from the far end so that the answer is the last level whose threshold the distance
+    /// is past. Levels are written near-to-far and LOD0's threshold is zero, so this always finds
+    /// one — a car with no table finds level 0 and draws exactly what it always drew.
+    pub fn lod_for_distance(&self, metres: f32) -> Lod {
+        let mut chosen = self.lod(0);
+        for i in (1..self.lod_count()).rev() {
+            let lod = self.lod(i);
+            if metres >= lod.min_distance {
+                chosen = lod;
+                break;
+            }
+        }
+        chosen
     }
 
     /// What this car drives like, or the default if it does not say.

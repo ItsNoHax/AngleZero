@@ -42,6 +42,14 @@ pub struct CarConfig {
 
     #[serde(default)]
     pub handling: Handling,
+
+    /// Triangle budgets for the coarser levels, nearest first. Empty means a car with one level,
+    /// which is what every car was until there was something on screen to spend a second one on.
+    ///
+    /// Not a ratio of the main budget: what a car can lose without falling apart depends on the
+    /// car, and the whole point of the level is that it is looked at from further away.
+    #[serde(default)]
+    pub lods: Vec<usize>,
 }
 
 /// How the car drives, as distinct from what it looks like.
@@ -333,6 +341,7 @@ impl CarConfig {
             spawn: Spawn::default(),
             reduce: Reduction::default(),
             handling: Handling::default(),
+            lods: Vec::new(),
         }
     }
 

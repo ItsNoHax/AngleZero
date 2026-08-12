@@ -51,6 +51,8 @@ pub struct Report {
     pub out_materials: usize,
     pub out_wheels: usize,
     pub wheel_radius: f32,
+    /// Triangles at each level of detail, LOD0 first.
+    pub levels: Vec<usize>,
     /// What the car will drive like, after the config's defaults have been filled in.
     pub handling: angle_zero::vehicle::CarHandling,
     pub bounds: Bounds,
@@ -81,6 +83,7 @@ impl Report {
             out_materials: 0,
             out_wheels: 0,
             wheel_radius: 0.0,
+            levels: Vec::new(),
             handling: angle_zero::vehicle::CarHandling::DEFAULT,
             bounds: Bounds::EMPTY,
             bytes: 0,
@@ -169,6 +172,16 @@ impl Report {
         self.mesh_bytes = vertices.len() * core::mem::size_of::<Vertex>() + indices.len() * 2;
     }
 
+    /// Triangles at each level, LOD0 first, and what every level costs in memory together.
+    ///
+    /// The memory figure has to cover all of them even though the triangle count reported above
+    /// is LOD0's: the whole file is loaded into the arena whether or not the far levels are being
+    /// drawn this frame.
+    pub fn note_levels(&mut self, triangles: Vec<usize>, vertices: usize, indices: usize) {
+        self.levels = triangles;
+        self.mesh_bytes = vertices * core::mem::size_of::<Vertex>() + indices * 2;
+    }
+
     pub fn note_size(&mut self, bytes: &[u8]) {
         self.bytes = bytes.len();
     }
@@ -255,6 +268,18 @@ impl Report {
             0.0
         };
         println!("  Reduction:    {reduction:>11.2}%");
+        if self.levels.len() > 1 {
+            let names = ["LOD0 (player)", "LOD1 (near)", "LOD2 (far)"];
+            println!();
+            println!("Levels of detail:");
+            for (i, tris) in self.levels.iter().enumerate() {
+                println!(
+                    "  {:<16} {:>9} triangles",
+                    names.get(i).copied().unwrap_or("LOD"),
+                    commas(*tris)
+                );
+            }
+        }
         println!();
 
         let s = self.bounds.size();

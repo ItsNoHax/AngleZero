@@ -26,9 +26,14 @@ use psp::sys::{self, IoOpenFlags, IoWhence};
 /// diagnostics dump, and the release check refuses to package a build that mentions it.
 pub const DIR: &str = "ms0:/PSP/GAME/AngleZero/CARS/";
 
-/// Room for every car that can be resident at once. The E36 is 239 KB at 15k triangles; four cars
-/// at the 10k target is comfortably inside this, and it is a fifth of one per cent of the machine.
-const ARENA_BYTES: usize = 768 * 1024;
+/// Room for every car that can be resident at once.
+///
+/// Raised from 768 KB when cars started carrying their coarse levels: the E36 went from 156 KB to
+/// 257 KB for LOD1 and LOD2, which is the trade those levels are — a third again of the file, to
+/// draw a distant car for a sixth of the triangles. Four cars at that size need a megabyte, and
+/// this is 1.5 to leave room for the textures that are not in the format yet. Still under 7% of
+/// the machine's memory.
+const ARENA_BYTES: usize = 1536 * 1024;
 const MAX_CARS: usize = 4;
 /// Longest path this will assemble, including the NUL.
 const PATH_MAX: usize = 96;

@@ -14,6 +14,12 @@ scale = 1.2
 
 triangles = 15000
 
+# Coarser copies of the whole car, for when it is not the one being driven. The plan's shape:
+# LOD0 for the player, LOD1 for a car a few lengths away, LOD2 for anything far enough back that
+# it is a hundred pixels wide. Each is decimated from the welded original rather than from the
+# level above, so LOD2 carries one decimation's error instead of three.
+lods = [4500, 1800]
+
 [wheels]
 # There are no wheel nodes to match: all four tyres are one 98,000-triangle mesh and all four rims
 # are another, because the exporter merged by material. These patterns say which *meshes* the

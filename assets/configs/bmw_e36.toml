@@ -29,6 +29,12 @@ triangles = 15000
 # saloon, so the E36 takes the defaults — and a car that says nothing about how it drives is the
 # case most worth having an example of. `toyota_ae86.toml` is the other one.
 
+# Coarser copies of the whole car, for when it is not the one being driven. The plan's shape:
+# LOD0 for the player, LOD1 for a car a few lengths away, LOD2 for anything far enough back that
+# it is a hundred pixels wide. Each is decimated from the welded original rather than from the
+# level above, so LOD2 carries one decimation's error instead of three.
+lods = [4500, 1800]
+
 [wheels]
 # Each corner is three assemblies with three unrelated names, and all of them must turn together:
 #   Object_4.001-.004         the tyres, 13,166 triangles each

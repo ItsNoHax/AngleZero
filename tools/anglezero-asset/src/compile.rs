@@ -46,6 +46,14 @@ const DIFFUSE: f32 = 0.55;
 /// Lights read as lit rather than shaded: a lamp lens with a shadow on it looks broken.
 const LIGHT_FLOOR: f32 = 0.92;
 
+/// How far away each level takes over, in metres.
+///
+/// The chase camera sits about 11 m behind the player's car, so LOD0 has to cover everything
+/// nearer than that; 18 m is the first distance at which a car is small enough on a 480-wide
+/// screen for a halved triangle count not to show. These are starting points — the benchmark
+/// modes are how they get checked against something.
+const LOD_DISTANCES: [f32; 3] = [0.0, 18.0, 45.0];
+
 pub struct Compiled {
     pub bytes: Vec<u8>,
     pub report: Report,
@@ -55,6 +63,7 @@ pub struct Compiled {
 ///
 /// Kept separate until decimation is done, because a budget is only meaningful per part: a part is
 /// the unit that is either on the outside of the car or not.
+#[derive(Clone)]
 struct Piece {
     /// Colours here are the material's base, unlit. The light term lives alongside until welding
     /// and decimation are done with it — see `simplify`.
@@ -66,6 +75,7 @@ struct Piece {
 }
 
 /// One output draw call: a category, optionally belonging to a wheel.
+#[derive(Clone)]
 struct Bucket {
     category: Category,
     /// `None` for the body.
@@ -257,100 +267,47 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // few pixels through the grille; given a share of its category's budget it takes a third of
     // the paint's detail with it, because a decimator handed a whole category has no idea which
     // half of it is on the outside.
-    let bucket_targets = share_budget(
-        &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
-        budget,
-        MIN_BUCKET_TRIANGLES,
-    );
+    //
+    // Kept before anything is decimated, so that each extra level is built from the welded
+    // original. Building LOD2 out of LOD1 would carry three decimations' worth of error into the
+    // level with the fewest triangles to hide it in.
+    let welded = if config.lods.is_empty() {
+        Vec::new()
+    } else {
+        buckets.clone()
+    };
 
-    for (b, bucket_target) in buckets.iter_mut().zip(&bucket_targets) {
-        let piece_targets = share_budget(
-            &b.pieces
-                .iter()
-                .map(|p| (p.pixels as f64, p.indices.len() / 3))
-                .collect::<Vec<_>>(),
-            *bucket_target,
-            MIN_PIECE_TRIANGLES,
-        );
-
-        let before: usize = b.pieces.iter().map(|p| p.indices.len() / 3).sum();
-        let mut stuck = 0;
-        // Weighted by how many triangles ended up carrying it, not the worst of them. A bolt taken
-        // from 200 triangles to 4 has moved half its own width and is still a bolt; the number
-        // that matters is what happened to the panel it is screwed to.
-        let mut error_sum = 0.0f64;
-        let mut error_weight = 0.0f64;
-        for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
-            let error = simplify::reduce(&mut p.vertices, &mut p.light, &mut p.indices, *target);
-
-            // Some geometry cannot be simplified at all. The E36's engine block is 80,869
-            // triangles that both simplifiers hand back untouched: it is a mass of hoses, fins and
-            // fasteners with enough non-manifold junk in it that there is no collapse left to make
-            // and no cluster the sloppy pass will accept. Keeping it means writing a car twenty
-            // times its budget for a part the budget valued at four triangles, so it goes.
-            //
-            // Only ever applied to parts that were allocated next to nothing, which by
-            // construction means the visibility sweep barely saw them. A part worth thousands of
-            // triangles that will not simplify is kept, and warned about, because dropping a wing
-            // to save a budget is the wrong trade in the other direction.
-            if *target <= STUCK_TARGET && p.indices.len() / 3 > target * 4 {
-                stuck += p.indices.len() / 3;
-                p.indices.clear();
-                p.vertices.clear();
-                p.light.clear();
-                continue;
-            }
-            // Only what survives counts towards the bucket's error. A part that was dropped for
-            // refusing to simplify would otherwise report its 92% against the panel next to it,
-            // and the warning that reads would be about the wrong thing entirely.
-            let weight = (p.indices.len() / 3) as f64;
-            error_sum += error as f64 * weight;
-            error_weight += weight;
-        }
-        let error = if error_weight > 0.0 {
-            (error_sum / error_weight) as f32
-        } else {
-            0.0
-        };
-        if stuck > 0 {
-            report.note_stuck(b.category, stuck);
-        }
-        b.pieces.retain(|p| p.indices.len() >= 3);
-
-        report.note_bucket(
-            b.category,
-            b.wheel,
-            b.source_triangles,
-            before,
-            b.pieces.iter().map(|p| p.indices.len() / 3).sum(),
-            error,
-        );
-    }
-
-    // Only now is the light folded in: welding averaged it and decimation moved vertices about,
-    // and both of those are the reason it was kept out of the colour until here.
-    for b in &mut buckets {
-        for p in &mut b.pieces {
-            for (v, l) in p.vertices.iter_mut().zip(&p.light) {
-                v.color = apply_light(v.color, *l);
-            }
-        }
-        b.flatten();
-    }
-
-    // Drop anything simplification emptied, so the file has no zero-triangle draw calls in it.
-    buckets.retain(|b| b.indices.len() >= 3);
+    spend_budget(&mut buckets, budget, Some(&mut report));
     if buckets.is_empty() {
         return Err("the triangle budget left nothing to draw".into());
     }
 
-    // One material record per category actually used.
+    // The extra levels, coarsest last. One that collapses to nothing is dropped rather than
+    // written as a level with no draw calls in it.
+    let mut levels: Vec<Vec<Bucket>> = Vec::new();
+    for &lod_budget in &config.lods {
+        let mut coarse = welded.clone();
+        spend_budget(&mut coarse, lod_budget, None);
+        if coarse.is_empty() {
+            report.warn(format!(
+                "LOD at {lod_budget} triangles collapsed to nothing and was dropped"
+            ));
+        } else {
+            levels.push(coarse);
+        }
+    }
+
+    // One material record per category actually used, across every level. A coarser level can only
+    // ever be a subset of LOD0, but the mesh writer looks its material up in this list and would
+    // panic rather than mis-draw if that ever stopped being true, so it is built from all of them.
     let mut categories: Vec<Category> = Vec::new();
-    for b in &buckets {
+    for b in buckets.iter().chain(levels.iter().flatten()) {
         if !categories.contains(&b.category) {
             categories.push(b.category);
         }
     }
+
+
     let materials: Vec<MaterialDef> = categories
         .iter()
         .map(|c| MaterialDef {
@@ -365,54 +322,80 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
     let mut meshes: Vec<Mesh> = Vec::new();
+    // Where each level's meshes begin. LOD0's are first, so a reader that knows nothing about
+    // levels draws exactly the car it always drew.
+    let mut level_ranges: Vec<(u32, u16, usize)> = Vec::new();
+    // Where LOD0 ends, so the report can say what the car the player sees costs rather than what
+    // every level of it costs added together.
+    let (mut lod0_vertices, mut lod0_indices) = (0usize, 0usize);
 
-    for b in &buckets {
-        let base = vertices.len();
-        if base + b.vertices.len() > u16::MAX as usize + 1 {
-            return Err(format!(
-                "the compiled car needs {} vertices for {} triangles, and the format holds {}. \
-                 Lower the triangle budget.",
-                base + b.vertices.len(),
-                (indices.len() + b.indices.len()) / 3,
-                u16::MAX as usize + 1
-            ));
+    for (level, group) in core::iter::once(&buckets).chain(levels.iter()).enumerate() {
+        let first_mesh = meshes.len() as u32;
+        let mut level_triangles = 0usize;
+
+        for b in group {
+            let base = vertices.len();
+            if base + b.vertices.len() > u16::MAX as usize + 1 {
+                return Err(format!(
+                    "the compiled car needs {} vertices for {} triangles across {} levels, and \
+                     the format holds {}. Lower the triangle budget, or ask for fewer LODs.",
+                    base + b.vertices.len(),
+                    (indices.len() + b.indices.len()) / 3,
+                    level + 1,
+                    u16::MAX as usize + 1
+                ));
+            }
+            let first_index = indices.len() as u32;
+            vertices.extend_from_slice(&b.vertices);
+            indices.extend(b.indices.iter().map(|i| (*i as usize + base) as u16));
+
+            let mut bounds = Bounds::EMPTY;
+            for v in &b.vertices {
+                bounds.add([v.x, v.y, v.z]);
+            }
+            let centre = [
+                (bounds.min[0] + bounds.max[0]) * 0.5,
+                (bounds.min[1] + bounds.max[1]) * 0.5,
+                (bounds.min[2] + bounds.max[2]) * 0.5,
+            ];
+            let radius = b
+                .vertices
+                .iter()
+                .map(|v| {
+                    let d = [v.x - centre[0], v.y - centre[1], v.z - centre[2]];
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                })
+                .fold(0.0f32, f32::max);
+
+            let name = match b.wheel {
+                Some(c) => {
+                    strings.push(&format!("{}_{}", CORNER_NAMES[c as usize], b.category.name()))
+                }
+                None => strings.push(b.category.name()),
+            };
+            let index_count = (indices.len() as u32) - first_index;
+            level_triangles += index_count as usize / 3;
+            meshes.push(Mesh {
+                first_index,
+                index_count,
+                material: categories.iter().position(|c| *c == b.category).unwrap() as u16,
+                wheel: b.wheel.map(u16::from).unwrap_or(NO_WHEEL),
+                name,
+                flags: 0,
+                center: centre,
+                radius,
+            });
         }
-        let first_index = indices.len() as u32;
-        vertices.extend_from_slice(&b.vertices);
-        indices.extend(b.indices.iter().map(|i| (*i as usize + base) as u16));
 
-        let mut bounds = Bounds::EMPTY;
-        for v in &b.vertices {
-            bounds.add([v.x, v.y, v.z]);
+        level_ranges.push((
+            first_mesh,
+            (meshes.len() as u32 - first_mesh) as u16,
+            level_triangles,
+        ));
+        if level == 0 {
+            lod0_vertices = vertices.len();
+            lod0_indices = indices.len();
         }
-        let centre = [
-            (bounds.min[0] + bounds.max[0]) * 0.5,
-            (bounds.min[1] + bounds.max[1]) * 0.5,
-            (bounds.min[2] + bounds.max[2]) * 0.5,
-        ];
-        let radius = b
-            .vertices
-            .iter()
-            .map(|v| {
-                let d = [v.x - centre[0], v.y - centre[1], v.z - centre[2]];
-                (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
-            })
-            .fold(0.0f32, f32::max);
-
-        let name = match b.wheel {
-            Some(c) => strings.push(&format!("{}_{}", CORNER_NAMES[c as usize], b.category.name())),
-            None => strings.push(b.category.name()),
-        };
-        meshes.push(Mesh {
-            first_index,
-            index_count: (indices.len() as u32) - first_index,
-            material: categories.iter().position(|c| *c == b.category).unwrap() as u16,
-            wheel: b.wheel.map(u16::from).unwrap_or(NO_WHEEL),
-            name,
-            flags: 0,
-            center: centre,
-            radius,
-        });
     }
 
     let wheel_defs: Vec<WheelDef> = found
@@ -444,7 +427,21 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         }
     }
 
-    report.note_output(&vertices, &indices, &meshes, &materials, &wheel_defs, bounds);
+    // LOD0's slice, not the whole array: "Compiled: 9,540 triangles" has to mean the car that is
+    // drawn, or the number cannot be compared against the budget that produced it.
+    report.note_output(
+        &vertices[..lod0_vertices],
+        &indices[..lod0_indices],
+        &meshes[..level_ranges[0].1 as usize],
+        &materials,
+        &wheel_defs,
+        bounds,
+    );
+    report.note_levels(
+        level_ranges.iter().map(|r| r.2).collect(),
+        vertices.len(),
+        indices.len(),
+    );
 
     let bytes = write(
         &vertices,
@@ -456,6 +453,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         credit_at,
         name_at,
         handling,
+        &level_ranges,
         bounds,
     );
     report.note_size(&bytes);
@@ -797,6 +795,7 @@ fn write(
     credit: u32,
     name: u32,
     handling: angle_zero::vehicle::CarHandling,
+    levels: &[(u32, u16, usize)],
     bounds: Bounds,
 ) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_BYTES];
@@ -826,6 +825,29 @@ fn write(
     }
     let strings_at = pad(&mut out);
     out.extend_from_slice(strings);
+    // The level table, written only when there is more than one level. LOD0's meshes are first in
+    // the mesh array and `MESH_COUNT` covers only them, so a reader that ignores this section
+    // draws the full-detail car and nothing else — which is what makes the section additive.
+    let lods_at = if levels.len() > 1 {
+        let at = pad(&mut out);
+        out.extend_from_slice(&(levels.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes());
+        out.extend_from_slice(&0u64.to_le_bytes());
+        for (i, (first_mesh, mesh_count, triangles)) in levels.iter().enumerate() {
+            out.extend_from_slice(&first_mesh.to_le_bytes());
+            out.extend_from_slice(&mesh_count.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            // Beyond this many metres, this level is good enough. LOD0 starts at zero and each
+            // level after it takes over further away; the runtime picks the last one whose
+            // distance it is past, so the order here is the only thing that matters.
+            out.extend_from_slice(&LOD_DISTANCES[i.min(LOD_DISTANCES.len() - 1)].to_le_bytes());
+            out.extend_from_slice(&(*triangles as u32).to_le_bytes());
+        }
+        at
+    } else {
+        0
+    };
     let handling_at = pad(&mut out);
     for v in [
         handling.mass,
@@ -873,7 +895,7 @@ fn write(
     put_u32(&mut out, f::INDICES_AT, indices_at as u32);
     put_u32(&mut out, f::STRINGS_AT, strings_at as u32);
     put_u32(&mut out, f::STRINGS_BYTES, strings.len() as u32);
-    put_u32(&mut out, f::LODS_AT, 0);
+    put_u32(&mut out, f::LODS_AT, lods_at as u32);
     put_u32(&mut out, f::CREDIT, credit);
     put_u32(&mut out, f::NAME, name);
     put_u32(&mut out, f::HANDLING_AT, handling_at as u32);
@@ -899,6 +921,101 @@ fn put_u32(out: &mut [u8], at: usize, v: u32) {
 
 fn put_f32(out: &mut [u8], at: usize, v: f32) {
     out[at..at + 4].copy_from_slice(&v.to_le_bytes());
+}
+
+/// Shares a budget out across welded buckets and decimates each bucket to its share.
+///
+/// Taken out of `compile` so it can be run more than once over the same welded geometry: an LOD is
+/// this again with a smaller number.
+///
+/// The report is only filled in for the level written as LOD0. The others would double every line
+/// in it, and it is the car the player is looking at whose error is worth warning about.
+fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, mut report: Option<&mut Report>) {
+    let bucket_targets = share_budget(
+        &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
+        budget,
+        MIN_BUCKET_TRIANGLES,
+    );
+
+    for (b, bucket_target) in buckets.iter_mut().zip(&bucket_targets) {
+        let piece_targets = share_budget(
+            &b.pieces
+                .iter()
+                .map(|p| (p.pixels as f64, p.indices.len() / 3))
+                .collect::<Vec<_>>(),
+            *bucket_target,
+            MIN_PIECE_TRIANGLES,
+        );
+
+        let before: usize = b.pieces.iter().map(|p| p.indices.len() / 3).sum();
+        let mut stuck = 0;
+        // Weighted by how many triangles ended up carrying it, not the worst of them. A bolt taken
+        // from 200 triangles to 4 has moved half its own width and is still a bolt; the number
+        // that matters is what happened to the panel it is screwed to.
+        let mut error_sum = 0.0f64;
+        let mut error_weight = 0.0f64;
+        for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
+            let error = simplify::reduce(&mut p.vertices, &mut p.light, &mut p.indices, *target);
+
+            // Some geometry cannot be simplified at all. The E36's engine block is 80,869
+            // triangles that both simplifiers hand back untouched: it is a mass of hoses, fins and
+            // fasteners with enough non-manifold junk in it that there is no collapse left to make
+            // and no cluster the sloppy pass will accept. Keeping it means writing a car twenty
+            // times its budget for a part the budget valued at four triangles, so it goes.
+            //
+            // Only ever applied to parts that were allocated next to nothing, which by
+            // construction means the visibility sweep barely saw them. A part worth thousands of
+            // triangles that will not simplify is kept, and warned about, because dropping a wing
+            // to save a budget is the wrong trade in the other direction.
+            if *target <= STUCK_TARGET && p.indices.len() / 3 > target * 4 {
+                stuck += p.indices.len() / 3;
+                p.indices.clear();
+                p.vertices.clear();
+                p.light.clear();
+                continue;
+            }
+            // Only what survives counts towards the bucket's error. A part that was dropped for
+            // refusing to simplify would otherwise report its 92% against the panel next to it,
+            // and the warning that reads would be about the wrong thing entirely.
+            let weight = (p.indices.len() / 3) as f64;
+            error_sum += error as f64 * weight;
+            error_weight += weight;
+        }
+        let error = if error_weight > 0.0 {
+            (error_sum / error_weight) as f32
+        } else {
+            0.0
+        };
+        b.pieces.retain(|p| p.indices.len() >= 3);
+
+        if let Some(report) = report.as_deref_mut() {
+            if stuck > 0 {
+                report.note_stuck(b.category, stuck);
+            }
+            report.note_bucket(
+                b.category,
+                b.wheel,
+                b.source_triangles,
+                before,
+                b.pieces.iter().map(|p| p.indices.len() / 3).sum(),
+                error,
+            );
+        }
+    }
+
+    // Only now is the light folded in: welding averaged it and decimation moved vertices about,
+    // and both of those are the reason it was kept out of the colour until here.
+    for b in buckets.iter_mut() {
+        for p in &mut b.pieces {
+            for (v, l) in p.vertices.iter_mut().zip(&p.light) {
+                v.color = apply_light(v.color, *l);
+            }
+        }
+        b.flatten();
+    }
+
+    // Drop anything simplification emptied, so the file has no zero-triangle draw calls in it.
+    buckets.retain(|b| b.indices.len() >= 3);
 }
 
 #[cfg(test)]
@@ -961,6 +1078,49 @@ mod tests {
             "inertia was {}",
             h.inertia
         );
+    }
+
+    /// Coarse levels are written, are actually coarser, and are picked by distance — with the
+    /// full-detail car still first in the mesh array, so a reader that ignores the level table
+    /// draws exactly what it drew before there was one.
+    #[test]
+    fn coarse_levels_are_written_and_chosen_by_distance() {
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        config.lods = vec![120, 40];
+        let compiled = compile(&mut model, &config, 400).unwrap();
+        let car = angle_zero::azcar::Car::parse(&compiled.bytes).unwrap();
+
+        assert_eq!(car.lod_count(), 3);
+        let lods: Vec<_> = (0..3).map(|i| car.lod(i)).collect();
+        assert_eq!(lods[0].first_mesh, 0, "LOD0 has to come first");
+        // Each level is its own run of meshes, and never fewer triangles than the one after it.
+        // Not strictly fewer: this test car is nine boxes, already at the floor a decimator can
+        // take a closed shell to, so no budget makes it smaller. What the coarse levels are worth
+        // is measured on the real cars — the E36 goes 9,540 / 3,634 / 1,600 — and what is checked
+        // here is that they are written, found and chosen, which is the part written by hand.
+        assert!(lods[1].first_mesh >= lods[0].mesh_count as u32);
+        assert!(lods[2].first_mesh >= lods[1].first_mesh + lods[1].mesh_count as u32);
+        assert!(lods[0].triangles >= lods[1].triangles && lods[1].triangles >= lods[2].triangles);
+        // `triangle_count` is the car as drawn up close, not every level added together.
+        assert_eq!(car.triangle_count(), lods[0].triangles as usize);
+        assert!(car.total_triangle_count() > car.triangle_count());
+
+        // The chase camera sits about 11 m back, which has to still be the full-detail car.
+        assert_eq!(car.lod_for_distance(0.0).first_mesh, lods[0].first_mesh);
+        assert_eq!(car.lod_for_distance(11.5).first_mesh, lods[0].first_mesh);
+        assert_eq!(car.lod_for_distance(25.0).first_mesh, lods[1].first_mesh);
+        assert_eq!(car.lod_for_distance(200.0).first_mesh, lods[2].first_mesh);
+    }
+
+    /// A car with no level table answers as one level, so nothing has to special-case it.
+    #[test]
+    fn a_car_without_levels_is_a_car_with_one() {
+        let (bytes, _) = compile_test_car(10_000);
+        let car = angle_zero::azcar::Car::parse(&bytes).unwrap();
+        assert_eq!(car.lod_count(), 1);
+        assert_eq!(car.lod(0).mesh_count as usize, car.mesh_count());
+        assert_eq!(car.lod_for_distance(500.0).first_mesh, 0);
     }
 
     /// A car whose numbers would break the simulation is refused, rather than written out and
