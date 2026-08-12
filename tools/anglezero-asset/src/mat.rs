@@ -36,6 +36,22 @@ pub fn point(m: &Mat4, p: [f32; 3]) -> [f32; 3] {
     out
 }
 
+/// Transforms a direction: rotation and scale, no translation.
+///
+/// This is the plain upper 3×3, not its inverse transpose, so it is only correct for normals under
+/// uniform scale. Car models are rigid assemblies of parts and the result is renormalised anyway;
+/// the day a source model arrives with a non-uniform scale on a node, this is where the shading
+/// starts to lie.
+pub fn direction(m: &Mat4, v: [f32; 3]) -> [f32; 3] {
+    let mut out = [0.0f32; 3];
+    for (i, &c) in v.iter().enumerate() {
+        for (o, cell) in out.iter_mut().enumerate() {
+            *cell += m[i][o] * c;
+        }
+    }
+    out
+}
+
 /// An axis-aligned box that grows to contain whatever it is shown.
 #[derive(Clone, Copy, Debug)]
 pub struct Bounds {

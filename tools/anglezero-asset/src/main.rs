@@ -12,8 +12,10 @@
 
 use std::process::ExitCode;
 
+mod extract;
 mod inspect;
 mod mat;
+mod model;
 
 /// Anything the tool refuses to do, phrased for the person running it. Section 25 of the plan is
 /// the rule here: fail loudly rather than write a broken asset.
@@ -45,13 +47,16 @@ fn main() -> ExitCode {
 fn usage() {
     println!("AngleZero car asset compiler");
     println!();
-    println!("  anglezero-asset inspect <model.glb>");
+    println!("  anglezero-asset inspect [--deep] <model.glb>");
     println!("      Report what is inside a source model, without converting anything.");
+    println!("      --deep also reads every vertex, and reports what only the data can say.");
 }
 
 fn run_inspect(args: &[&str]) -> Result<()> {
-    match args {
-        [path] => inspect::run(std::path::Path::new(path)),
+    let deep = args.contains(&"--deep");
+    let paths: Vec<&&str> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    match paths[..] {
+        [path] => inspect::run(std::path::Path::new(path), deep),
         [] => Err("inspect needs a path to a .glb".into()),
         _ => Err("inspect takes exactly one path".into()),
     }

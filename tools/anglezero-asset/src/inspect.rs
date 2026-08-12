@@ -9,13 +9,14 @@
 //! embedded PNGs are never decoded. That is the difference between a report in a moment and one
 //! after half a minute of image decoding.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use gltf::mesh::Mode;
 use gltf::Gltf;
 
 use crate::mat::{self, Bounds, Mat4};
+use crate::model;
 use crate::Result;
 
 /// One mesh, as it is drawn: a mesh referenced by two nodes is counted twice, because that is what
@@ -31,7 +32,7 @@ struct MeshUse {
 /// Triangles and part count per material name.
 type Materials = HashMap<String, (usize, usize)>;
 
-pub fn run(path: &Path) -> Result<()> {
+pub fn run(path: &Path, deep: bool) -> Result<()> {
     let gltf = Gltf::open(path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
 
     let mut uses = Vec::new();
@@ -140,6 +141,189 @@ pub fn run(path: &Path) -> Result<()> {
             println!("WARNING: {w}");
         }
     }
+
+    if deep {
+        println!();
+        deep_report(path)?;
+    }
+    Ok(())
+}
+
+/// The half of the report that costs vertex reads: everything above comes out of the glTF's own
+/// metadata, and metadata can be wrong. This runs the real extraction and measures the result.
+///
+/// The checks are chosen for the ways a source model quietly breaks a converter: an accessor whose
+/// declared min/max disagrees with its contents, triangles with no area, parts with no UVs that a
+/// texture stage would later map to a single texel, and vertices split so finely that welding is
+/// the difference between a simplifier that works and one that cannot collapse anything.
+fn deep_report(path: &Path) -> Result<()> {
+    let start = std::time::Instant::now();
+    let model = crate::extract::load(path)?;
+    let elapsed = start.elapsed();
+
+    println!(
+        "Extracted {} into {} parts, {} vertices, {} triangles in {:.2} s",
+        model.source,
+        commas(model.parts.len()),
+        commas(model.vertices()),
+        commas(model.triangles()),
+        elapsed.as_secs_f32()
+    );
+    // How many real objects those parts add up to. Exporters emit one node per material, so a
+    // bumper carrying paint, black trim and chrome arrives as three parts of one object — and it
+    // is the object, not the part, that is visible or hidden as a whole.
+    let objects: HashSet<&str> = model.parts.iter().map(|p| p.parent.as_str()).collect();
+    println!(
+        "  {} objects, once parts sharing a parent node are counted as one",
+        commas(objects.len())
+    );
+    println!();
+
+    let b = model.bounds();
+    println!("Bounding box from the vertices themselves:");
+    for (axis, i) in [("X", 0), ("Y", 1), ("Z", 2)] {
+        println!(
+            "  {axis}: {:8.3} .. {:8.3}   ({:.3} across)",
+            b.min[i],
+            b.max[i],
+            b.size()[i]
+        );
+    }
+    println!();
+
+    let mut degenerate = 0usize;
+    let mut without_uvs = (0usize, 0usize);
+    let mut unique = HashSet::new();
+    for part in &model.parts {
+        if part.uvs.len() != part.positions.len() {
+            without_uvs.0 += 1;
+            without_uvs.1 += part.triangles();
+        }
+        for t in part.indices.chunks_exact(3) {
+            let (a, b, c) = (
+                part.positions[t[0] as usize],
+                part.positions[t[1] as usize],
+                part.positions[t[2] as usize],
+            );
+            let n = model::cross(model::sub(b, a), model::sub(c, a));
+            // Twice the area. A triangle under a square micrometre covers no pixel at any distance
+            // the car is ever seen from.
+            if model::dot(n, n).sqrt() < 2e-12 {
+                degenerate += 1;
+            }
+        }
+        for p in &part.positions {
+            unique.insert([p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]);
+        }
+    }
+
+    println!("Geometry:");
+    println!(
+        "  Degenerate triangles:     {:>9}",
+        commas(degenerate)
+    );
+    println!(
+        "  Parts without UVs:        {:>9}  ({} triangles)",
+        commas(without_uvs.0),
+        commas(without_uvs.1)
+    );
+    println!(
+        "  Distinct positions:       {:>9}  of {} vertices ({:.1}% are seams or splits)",
+        commas(unique.len()),
+        commas(model.vertices()),
+        100.0 * (1.0 - unique.len() as f32 / model.vertices().max(1) as f32)
+    );
+    println!();
+
+    // What the material stage will have to work from. The base colour is the whole of the paint on
+    // a car with no texture on that material, and on this pipeline it is what gets baked into the
+    // vertex colours, so it is worth seeing before anything is baked.
+    println!("Materials as extracted:");
+    for (name, tris) in model.triangles_by_material() {
+        let m = model
+            .materials
+            .iter()
+            .find(|m| m.name == name)
+            .expect("material named by a part");
+        let c = m.base_color;
+        println!(
+            "  {:<34} {:>9} tris  rgba({:.2} {:.2} {:.2} {:.2})  metal {:.2} rough {:.2}{}{}",
+            truncate(name, 34),
+            commas(tris),
+            c[0],
+            c[1],
+            c[2],
+            c[3],
+            m.metallic,
+            m.roughness,
+            match m.image {
+                Some(i) => format!("  tex #{i}"),
+                None => String::new(),
+            },
+            // Both of these are how a light is told from paint without reading its name: a lamp
+            // lens is emissive, and glass and lenses are the parts modelled thin enough to be
+            // marked double-sided.
+            match (m.transparent, m.emissive != [0.0; 3], m.double_sided) {
+                (false, false, false) => String::new(),
+                (t, e, d) => format!(
+                    " {}{}{}",
+                    if t { "transparent " } else { "" },
+                    if e { "emissive " } else { "" },
+                    if d { "two-sided" } else { "" }
+                ),
+            },
+        );
+    }
+    println!();
+
+    if !model.images.is_empty() {
+        println!("Embedded images ({}):", model.images.len());
+        for (i, img) in model.images.iter().enumerate() {
+            println!(
+                "  #{i:<3} {:<28} {:>8} KB  {}",
+                truncate(&img.name, 28),
+                commas(img.data.len() / 1024),
+                img.mime
+            );
+        }
+        println!();
+    }
+
+    // Names are given as the node's, because that is the string a car config's wheel and
+    // importance rules are matched against.
+    println!("Largest parts as extracted:");
+    for part in largest_parts(&model, 12) {
+        let b = part.bounds();
+        let c = centre(&b);
+        let s = b.size();
+        println!(
+            "  {:<38} {:>8} tris  at ({:6.2},{:6.2},{:6.2})  {:.2}x{:.2}x{:.2}  [{}]",
+            truncate(&part.node, 38),
+            commas(part.triangles()),
+            c[0],
+            c[1],
+            c[2],
+            s[0],
+            s[1],
+            s[2],
+            truncate(&model.materials[part.material].name, 20),
+        );
+    }
+    println!();
+
+    let credit = &model.credit;
+    if credit.title.is_some() || credit.author.is_some() {
+        println!("Credit:");
+        for (label, value) in [
+            ("Title", &credit.title),
+            ("Author", &credit.author),
+            ("Licence", &credit.license),
+        ] {
+            if let Some(v) = value {
+                println!("  {label}: {v}");
+            }
+        }
+    }
     Ok(())
 }
 
@@ -223,6 +407,14 @@ impl Walk<'_> {
             self.node(&child, &world, depth + 1);
         }
     }
+}
+
+/// The `n` heaviest parts, which is where any triangle budget is won or lost.
+fn largest_parts(model: &model::SourceModel, n: usize) -> Vec<&model::Part> {
+    let mut parts: Vec<&model::Part> = model.parts.iter().collect();
+    parts.sort_by_key(|p| std::cmp::Reverse(p.triangles()));
+    parts.truncate(n);
+    parts
 }
 
 /// The middle of a part's box. This is how a wheel is told from a mirror: four parts of similar
