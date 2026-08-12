@@ -28,6 +28,7 @@ struct Builder {
     version: u16,
     vertex_format: u32,
     credit: u32,
+    name: u32,
 }
 
 impl Builder {
@@ -94,6 +95,7 @@ impl Builder {
             version: VERSION,
             vertex_format: VERTEX_COLOR_8888_F32,
             credit: NO_CREDIT,
+            name: NO_CREDIT,
         }
     }
 
@@ -145,6 +147,7 @@ impl Builder {
         put_u32(&mut out, field::STRINGS_AT, strings_at as u32);
         put_u32(&mut out, field::STRINGS_BYTES, self.strings.len() as u32);
         put_u32(&mut out, field::CREDIT, self.credit);
+        put_u32(&mut out, field::NAME, self.name);
         let total = out.len() as u32;
         put_u32(&mut out, field::LENGTH, total);
         out

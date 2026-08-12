@@ -1,0 +1,31 @@
+# Toyota AE86 Trueno — the second car, and the one that proves the pipeline.
+#
+# It has nothing in common with the E36 but being a car. 637,294 triangles against 406,626; 28
+# nodes against 472; one node called `ae86-Body` with everything under it split by material rather
+# than by object, where the E36 is one node per part with a child per material. And the materials
+# are in French.
+#
+# Everything below is a name. No Rust changed to add this car.
+
+name = "Toyota AE86"
+
+# The model is 3.49 m long and a Trueno is 4.18 m, uniformly 0.835 of life size.
+scale = 1.2
+
+triangles = 15000
+
+[wheels]
+# There are no wheel nodes to match: all four tyres are one 98,000-triangle mesh and all four rims
+# are another, because the exporter merged by material. These patterns say which *meshes* the
+# wheels are inside, and the converter cuts them into corners by where each triangle sits.
+match = ["pneu", "jante"]
+
+[materials]
+# `pneu` is a tyre, `jante` a wheel rim, `carrosserie` the bodywork, `vitre` glass, `phares`
+# headlights, `miroir` a mirror. None of these are words the converter's built-in list knows, and
+# teaching it French would only move the problem to the next model — the E36 needed German for its
+# rims and Russian for its headlights.
+tyre = ["pneu"]
+chrome = ["jante", "miroir"]
+window = ["vitre"]
+light = ["phares", "lumier", "taillights"]

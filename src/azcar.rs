@@ -30,7 +30,7 @@ pub const MAGIC: [u8; 4] = *b"AZCR";
 /// The only version this build can read.
 pub const VERSION: u16 = 1;
 /// Bytes before the first section. A multiple of 16, so section offsets stay aligned.
-pub const HEADER_BYTES: usize = 96;
+pub const HEADER_BYTES: usize = 112;
 
 pub const MESH_BYTES: usize = 32;
 pub const MATERIAL_BYTES: usize = 16;
@@ -290,6 +290,8 @@ pub mod field {
     pub const LODS_AT: usize = 88;
     /// Offset into the string table of the attribution line, or `NO_CREDIT`.
     pub const CREDIT: usize = 92;
+    /// Offset into the string table of the car's name, as a person would say it.
+    pub const NAME: usize = 96;
 }
 
 /// The car carries no attribution line.
@@ -549,6 +551,14 @@ impl<'a> Car<'a> {
         crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count])
     }
 
+    /// What the car is called. `BMW E36`, not `bmw_e36.azcar`.
+    ///
+    /// In the asset rather than in a table in the game, so that a car dropped onto the memory
+    /// stick can name itself. Nothing about drawing depends on it.
+    pub fn name_of_car(&self) -> &'a [u8] {
+        self.string_at(field::NAME)
+    }
+
     /// Who made the source model, and under what licence.
     ///
     /// Not a nicety. Car models come from scanning and modelling sites under licences that require
@@ -556,7 +566,12 @@ impl<'a> Car<'a> {
     /// that a rebuild can lose. A car that carries a credit is a car whose credit the game can
     /// display without anybody having to remember to.
     pub fn credit(&self) -> &'a [u8] {
-        let at = le_u32(self.bytes, field::CREDIT);
+        self.string_at(field::CREDIT)
+    }
+
+    /// A string named by a header field, or empty when the field says there is none.
+    fn string_at(&self, field: usize) -> &'a [u8] {
+        let at = le_u32(self.bytes, field);
         if at == NO_CREDIT || at > u16::MAX as u32 {
             return b"";
         }

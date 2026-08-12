@@ -42,20 +42,24 @@ static mut LIST: psp::Align16<[u32; 262144]> = psp::Align16([0; 262144]);
 static mut TRACK: Track = Track::EMPTY;
 static mut GAME: Game = Game::new();
 
-/// The car the player drives, by file name.
-///
-/// A string rather than anything compiled in, because the model behind it is a build artifact:
-/// `anglezero-asset convert` writes it and it is copied onto the stick beside the build. When
-/// there is more than one car this becomes a lookup in a vehicle definition, and nothing about
-/// the loader or the renderer changes.
-const PLAYER_CAR: &str = "bmw_e36.azcar";
-
 /// Why there is no car, if there is no car. Read by the title screen.
 static mut CAR_LOAD: Option<car::LoadError> = None;
 
 /// The car asset's loading fault, or `None` if it loaded.
 pub fn car_fault() -> Option<car::LoadError> {
     unsafe { CAR_LOAD }
+}
+
+/// Takes the vehicle's proportions off whichever car it is now driving.
+///
+/// The wheels have to roll at the speed the car is going and the tyre marks have to land under the
+/// tyres, and both of those are measurements of the model rather than of the physics — so they
+/// have to be taken again whenever the model changes. Handling does not change with the car: the
+/// simulation drives every one of them the same.
+fn refresh_car_shape(game: &mut Game) {
+    if let Some(car) = car::get(game.vehicle.model) {
+        game.vehicle.shape = car.shape();
+    }
 }
 
 /// Ask the emulator to capture the display framebuffer. PPSSPP writes it to whatever path was
@@ -161,9 +165,9 @@ pub fn psp_main() {
         let track = &mut *(&raw mut TRACK);
         Track::generate(track);
         scratch::init();
-        // Before the renderer, which asks the loaded car for its wheel positions. A car that fails
-        // to load is not fatal — the game runs, and the title screen says why there is no car.
-        CAR_LOAD = car::load(PLAYER_CAR).err();
+        // Every car on the stick, whatever they are called. A car that fails to load is not fatal
+        // — the game runs, and the title screen says why there is no car.
+        CAR_LOAD = car::load_all();
         render::init(track);
         text::init();
         hud::init_minimap(track);
@@ -179,12 +183,8 @@ pub fn psp_main() {
 
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
-        // The car's own proportions, so the wheels roll at the speed the car is going and the tyre
-        // marks land under the tyres. Handling is unaffected: the physics drives every car the
-        // same, and this is only about what is drawn agreeing with it.
-        if let Some(car) = car::get(game.vehicle.model) {
-            game.vehicle.shape = car.shape();
-        }
+        game.car_count = car::count().max(1);
+        refresh_car_shape(game);
         game.enter_title(track);
 
         // The scripted run, loaded before the first frame so frame 0 already has its buttons.
@@ -299,7 +299,13 @@ pub fn psp_main() {
 
             #[cfg(feature = "devtools")]
             let work_start = sys::sceKernelGetSystemTimeLow();
+            let driving = game.vehicle.model;
             game.update(track, buttons, dt);
+            // The title screen can swap the car. Re-measure only when it actually changed, rather
+            // than every frame for a value that almost never moves.
+            if game.vehicle.model != driving {
+                refresh_car_shape(game);
+            }
             if game.take_record_dirty() {
                 storage::store(&game.record);
             }

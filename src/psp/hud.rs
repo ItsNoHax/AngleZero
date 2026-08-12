@@ -326,9 +326,16 @@ fn draw_title(game: &Game) {
     text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
     draw_best(game, 250.0);
 
-    // The car model is somebody else's work under a licence that asks for a credit. The line comes
-    // out of the asset rather than out of this file, so it stays true when the car is swapped.
-    if let Some(car) = super::car::get(0) {
+    // Which car, and its credit. Both come out of the asset rather than out of this file, so both
+    // stay true when the car is swapped — and neither needs a table of cars in the game.
+    if let Some(car) = super::car::get(game.vehicle.model) {
+        let name = car.name_of_car();
+        if !name.is_empty() {
+            text::draw_centered(name, SCREEN_W * 0.5, 202.0, 1.0, TEXT);
+        }
+        if game.car_count > 1 {
+            text::draw_centered(b"< L/R TO CHANGE CAR >", SCREEN_W * 0.5, 214.0, 1.0, DIM);
+        }
         let credit = car.credit();
         if !credit.is_empty() {
             text::draw_centered(credit, SCREEN_W * 0.5, 264.0, 1.0, DIM);

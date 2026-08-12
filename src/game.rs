@@ -64,6 +64,10 @@ pub struct RunResult {
 
 pub struct Game {
     pub phase: Phase,
+    /// How many cars the shell managed to load, which is how many the title screen offers. One
+    /// unless something set it: the core has no way to find out for itself, and no business
+    /// knowing where cars come from.
+    pub car_count: usize,
     pub vehicle: Vehicle,
     pub scoring: Scoring,
     pub camera: Camera,
@@ -101,6 +105,7 @@ impl Game {
     pub const fn new() -> Self {
         Game {
             phase: Phase::Title,
+            car_count: 1,
             vehicle: Vehicle::new(),
             scoring: Scoring::new(),
             camera: Camera::new(),
@@ -178,6 +183,19 @@ impl Game {
         self.run_time = 0.0;
     }
 
+    /// Moves to the next or previous car, wrapping.
+    ///
+    /// Only the index changes. What that car is, how it is drawn and what its wheels measure are
+    /// all the asset's business — the simulation drives whatever is in the slot, which is what
+    /// makes a new car a new file.
+    pub fn select_car(&mut self, delta: i32) {
+        if self.car_count < 2 {
+            return;
+        }
+        let n = self.car_count as i32;
+        self.vehicle.model = (((self.vehicle.model as i32 + delta) % n + n) % n) as usize;
+    }
+
     /// Starts a fresh descent from the top of the road.
     pub fn start_run(&mut self, track: &Track) {
         self.vehicle.place_at_node(track, START_NODE);
@@ -230,6 +248,8 @@ impl Game {
         let pressed = |now: bool, before: bool| now && !before;
         let cross_edge = pressed(buttons.cross, self.prev.cross);
         let triangle_edge = pressed(buttons.triangle, self.prev.triangle);
+        let right_edge = pressed(buttons.right, self.prev.right);
+        let left_edge = pressed(buttons.left, self.prev.left);
         self.prev = buttons;
 
         // A hitch must not be simulated in full, or the car teleports through the scenery.
@@ -240,6 +260,15 @@ impl Game {
                 if cross_edge {
                     self.start_run(track);
                 } else {
+                    // Picking a car. Only on the title screen, where the car is standing still in
+                    // front of the player and swapping it is something to look at rather than
+                    // something that happens mid-corner.
+                    if right_edge {
+                        self.select_car(1);
+                    }
+                    if left_edge {
+                        self.select_car(-1);
+                    }
                     self.camera.update_title(&self.vehicle.state, frame_dt);
                 }
             }

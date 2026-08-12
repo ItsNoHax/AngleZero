@@ -129,6 +129,68 @@ pub fn load(name: &str) -> Result<usize, LoadError> {
     }
 }
 
+/// Loads every `.azcar` in the directory, in the order the filesystem lists them.
+///
+/// This is what makes a car a file rather than a build: dropping one onto the memory stick adds it
+/// to the game. Nothing here knows what cars exist, and the only limit is how many slots there
+/// are.
+///
+/// Returns the first fault, if any car failed, having loaded the rest. One bad file should not
+/// cost the player the others.
+pub fn load_all() -> Option<LoadError> {
+    let mut fault = None;
+    let mut dir = [0u8; PATH_MAX];
+    // sceIoDopen wants the directory without its trailing slash.
+    let trimmed = &DIR[..DIR.len() - 1];
+    dir[..trimmed.len()].copy_from_slice(trimmed.as_bytes());
+
+    unsafe {
+        let fd = sys::sceIoDopen(dir.as_ptr());
+        if fd.0 < 0 {
+            return Some(LoadError::Missing);
+        }
+        // Zeroed rather than default: `SceIoDirent` is a C struct with a raw pointer in it and no
+        // `Default`, and the kernel fills every field this reads.
+        let mut entry: sys::SceIoDirent = core::mem::zeroed();
+        while sys::sceIoDread(fd, &mut entry) > 0 {
+            if COUNT >= MAX_CARS {
+                fault = fault.or(Some(LoadError::TooMany));
+                break;
+            }
+            let name = &entry.d_name;
+            let len = name.iter().position(|c| *c == 0).unwrap_or(name.len());
+            let Ok(name) = core::str::from_utf8(&name[..len]) else {
+                continue;
+            };
+            if !ends_with_ignoring_case(name, ".azcar") {
+                continue;
+            }
+            if let Err(e) = load(name) {
+                fault = fault.or(Some(e));
+            }
+        }
+        sys::sceIoDclose(fd);
+    }
+
+    if count() == 0 {
+        return fault.or(Some(LoadError::Missing));
+    }
+    fault
+}
+
+/// Case-insensitive suffix test. Memory sticks are FAT, and FAT is not fussy about case, so a car
+/// copied from a machine that upper-cased it must still be found.
+fn ends_with_ignoring_case(name: &str, suffix: &str) -> bool {
+    let (n, s) = (name.as_bytes(), suffix.as_bytes());
+    if n.len() < s.len() {
+        return false;
+    }
+    n[n.len() - s.len()..]
+        .iter()
+        .zip(s)
+        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+}
+
 /// A loaded car, or `None` for a slot nothing was loaded into.
 pub fn get(slot: usize) -> Option<&'static Car<'static>> {
     unsafe { (*(&raw const CARS)).get(slot).and_then(|c| c.as_ref()) }

@@ -145,6 +145,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // line, which is written first so that a car whose credit matters has it near the front of the
     // table whatever else is in there.
     let mut strings = Strings::default();
+    // Folded to uppercase for the same reason as the credit: the console's font has no lowercase
+    // and draws what it lacks as blanks.
+    let name_at = strings.push(&config.name.to_uppercase()) as u32;
     let credit = credit_line(model);
     let credit_at = credit
         .as_deref()
@@ -439,6 +442,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         &wheel_defs,
         &strings.bytes,
         credit_at,
+        name_at,
         bounds,
     );
     report.note_size(&bytes);
@@ -778,6 +782,7 @@ fn write(
     wheels: &[WheelDef],
     strings: &[u8],
     credit: u32,
+    name: u32,
     bounds: Bounds,
 ) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_BYTES];
@@ -842,6 +847,7 @@ fn write(
     put_u32(&mut out, f::STRINGS_BYTES, strings.len() as u32);
     put_u32(&mut out, f::LODS_AT, 0);
     put_u32(&mut out, f::CREDIT, credit);
+    put_u32(&mut out, f::NAME, name);
     let total = out.len() as u32;
     put_u32(&mut out, f::LENGTH, total);
     out
