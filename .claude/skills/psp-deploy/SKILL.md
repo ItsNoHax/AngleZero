@@ -33,8 +33,29 @@ invent new ones:
 | `PSP/GAME/AngleZero/EBOOT.PBP` | `cargo psp --release` | What actually gets played. ~756 KB. |
 | `PSP/GAME/AngleZeroDev/EBOOT.PBP` | `cargo psp --release --features devtools` | START toggles the counter overlay, SELECT saves a frame burst. ~958 KB. |
 
-"Push the new builds" means **both**. Only the `EBOOT.PBP` goes in each folder — `Psp.toml` bundles
-the icon, background and music into the PBP itself, so there is nothing else to copy.
+"Push the new builds" means **both**. The `EBOOT.PBP` is the only *build* artifact in each folder —
+`Psp.toml` bundles the icon, background and music into the PBP itself — but the cars are separate
+files and have to go on too.
+
+## The cars
+
+```bash
+STICK="${PSP_MOUNT:?point this at the stick psp_pull.sh found}"
+mkdir -p "$STICK/PSP/GAME/AngleZero/CARS"
+cp assets/compiled/*.azcar "$STICK/PSP/GAME/AngleZero/CARS/"
+```
+
+One directory under the release slot, read by **both** builds: the path is absolute in
+`src/psp/car.rs`, so `AngleZeroDev` reads the same files and there is never a second copy to keep in
+step. The game loads every `.azcar` it finds there, so adding a car to the console is copying a file
+— no rebuild, and the title screen offers it with L/R.
+
+Push them whenever `anglezero-asset convert` has run, which is not the same occasion as a code
+change. A stale car on the stick is the failure that looks like a rendering regression: the binary is
+new, the model is not, and nothing on screen says so.
+
+Without them the game boots to a title screen reading `car asset not found on the memory stick` and
+no car. That is the message to expect on a stick that has only ever had builds copied to it.
 
 Both builds write to the same `target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP`, so build and
 copy one, then build and copy the other. Doing both builds first silently installs the same binary

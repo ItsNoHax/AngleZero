@@ -36,6 +36,23 @@ emulator.
 
 Each emit overwrites the file, so the saved image is whatever state the *last* emit saw.
 
+## The car is a file, and it is not in the build
+
+The car is a compiled asset. The guest loads every `.azcar` in `ms0:/PSP/GAME/AngleZero/CARS/`,
+which under headless is `~/.ppsspp/PSP/GAME/AngleZero/CARS/` — `PPSSPP_MEMSTICK` moves the root,
+the same variable `scripts/psp_glitch.py` honours. Install them before capturing, and **again after
+every `anglezero-asset convert`**: rebuilding the game does not update them, and the emulator goes
+on showing the car you compiled an hour ago.
+
+```bash
+CARS="${PPSSPP_MEMSTICK:-$HOME/.ppsspp}/PSP/GAME/AngleZero/CARS"
+mkdir -p "$CARS" && cp assets/compiled/*.azcar "$CARS/"
+```
+
+With nothing there the game still runs. The title screen says `car asset not found on the memory
+stick` and the road is simply empty where the car should be — which looks exactly like a renderer
+that has stopped drawing it. Check the directory before debugging the renderer.
+
 ## Idle capture
 
 1. Build from the project root:

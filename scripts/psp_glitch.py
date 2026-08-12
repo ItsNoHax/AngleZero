@@ -71,6 +71,25 @@ def build():
         sys.exit("build failed")
 
 
+def install_cars(memstick):
+    """Copies the compiled cars onto the emulator's memory stick.
+
+    The car is an asset, not part of the binary, so building the guest does not update it. Left to
+    a person to remember, the failure is a run that renders last week's model against this week's
+    code -- which is indistinguishable from a rendering change that did nothing, and this script
+    exists to compare before against after.
+    """
+    cars = sorted(Path("assets/compiled").glob("*.azcar"))
+    if not cars:
+        log(">> no compiled cars in assets/compiled -- the run will have no car in it")
+        return
+    dest = memstick / "PSP" / "GAME" / "AngleZero" / "CARS"
+    dest.mkdir(parents=True, exist_ok=True)
+    for car in cars:
+        shutil.copy2(car, dest / car.name)
+    log(f">> installed {len(cars)} car(s) to {dest}")
+
+
 def write_script(anglezero, burst, frames, script_lines, node=None, kph=90, mode=0):
     """Writes the input script the guest reads at boot."""
     body = list(script_lines) if script_lines else ["0 -", "90 x"]
@@ -410,11 +429,13 @@ def main():
         headless = Path(os.environ.get("PPSSPP_HEADLESS", DEFAULT_HEADLESS))
         if not headless.exists():
             sys.exit(f"no PPSSPPHeadless at {headless} -- see docs/diagnostics.md")
-        anglezero = Path(os.environ.get("PPSSPP_MEMSTICK", DEFAULT_MEMSTICK)) / "ANGLEZERO"
+        memstick = Path(os.environ.get("PPSSPP_MEMSTICK", DEFAULT_MEMSTICK))
+        anglezero = memstick / "ANGLEZERO"
         out = args.out or Path("captures/glitch") / args.label
 
         if not args.no_build:
             build()
+        install_cars(memstick)
         write_script(
             anglezero, args.burst, args.frames, args.hold, args.node, args.kph, args.mode
         )

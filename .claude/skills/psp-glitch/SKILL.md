@@ -23,6 +23,12 @@ git-ignored. Needs Pillow.
 `--scan-only captures/glitch/<label>` re-runs the analysis on frames already harvested. Use it after
 changing the detector — there is no reason to re-run the emulator.
 
+The run installs `assets/compiled/*.azcar` onto the emulator's stick first, every time, including
+under `--no-build`. The car is an asset rather than part of the binary, and a run that draws last
+week's model against this week's code looks exactly like a change that did nothing — which is the
+one conclusion this script must never produce by accident. Recompiling a car with
+`anglezero-asset convert` is therefore enough; nothing has to be copied by hand.
+
 ## Why runs are comparable
 
 `--features harness` (see `src/psp/harness.rs`) fixes the frame delta at 1/60 s, replays input from a
