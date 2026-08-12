@@ -273,6 +273,7 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     field(&mut l, &mut w, b" LST", diag.list_bytes);
     field(&mut l, &mut w, b" SCR", diag.scratch_peak);
     field(&mut l, &mut w, b" SCF", diag.scratch_failures);
+    field(&mut l, &mut w, b" CAR", diag.car_calls);
     field(&mut l, &mut w, b" SK", diag.live_skids);
     field(&mut l, &mut w, b" SM", diag.live_puffs);
     field(&mut l, &mut w, b" SHOT", shots);
@@ -288,7 +289,7 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
 /// rest of the debug overlay off.
 #[cfg(all(feature = "devtools", not(feature = "harness")))]
 pub fn debug_mode_label(mode: u32) {
-    const NAMES: [&[u8]; 13] = [
+    const NAMES: [&[u8]; 15] = [
         b"MODE 0 NORMAL",
         b"MODE 1 NO CULL",
         b"MODE 2 NO DEPTH",
@@ -302,6 +303,8 @@ pub fn debug_mode_label(mode: u32) {
         b"MODE 10 NO LAMP GLOWS",
         b"MODE 11 NO EFFECTS",
         b"MODE 12 NO ROAD POOLS",
+        b"MODE 13 4 CARS",
+        b"MODE 14 8 CARS",
     ];
     let name = NAMES[(mode as usize) % NAMES.len()];
     let colour = if mode == 0 { DIM } else { GREEN };

@@ -385,6 +385,7 @@ pub fn psp_main() {
                     list_bytes,
                     scratch_peak: scratch::high_water() as u32,
                     scratch_failures: scratch::failures(),
+                    car_calls: render::car_calls(),
                     live_skids: game.effects.live_skids() as u32,
                     live_puffs: game.effects.live_puffs() as u32,
                     drifting: game.vehicle.drifting,

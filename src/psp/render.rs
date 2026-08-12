@@ -156,8 +156,17 @@ const CAR_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// Interactively these are cycled with the L trigger. A harness run sets one from its script
 /// instead, which is what makes the overrides usable as a bisection: run the same frames with one
 /// suspect disabled and see whether the artifact survives.
+///
+/// The last two do not turn anything off — they add cars. They are here rather than anywhere else
+/// because a measurement is only worth having if it repeats, and this is the one switch a harness
+/// script can already set: `psp_glitch.py --mode 14` puts eight cars in front of a deterministic
+/// run and traces what each frame cost.
 #[cfg(feature = "devtools")]
-pub const DEBUG_MODES: u32 = 13;
+pub const MODE_FOUR_CARS: u32 = 13;
+#[cfg(feature = "devtools")]
+pub const MODE_EIGHT_CARS: u32 = 14;
+#[cfg(feature = "devtools")]
+pub const DEBUG_MODES: u32 = 15;
 #[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
@@ -1142,6 +1151,9 @@ fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
 /// vanishes, was the draw call issued at all?
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DrawStats {
+    /// Car draw calls this frame — one per mesh per car, so it counts cars *and* how much material
+    /// switching they cost, which is the pair that decides whether a field of them is affordable.
+    pub cars: u16,
     pub road: u16,
     pub terrain: u16,
     pub lines: u16,
@@ -1164,6 +1176,7 @@ pub struct DrawStats {
 }
 
 static mut STATS: DrawStats = DrawStats {
+    cars: 0,
     road: 0,
     terrain: 0,
     lines: 0,
@@ -1178,6 +1191,15 @@ static mut STATS: DrawStats = DrawStats {
 };
 /// Which counter `draw_ribbon` should attribute its chunks to.
 static mut STATS_SLOT: u8 = 0;
+
+/// This frame's car draw calls, without clearing the tally.
+///
+/// Read before `take_stats`, which happens after the buffer swap; the diagnostics block is built
+/// before that and would otherwise see the count already zeroed.
+#[cfg(feature = "devtools")]
+pub fn car_calls() -> u32 {
+    unsafe { STATS.cars as u32 }
+}
 
 /// Snapshot and clear the tally. Call once per frame, after drawing.
 pub fn take_stats() -> DrawStats {
@@ -1435,19 +1457,81 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
         return;
     };
     let st: &CarState = &vehicle.state;
+    let pitch = vehicle.body_pitch(track);
+    let roll = vehicle.roll();
 
     unsafe {
+        draw_one_car(car, st, [st.x, st.y, st.z], st.yaw, pitch, roll);
+
+        // The rest of the field, when a benchmark mode has asked for one. Costed exactly like the
+        // player's car — same meshes, same passes, same state changes — because the question it
+        // answers is what happens to the frame when there are several of these on screen.
+        #[cfg(feature = "devtools")]
+        for (at, yaw) in bench_field(st) {
+            let slot = BENCH_SLOT.min(super::car::count().saturating_sub(1));
+            BENCH_SLOT = BENCH_SLOT.wrapping_add(1);
+            if let Some(other) = super::car::get(slot) {
+                draw_one_car(other, st, at, yaw, pitch, roll);
+            }
+        }
+    }
+}
+
+/// The extra cars a benchmark mode puts on screen, as (position, heading).
+///
+/// Laid out in the player's own frame: two lanes abreast, spaced back down the road, which is the
+/// arrangement a field of traffic would actually take. Their height is the player's rather than
+/// the road's — on a 7% slope the furthest is most of a metre off the surface — because this
+/// measures what the renderer costs, and a car in the air costs exactly what one on the road does.
+#[cfg(feature = "devtools")]
+fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
+    let extras = match debug_mode() {
+        MODE_FOUR_CARS => 3,
+        MODE_EIGHT_CARS => 7,
+        _ => 0,
+    };
+    let (s, c) = (sin(st.yaw), cos(st.yaw));
+    (0..extras).map(move |i| {
+        // Alternating sides, receding: 3.2 m out and 7 m further back each pair.
+        let lateral = if i % 2 == 0 { 3.2 } else { -3.2 };
+        let along = -7.0 * (1 + i / 2) as f32;
+        (
+            [
+                st.x + lateral * c + along * s,
+                st.y,
+                st.z - lateral * s + along * c,
+            ],
+            st.yaw,
+        )
+    })
+}
+
+/// Which car the next benchmark copy takes, so a field is a mix of every car on the stick rather
+/// than one model repeated — material and vertex-buffer switching is part of what is being timed.
+#[cfg(feature = "devtools")]
+static mut BENCH_SLOT: usize = 0;
+
+/// One car, at a pose. Everything car-specific comes out of the asset.
+unsafe fn draw_one_car(
+    car: &azcar::Car<'static>,
+    st: &CarState,
+    at: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    roll: f32,
+) {
+    {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
         sys::sceGumTranslate(&ScePspFVector3 {
-            x: st.x,
-            y: st.y,
-            z: st.z,
+            x: at[0],
+            y: at[1],
+            z: at[2],
         });
-        sys::sceGumRotateY(st.yaw);
+        sys::sceGumRotateY(yaw);
         // Follow the road's slope, but only insofar as the car points along it.
-        sys::sceGumRotateX(vehicle.body_pitch(track));
-        sys::sceGumRotateZ(vehicle.roll());
+        sys::sceGumRotateX(pitch);
+        sys::sceGumRotateZ(roll);
 
         for blended in [false, true] {
             if blended {
@@ -1518,6 +1602,12 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 /// own layout and the indices are already 16-bit, so there is nothing between the file on the
 /// memory stick and the hardware.
 unsafe fn draw_car_mesh(car: &azcar::Car<'static>, mesh: &azcar::Mesh) {
+    // Counted like every other pass, so the trace's vertex column includes the cars. Without this
+    // a frame with eight of them in it looks, in the record, exactly like a frame with one.
+    STATS.cars = STATS.cars.saturating_add(1);
+    STATS.verts = STATS
+        .verts
+        .saturating_add(mesh.index_count.min(u16::MAX as u32));
     sys::sceGumDrawArray(
         GuPrimitive::Triangles,
         CAR_VERTEX_FORMAT,

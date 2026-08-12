@@ -24,6 +24,9 @@ pub struct Diagnostics {
     pub scratch_peak: u32,
     /// Times the arena ran out. Any non-zero value means draws were silently dropped.
     pub scratch_failures: u32,
+    /// Car draw calls submitted last frame. One car is a dozen; a benchmark mode's field is that
+    /// many times over, and this is what says the extra cars were actually drawn.
+    pub car_calls: u32,
     pub live_skids: u32,
     pub live_puffs: u32,
     pub drifting: bool,
