@@ -1,3 +1,11 @@
+# The game is the workspace root and the only default member, so a bare `cargo build` — which is
+# what `cargo psp` runs underneath — still builds nothing but the PSP binary. The asset tool is a
+# host program with host dependencies and would not survive being built for `mipsel-sony-psp`.
+# Reach it explicitly: `cargo run -p anglezero-asset`, `cargo test --workspace`.
+[workspace]
+members = [".", "tools/anglezero-asset"]
+default-members = ["."]
+
 [package]
 name = "angle-zero"
 version = "0.1.0"

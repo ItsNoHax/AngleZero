@@ -1,0 +1,14 @@
+[package]
+name = "anglezero-asset"
+version = "0.1.0"
+edition = "2021"
+
+# The offline half of the car pipeline. Everything expensive — parsing glTF, simplifying meshes,
+# resizing textures — happens here on a development machine, so that the PSP only ever opens a
+# finished .azcar. Nothing in this crate is compiled for the console.
+[[bin]]
+name = "anglezero-asset"
+path = "src/main.rs"
+
+[dependencies]
+gltf = { version = "1.4", features = ["import", "extras"] }
