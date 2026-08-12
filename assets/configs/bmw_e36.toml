@@ -1,0 +1,21 @@
+# BMW 3-Series E36 — the first car through the pipeline.
+#
+# Everything the converter can work out for itself is absent from this file on purpose. It measures
+# the wheel radius, grounds the car, centres the wheelbase, and sorts 57 materials into six
+# categories from their names and their numbers. What is left is the one question the model does
+# not answer: which of its 298 parts are wheels.
+#
+# `anglezero-asset inspect --deep assets/source/bmw_3-series_e36.glb` is how these were found.
+
+name = "BMW E36"
+
+[wheels]
+# Each corner is three assemblies with three unrelated names, and all of them must turn together:
+#   Object_4.001-.004         the tyres, 13,166 triangles each
+#   wheel_bmw_aplg_16x7*      the alloys
+#   amdb11_brakedisc_FR.00*   the disc and caliper, named after the car they were lifted from
+# Which corner each one is comes from where it sits, not from these names — .001 is a rear wheel
+# and .003 is a front one, so the numbering says nothing.
+#
+# The trailing dot on `Object_4.` matters: without it this also matches Object_35.001, a seat.
+match = ["wheel_bmw_aplg", "Object_4.", "amdb11_brakedisc"]

@@ -11,4 +11,11 @@ name = "anglezero-asset"
 path = "src/main.rs"
 
 [dependencies]
+# The game core, for the .azcar layout. Depending on it rather than restating the format is the
+# point: the writer and the console's reader are the same constants and the same records, and the
+# converter runs the reader over its own output before writing it out.
+angle-zero = { path = "../.." }
 gltf = { version = "1.4", features = ["import", "extras"] }
+meshopt = "0.6.2"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.4"
