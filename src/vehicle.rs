@@ -19,8 +19,58 @@ pub const MAX_SUBSTEPS: u32 = 40;
 /// A frame longer than this is treated as a hitch and clamped.
 pub const MAX_FRAME_DT: f32 = 0.25;
 
-/// Rolling radius used to turn forward speed into wheel rotation.
-pub const WHEEL_RADIUS: f32 = 0.36;
+/// The measurements the simulation takes off whatever car is loaded.
+///
+/// Only three numbers, and none of them affect handling: the physics is a bicycle model with its
+/// own wheelbase and mass, and it drives every car the same. What these decide is whether what is
+/// drawn agrees with it — wheels that roll at the speed the car is going rather than scrubbing,
+/// and tyre marks laid under the tyres rather than near them.
+///
+/// Kept as data on the vehicle rather than as constants because the car is a file now. The
+/// defaults are a mid-size saloon, used when no car loaded.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CarShape {
+    /// Rolling radius, turning forward speed into wheel rotation.
+    pub wheel_radius: f32,
+    /// Half the rear track: how far out from the centreline the back wheels sit.
+    pub rear_hub_x: f32,
+    /// How far behind the origin the rear axle is. Negative.
+    pub rear_hub_z: f32,
+}
+
+impl CarShape {
+    pub const DEFAULT: CarShape = CarShape {
+        wheel_radius: 0.32,
+        rear_hub_x: 0.78,
+        rear_hub_z: -1.30,
+    };
+
+    /// Takes the shape off a compiled car's rear hubs.
+    ///
+    /// Averaged over both of them, and the track is taken as the mean of their distances from the
+    /// centreline rather than from one side, because a scanned model is rarely exactly symmetric
+    /// and marks that are 2 cm out on one side and 2 cm in on the other look like the car is
+    /// crabbing.
+    pub fn measure(wheel_radius: f32, rear_hubs: &[[f32; 3]]) -> CarShape {
+        if rear_hubs.is_empty() || !(wheel_radius > 0.0) {
+            return CarShape::DEFAULT;
+        }
+        let n = rear_hubs.len() as f32;
+        let x = rear_hubs.iter().map(|h| abs(h[0])).sum::<f32>() / n;
+        let z = rear_hubs.iter().map(|h| h[2]).sum::<f32>() / n;
+        CarShape {
+            wheel_radius,
+            rear_hub_x: x,
+            rear_hub_z: z,
+        }
+    }
+}
+
+impl Default for CarShape {
+    fn default() -> Self {
+        CarShape::DEFAULT
+    }
+}
 
 const MASS: f32 = 1420.0;
 const LF: f32 = 1.18;
@@ -97,6 +147,8 @@ pub struct Vehicle {
     /// the same simulation drives whatever is in that slot, which is what lets a second car be a
     /// second file. Nothing in this module ever reads it.
     pub model: usize,
+    /// What that asset measures, for the parts of the game that have to agree with it.
+    pub shape: CarShape,
 
     // --- derived each substep, for the renderer, HUD and scoring ---
     pub on_road: bool,
@@ -136,6 +188,7 @@ impl Vehicle {
             hit_cooldown: 0.0,
             grip_assist: 1.0,
             model: 0,
+            shape: CarShape::DEFAULT,
             on_road: false,
             slip_angle: 0.0,
             drifting: false,
@@ -330,7 +383,7 @@ impl Vehicle {
         // single descent, and f32 resolution at that magnitude is coarse enough to make the
         // wheels stutter — and it is fed straight to the VFPU as a rotation angle.
         self.state.wheel_spin =
-            wrap_tau(self.state.wheel_spin + self.state.vx * dt / WHEEL_RADIUS);
+            wrap_tau(self.state.wheel_spin + self.state.vx * dt / self.shape.wheel_radius);
         self.query = q3;
 
         let slip = abs(atan2(

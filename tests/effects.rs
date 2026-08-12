@@ -5,7 +5,17 @@
 
 use angle_zero::effects::{Effects, MAX_PUFFS, MAX_SKIDS, PUFF_LIFE, SKID_ALPHA};
 use angle_zero::math::hypot;
-use angle_zero::vehicle::CarState;
+use angle_zero::vehicle::{CarShape, CarState};
+
+/// The shape marks are laid against. A car with an unmistakable track and wheelbase, so that a
+/// mark laid from the wrong number cannot land in roughly the right place by luck.
+fn shape() -> CarShape {
+    CarShape {
+        wheel_radius: 0.29,
+        rear_hub_x: 0.73,
+        rear_hub_z: -1.29,
+    }
+}
 
 fn car() -> CarState {
     CarState {
@@ -22,7 +32,7 @@ fn car() -> CarState {
 fn a_slide_lays_one_mark_per_rear_wheel() {
     let mut fx = Effects::new();
     assert_eq!(fx.live_skids(), 0);
-    fx.emit_skids(&car(), 25.0);
+    fx.emit_skids(&car(), &shape(), 25.0);
     assert_eq!(fx.live_skids(), 2);
 }
 
@@ -30,12 +40,15 @@ fn a_slide_lays_one_mark_per_rear_wheel() {
 fn the_marks_land_under_the_rear_wheels() {
     let c = car();
     let mut fx = Effects::new();
-    fx.emit_skids(&c, 25.0);
+    fx.emit_skids(&c, &shape(), 25.0);
 
-    // Rear hubs sit at local (+-0.86, -1.38); both marks must be that far from the car centre.
+    // Both marks must be exactly as far from the car's centre as its rear hubs are. The numbers
+    // come from the shape rather than being written out again, because that is the whole claim:
+    // the marks follow whichever car is loaded.
+    let shape = shape();
+    let expected = hypot(shape.rear_hub_x, shape.rear_hub_z);
     for s in fx.skids().iter().filter(|s| s.active) {
         let d = hypot(s.x - c.x, s.z - c.z);
-        let expected = hypot(0.86, 1.38);
         assert!(
             (d - expected).abs() < 1e-3,
             "mark {d} m from the car, rear hubs are at {expected}"
@@ -43,19 +56,22 @@ fn the_marks_land_under_the_rear_wheels() {
         // Laid on the road, just above it.
         assert!((s.y - (c.y + 0.05)).abs() < 1e-4);
     }
-    // The two marks are on opposite sides, so they are 1.72 m apart.
+    // The two marks are on opposite sides, so they are a rear track apart.
     let live: Vec<_> = fx.skids().iter().filter(|s| s.active).collect();
     assert_eq!(live.len(), 2);
     let apart = hypot(live[0].x - live[1].x, live[0].z - live[1].z);
-    assert!((apart - 1.72).abs() < 1e-3, "marks were {apart} m apart");
+    assert!(
+        (apart - 2.0 * shape.rear_hub_x).abs() < 1e-3,
+        "marks were {apart} m apart"
+    );
 }
 
 #[test]
 fn faster_slides_leave_longer_marks() {
     let mut slow = Effects::new();
-    slow.emit_skids(&car(), 10.0);
+    slow.emit_skids(&car(), &shape(), 10.0);
     let mut fast = Effects::new();
-    fast.emit_skids(&car(), 40.0);
+    fast.emit_skids(&car(), &shape(), 40.0);
 
     let stretch = |fx: &Effects| fx.skids().iter().find(|s| s.active).unwrap().stretch;
     // max(1, speed * 0.06): 10 m/s is below the floor, 40 m/s is not.
@@ -67,7 +83,7 @@ fn faster_slides_leave_longer_marks() {
 fn the_skid_pool_wraps_instead_of_growing() {
     let mut fx = Effects::new();
     for _ in 0..MAX_SKIDS * 3 {
-        fx.emit_skids(&car(), 25.0);
+        fx.emit_skids(&car(), &shape(), 25.0);
     }
     assert_eq!(fx.live_skids(), MAX_SKIDS);
     assert_eq!(fx.skids().len(), MAX_SKIDS);
@@ -159,7 +175,7 @@ fn puffs_rise_fade_and_expire() {
 fn resetting_clears_the_marks_for_a_new_run() {
     let mut fx = Effects::new();
     for _ in 0..50 {
-        fx.emit_skids(&car(), 25.0);
+        fx.emit_skids(&car(), &shape(), 25.0);
         fx.emit_smoke(&car());
     }
     assert!(fx.live_skids() > 0);

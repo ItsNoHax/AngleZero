@@ -3,7 +3,7 @@
 
 use angle_zero::math::{atan2, hypot, wrap_pi};
 use angle_zero::track::{Locator, Track, BAY_FROM, BAY_TO, NODE_COUNT, RAIL_LIMIT};
-use angle_zero::vehicle::{Input, Vehicle, FIXED_DT};
+use angle_zero::vehicle::{CarShape, Input, Vehicle, FIXED_DT};
 
 fn track() -> Box<Track> {
     let mut t = Box::new(Track::EMPTY);
@@ -471,4 +471,59 @@ fn a_fresh_locator_starts_where_the_car_was_placed() {
     loc.reset_to(2);
     assert_eq!(v.locator.last_idx, 2);
     assert!((v.state.y - t.nodes[2].p.y).abs() < 1e-4);
+}
+
+/// The wheels turn at the rate the loaded car's tyres are the size they are.
+///
+/// Purely visual, and visibly wrong when it is wrong: a car whose wheels turn at the wrong rate
+/// looks like it is skating rather than driving, which is a thing the eye picks up long before it
+/// can say why. The number used to be a constant matching a car built out of boxes; it now comes
+/// off whichever model is loaded, so this checks that swapping the car swaps the rate.
+#[test]
+fn wheel_spin_follows_the_loaded_cars_rolling_radius() {
+    let t = track();
+
+    let mut small = at_start(&t);
+    small.shape = CarShape {
+        wheel_radius: 0.25,
+        ..CarShape::DEFAULT
+    };
+    let mut large = at_start(&t);
+    large.shape = CarShape {
+        wheel_radius: 0.50,
+        ..CarShape::DEFAULT
+    };
+
+    let small_turn = spun(&t, &mut small, 1.5);
+    let large_turn = spun(&t, &mut large, 1.5);
+
+    // Same car, same physics, same distance — the spin is the only thing that differs, and a wheel
+    // half the size turns twice as far for it.
+    assert!(
+        (small.state.x - large.state.x).abs() < 1e-3,
+        "the wheel radius must not reach the physics"
+    );
+    let ratio = small_turn / large_turn;
+    assert!(
+        (ratio - 2.0).abs() < 0.05,
+        "a 0.25 m wheel turned {ratio:.2} times as far as a 0.50 m one, not twice"
+    );
+}
+
+/// How far the wheels turned in total, undoing the wrap the simulation applies to keep the angle
+/// small. A step's worth of rotation is a fraction of a turn, so the difference recovers exactly.
+fn spun(t: &Track, v: &mut Vehicle, seconds: f32) -> f32 {
+    let mut total = 0.0;
+    let steps = (seconds / FIXED_DT) as usize;
+    for _ in 0..steps {
+        let before = v.state.wheel_spin;
+        let i = Input {
+            throttle: 1.0,
+            steer_in: autopilot(t, v),
+            ..Input::default()
+        };
+        v.step(t, i, FIXED_DT);
+        total += wrap_pi(v.state.wheel_spin - before);
+    }
+    total
 }

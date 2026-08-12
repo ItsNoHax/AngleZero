@@ -321,7 +321,8 @@ impl Game {
             if self.vehicle.drifting {
                 // Marks only where there is tarmac to mark; smoke happens regardless.
                 if crate::math::abs(self.vehicle.query.lat) < SKID_LAT {
-                    self.effects.emit_skids(&self.vehicle.state, speed);
+                    self.effects
+                        .emit_skids(&self.vehicle.state, &self.vehicle.shape, speed);
                 }
                 self.effects.emit_smoke(&self.vehicle.state);
             }

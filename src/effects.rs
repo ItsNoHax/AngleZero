@@ -5,7 +5,7 @@
 //! oldest entry is simply overwritten, which is what gives the marks their limited trail length.
 
 use crate::math::{cos, sin};
-use crate::vehicle::CarState;
+use crate::vehicle::{CarShape, CarState};
 
 /// 260 marks at two per substep gives roughly a second of trail.
 pub const MAX_SKIDS: usize = 260;
@@ -15,9 +15,9 @@ pub const MAX_PUFFS: usize = 34;
 pub const PUFF_LIFE: f32 = 0.9;
 /// Peak opacity of a puff, and of a fresh skid mark.
 pub const SKID_ALPHA: f32 = 0.34;
-/// Rear hub offsets, matching the car model.
-const REAR_HUB_X: f32 = 0.86;
-const REAR_HUB_Z: f32 = -1.38;
+// The rear hub offsets used to be constants here, matching the car the renderer built out of
+// boxes. They are measured off whichever car is loaded now and arrive with the call: a mark laid
+// where the tyre is not shows up the moment the car slides.
 
 /// A tyre mark laid on the road.
 #[derive(Clone, Copy, Debug, Default)]
@@ -142,17 +142,17 @@ impl Effects {
     }
 
     /// Lays a mark under each rear wheel. Called per substep while the car is sliding.
-    pub fn emit_skids(&mut self, car: &CarState, speed: f32) {
+    pub fn emit_skids(&mut self, car: &CarState, shape: &CarShape, speed: f32) {
         let (s, c) = (sin(car.yaw), cos(car.yaw));
         let stretch = crate::math::max(1.0, speed * 0.06);
 
-        for side in [REAR_HUB_X, -REAR_HUB_X] {
+        for side in [shape.rear_hub_x, -shape.rear_hub_x] {
             let mark = &mut self.skids[self.skid_next % MAX_SKIDS];
             self.skid_next = self.skid_next.wrapping_add(1);
             *mark = Skid {
-                x: car.x + side * c + REAR_HUB_Z * s,
+                x: car.x + side * c + shape.rear_hub_z * s,
                 y: car.y + 0.05,
-                z: car.z - side * s + REAR_HUB_Z * c,
+                z: car.z - side * s + shape.rear_hub_z * c,
                 yaw: car.yaw,
                 stretch,
                 active: true,

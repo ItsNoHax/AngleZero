@@ -179,6 +179,12 @@ pub fn psp_main() {
 
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
+        // The car's own proportions, so the wheels roll at the speed the car is going and the tyre
+        // marks land under the tyres. Handling is unaffected: the physics drives every car the
+        // same, and this is only about what is drawn agreeing with it.
+        if let Some(car) = car::get(game.vehicle.model) {
+            game.vehicle.shape = car.shape();
+        }
         game.enter_title(track);
 
         // The scripted run, loaded before the first frame so frame 0 already has its buttons.

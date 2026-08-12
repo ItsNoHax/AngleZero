@@ -11,10 +11,11 @@
 
 use angle_zero::azcar::{
     field, Car, Category, Error, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
-    MATERIAL_BYTES, MESH_BYTES, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_COLOR_8888_F32, WHEEL_BYTES,
-    WHEEL_FRONT_LEFT,
+    MATERIAL_BYTES, MESH_BYTES, NO_CREDIT, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_COLOR_8888_F32,
+    WHEEL_BYTES, WHEEL_FRONT_LEFT,
 };
 use angle_zero::mesh::Vertex;
+use angle_zero::vehicle::CarShape;
 
 /// A car with one body mesh and one wheel, laid out the way the writer lays one out.
 struct Builder {
@@ -26,6 +27,7 @@ struct Builder {
     strings: Vec<u8>,
     version: u16,
     vertex_format: u32,
+    credit: u32,
 }
 
 impl Builder {
@@ -91,6 +93,7 @@ impl Builder {
             strings,
             version: VERSION,
             vertex_format: VERTEX_COLOR_8888_F32,
+            credit: NO_CREDIT,
         }
     }
 
@@ -141,6 +144,7 @@ impl Builder {
         put_u32(&mut out, field::INDICES_AT, indices_at as u32);
         put_u32(&mut out, field::STRINGS_AT, strings_at as u32);
         put_u32(&mut out, field::STRINGS_BYTES, self.strings.len() as u32);
+        put_u32(&mut out, field::CREDIT, self.credit);
         let total = out.len() as u32;
         put_u32(&mut out, field::LENGTH, total);
         out
@@ -349,6 +353,87 @@ fn a_name_offset_past_the_string_table_reads_as_empty() {
     let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
     let car = Car::parse(view).unwrap();
     assert_eq!(car.name(9999), b"");
+}
+
+/// What the simulation takes off the asset. Getting these wrong is not a crash: it is wheels that
+/// scrub the road at a speed that does not match the car's, and tyre marks laid beside the tyres.
+#[test]
+fn the_simulation_measures_the_car_it_was_given() {
+    let mut b = Builder::typical();
+    b.wheels = vec![
+        WheelDef {
+            corner: WHEEL_FRONT_LEFT,
+            steers: true,
+            name: 0,
+            hub: [0.73, 0.29, 1.30],
+            radius: 0.29,
+            width: 0.2,
+        },
+        WheelDef {
+            corner: 2,
+            steers: false,
+            name: 0,
+            hub: [0.71, 0.29, -1.28],
+            radius: 0.29,
+            width: 0.2,
+        },
+        WheelDef {
+            corner: 3,
+            steers: false,
+            name: 0,
+            hub: [-0.75, 0.29, -1.30],
+            radius: 0.29,
+            width: 0.2,
+        },
+    ];
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let shape = Car::parse(view).unwrap().shape();
+
+    assert!((shape.wheel_radius - 0.29).abs() < 1e-6);
+    // Both rear hubs, averaged, and only the rear ones: the front hub is at +1.30 and would drag
+    // the answer to nearly zero if it were counted.
+    assert!((shape.rear_hub_z + 1.29).abs() < 1e-5, "got {}", shape.rear_hub_z);
+    // Averaged as distances from the centreline, so a model that is not quite symmetric does not
+    // put one mark inside the car.
+    assert!((shape.rear_hub_x - 0.73).abs() < 1e-5, "got {}", shape.rear_hub_x);
+}
+
+/// A car with no wheels still has to be drivable. Zeroes here would divide the wheel spin by
+/// nothing and pile every tyre mark on the car's own origin.
+#[test]
+fn a_car_without_wheels_falls_back_rather_than_to_zero() {
+    let mut b = Builder::typical();
+    b.wheels.clear();
+    b.meshes[1].wheel = NO_WHEEL;
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let shape = Car::parse(view).unwrap().shape();
+    assert_eq!(shape, CarShape::DEFAULT);
+    assert!(shape.wheel_radius > 0.0);
+}
+
+/// The licences these models come under require attribution, so the credit travels inside the car
+/// rather than in a readme a rebuild can lose. A car without one must read as empty rather than as
+/// whatever string happens to sit at offset zero.
+#[test]
+fn the_attribution_line_comes_out_of_the_car() {
+    let mut b = Builder::typical();
+    b.credit = push_name(&mut b.strings, "MODEL BY BLACK SNOW, CC-BY-4.0") as u32;
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    assert_eq!(
+        Car::parse(view).unwrap().credit(),
+        b"MODEL BY BLACK SNOW, CC-BY-4.0"
+    );
+
+    let plain = Builder::typical().build();
+    let backing = aligned(&plain);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, plain.len()) };
+    assert_eq!(Car::parse(view).unwrap().credit(), b"");
 }
 
 /// The header has to be a whole number of 16-byte lines, or the first section after it — and so
