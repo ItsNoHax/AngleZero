@@ -197,8 +197,19 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     report.note_texture(atlas.textured, model.images.len(), &atlas.resized);
 
     let mut buckets: Vec<Bucket> = Vec::new();
+    let mut dropped_by_name = 0usize;
     for (i, part) in model.parts.iter().enumerate() {
         if config.reduce.drop_hidden && seen.pixels[i] == 0 {
+            continue;
+        }
+        // Named in the config as not worth drawing at all. Counted so the report can say how much
+        // was left out on purpose rather than lost.
+        if config.reduce.drop.iter().any(|f| {
+            !f.is_empty()
+                && (part.node.to_ascii_lowercase().contains(&f.to_ascii_lowercase())
+                    || part.parent.to_ascii_lowercase().contains(&f.to_ascii_lowercase()))
+        }) {
+            dropped_by_name += part.triangles();
             continue;
         }
         let category = assignment.categories[i];
@@ -270,6 +281,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     if buckets.is_empty() {
         return Err("nothing to compile: the model has no drawable parts".into());
+    }
+    if dropped_by_name > 0 {
+        report.note_dropped_by_name(dropped_by_name, config.reduce.drop.len());
     }
 
     // Weld first, then spend the budget. Welding changes what a triangle costs, so a budget shared
@@ -1234,6 +1248,36 @@ mod tests {
         assert_eq!(car.lod_count(), 1);
         assert_eq!(car.lod(0).mesh_count as usize, car.mesh_count());
         assert_eq!(car.lod_for_distance(500.0).first_mesh, 0);
+    }
+
+    /// Parts named in `[reduce] drop` are left out, and their budget goes to what is left.
+    ///
+    /// The case this exists for: the E36's alloys have 4,762 triangles of brake hardware behind
+    /// each one, visible through the spokes, so the visibility sweep gives it a share — and every
+    /// triangle it takes comes out of the wheel in front of it. The alloy fell to about 150
+    /// triangles, at which a five-spoke wheel decimates into a featureless disc.
+    #[test]
+    fn parts_named_in_the_drop_list_are_left_out() {
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        let whole = compile(&mut model, &config, 2_000).unwrap();
+
+        let mut model = four_wheeled_model();
+        config.reduce.drop = vec!["rim_".into()];
+        let without = compile(&mut model, &config, 2_000).unwrap();
+
+        assert!(without.report.dropped_by_name.0 > 0, "nothing was dropped");
+        let car = angle_zero::azcar::Car::parse(&without.bytes).unwrap();
+        for i in 0..car.mesh_count() {
+            let name = car.name(car.mesh(i).name);
+            assert!(
+                !name.windows(3).any(|w| w == b"rim"),
+                "a dropped part was compiled in: {}",
+                core::str::from_utf8(name).unwrap_or("?")
+            );
+        }
+        // The wheels are still found and still turn: dropping a part is not dropping a corner.
+        assert_eq!(car.wheel_count(), whole.report.out_wheels);
     }
 
     /// A car whose numbers would break the simulation is refused, rather than written out and

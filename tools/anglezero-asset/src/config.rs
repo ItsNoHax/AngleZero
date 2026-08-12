@@ -185,6 +185,17 @@ pub struct Reduction {
     /// whole, which is the way to check what the pass is throwing away.
     #[serde(default = "yes")]
     pub drop_hidden: bool,
+
+    /// Node-name fragments for parts to leave out of the car entirely.
+    ///
+    /// For geometry the visibility sweep can see but that is not worth a triangle — the sweep
+    /// answers "is any of this on screen", not "is any of it worth drawing". The case that needs
+    /// it is detail behind an opening: brake hardware behind the spokes of an alloy is visible
+    /// through the gaps, so it is allocated a share of its bucket, and every triangle it takes
+    /// comes out of the wheel in front of it. Dropped, the gaps read as gaps, which at the size a
+    /// wheel is on screen is what they should look like anyway.
+    #[serde(default)]
+    pub drop: Vec<String>,
 }
 
 fn default_wheel_weight() -> f32 {
@@ -202,6 +213,7 @@ impl Default for Reduction {
             chrome: 1.0,
             wheel: default_wheel_weight(),
             drop_hidden: true,
+            drop: Vec::new(),
         }
     }
 }

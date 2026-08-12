@@ -35,6 +35,26 @@ triangles = 15000
 # level above, so LOD2 carries one decimation's error instead of three.
 lods = [4500, 1800]
 
+[reduce]
+# The brake hardware behind the alloys, which is not even this car's: the parts are named
+# `amdb11_*` because they were lifted from an Aston Martin DB11. There are 4,762 triangles of disc
+# and caliper per corner, and the visibility sweep sees them through the gaps between the spokes,
+# so they were being allocated most of the wheel's budget — leaving the alloy 150 triangles, at
+# which a five-spoke wheel decimates into a solid disc with no spokes at all. Dropped, the gaps
+# read as gaps and the alloy keeps its shape.
+drop = ["amdb11_brakedisc"]
+
+# Wheels are worth far more than their pixel count says. They are small on screen, four of them
+# share one allocation, and a wheel that reads as a grey blob is the single most obvious tell of a
+# cheap model — while the bodywork saturates at about 4,200 triangles and cannot use more.
+wheel = 16.0
+
+# Headlights and tail lamps are the other thing that says which car this is, and holding the
+# wheels up takes their share unless they are held up too: raising `wheel` on its own took the
+# lamps from 279 triangles to 74, which the converter warned about. Together they land at 560 for
+# an alloy and 1,097 for the lamps.
+light = 10.0
+
 [wheels]
 # Each corner is three assemblies with three unrelated names, and all of them must turn together:
 #   Object_4.001-.004         the tyres, 13,166 triangles each
