@@ -4,9 +4,12 @@
 # Produces dist/AngleZero.<version>.zip containing:
 #
 #     PSP/GAME/AngleZero/EBOOT.PBP
+#     PSP/GAME/AngleZero/CARS/*.azcar
 #
 # Unzipping that at the root of a memory stick puts the game straight where it
-# needs to be.
+# needs to be. The cars are separate files rather than being built into the
+# EBOOT because they are build artifacts of their own: recompiling one at a
+# different triangle budget replaces a file and does not rebuild the game.
 #
 # The version comes from Cargo.toml unless one is given:
 #
@@ -60,6 +63,17 @@ fi
 echo ">> staging"
 mkdir -p "$STAGE/PSP/GAME/${NAME}"
 cp "$PBP" "$STAGE/PSP/GAME/${NAME}/EBOOT.PBP"
+
+# The cars. A build without them runs and says so on the title screen, which is
+# not something to ship, so this refuses instead.
+CARS=(assets/compiled/*.azcar)
+if [ ! -e "${CARS[0]}" ]; then
+    echo "REFUSING: no compiled cars in assets/compiled/" >&2
+    echo "Run: cargo run --release -p anglezero-asset -- convert <model.glb> assets/compiled/<car>.azcar" >&2
+    exit 1
+fi
+mkdir -p "$STAGE/PSP/GAME/${NAME}/CARS"
+cp "${CARS[@]}" "$STAGE/PSP/GAME/${NAME}/CARS/"
 
 mkdir -p dist
 rm -f "$OUT"

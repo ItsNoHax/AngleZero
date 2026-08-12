@@ -5,6 +5,7 @@
 //! clock that drives the fixed-timestep update.
 
 pub mod audio;
+pub mod car;
 #[cfg(feature = "devtools")]
 pub mod atractest;
 #[cfg(feature = "devtools")]
@@ -40,6 +41,22 @@ static mut LIST: psp::Align16<[u32; 262144]> = psp::Align16([0; 262144]);
 /// Roughly 100 KB of centreline. Far too large for the stack, so it lives here.
 static mut TRACK: Track = Track::EMPTY;
 static mut GAME: Game = Game::new();
+
+/// The car the player drives, by file name.
+///
+/// A string rather than anything compiled in, because the model behind it is a build artifact:
+/// `anglezero-asset convert` writes it and it is copied onto the stick beside the build. When
+/// there is more than one car this becomes a lookup in a vehicle definition, and nothing about
+/// the loader or the renderer changes.
+const PLAYER_CAR: &str = "bmw_e36.azcar";
+
+/// Why there is no car, if there is no car. Read by the title screen.
+static mut CAR_LOAD: Option<car::LoadError> = None;
+
+/// The car asset's loading fault, or `None` if it loaded.
+pub fn car_fault() -> Option<car::LoadError> {
+    unsafe { CAR_LOAD }
+}
 
 /// Ask the emulator to capture the display framebuffer. PPSSPP writes it to whatever path was
 /// passed to `--screenshot-save`; on real hardware this devctl simply fails and does nothing —
@@ -144,6 +161,9 @@ pub fn psp_main() {
         let track = &mut *(&raw mut TRACK);
         Track::generate(track);
         scratch::init();
+        // Before the renderer, which asks the loaded car for its wheel positions. A car that fails
+        // to load is not fatal — the game runs, and the title screen says why there is no car.
+        CAR_LOAD = car::load(PLAYER_CAR).err();
         render::init(track);
         text::init();
         hud::init_minimap(track);

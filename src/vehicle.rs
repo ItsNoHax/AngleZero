@@ -91,6 +91,13 @@ pub struct Vehicle {
     /// Handling aid, 0.4–1.6. 1.0 is the default feel.
     pub grip_assist: f32,
 
+    /// Which compiled car asset draws this vehicle.
+    ///
+    /// An index rather than the model itself, because the physics has no opinion about geometry:
+    /// the same simulation drives whatever is in that slot, which is what lets a second car be a
+    /// second file. Nothing in this module ever reads it.
+    pub model: usize,
+
     // --- derived each substep, for the renderer, HUD and scoring ---
     pub on_road: bool,
     pub slip_angle: f32,
@@ -128,6 +135,7 @@ impl Vehicle {
             wrong_timer: 0.0,
             hit_cooldown: 0.0,
             grip_assist: 1.0,
+            model: 0,
             on_road: false,
             slip_angle: 0.0,
             drifting: false,

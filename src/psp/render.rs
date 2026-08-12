@@ -9,6 +9,7 @@
 
 use core::ffi::c_void;
 
+use angle_zero::azcar;
 use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
 use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
@@ -42,14 +43,8 @@ const ROAD_COLOR: u32 = rgb(0x1A, 0x1C, 0x20);
 const EDGE_COLOR: u32 = rgb(0xA9, 0xA2, 0x93);
 const RAIL_COLOR: u32 = rgb(0x7C, 0x84, 0x8C);
 const DASH_COLOR: u32 = rgb(0x8C, 0x7A, 0x45);
-const PAINT: u32 = rgb(0x1F, 0x4F, 0xA8);
-const GLASS: u32 = rgb(0x17, 0x1D, 0x24);
-const TRIM: u32 = rgb(0x14, 0x17, 0x1B);
-const CHROME: u32 = rgb(0x9A, 0xA4, 0xAD);
-const HEADLAMP: u32 = rgb(0xFF, 0xF6, 0xDC);
-const TAILLAMP: u32 = rgb(0xFF, 0x4A, 0x3C);
-const TYRE: u32 = rgb(0x18, 0x18, 0x1C);
-const RIM: u32 = rgb(0x9A, 0xA4, 0xAD);
+// The car's palette is not here any more. Its colours are baked per vertex by the asset compiler,
+// out of the source model's own materials, so there is nothing left for the renderer to decide.
 
 /// How far the terrain ribbon reaches to either side of the centreline.
 ///
@@ -124,17 +119,9 @@ static mut EDGE_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut RAIL_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut RAIL_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 
-/// 26 boxes, 36 vertices each.
-const CAR_BOX_COUNT: usize = 26;
-const CAR_VERTS: usize = CAR_BOX_COUNT * 36;
-static mut CAR_MESH: psp::Align16<[Vertex; CAR_VERTS]> = psp::Align16([Vertex::ZERO; CAR_VERTS]);
-
-/// One wheel: a 9-sided tyre and a 7-sided rim, reused for all four corners.
-const WHEEL_VERTS: usize = 9 * 12 + 7 * 12;
-static mut WHEEL_MESH: psp::Align16<[Vertex; WHEEL_VERTS]> =
-    psp::Align16([Vertex::ZERO; WHEEL_VERTS]);
-static mut TYRE_COUNT: usize = 0;
-static mut RIM_COUNT: usize = 0;
+/// The car is not built here any more. It is compiled from a 3D model by `anglezero-asset`, loaded
+/// off the memory stick by `super::car`, and drawn straight out of the buffer it was read into —
+/// see `draw_car`.
 
 /// Centre dashes, bucketed by chunk so they cull with everything else.
 const DASH_STRIDE: usize = 7;
@@ -150,6 +137,14 @@ static mut DASH_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
 
 const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
     VertexType::COLOR_8888.bits() | VertexType::VERTEX_32BITF.bits() | VertexType::TRANSFORM_3D.bits(),
+);
+
+/// The same vertices, drawn through an index buffer. Compiled cars are indexed because their
+/// geometry is a welded mesh rather than the loose triangles everything generated here is: the E36
+/// is 9,500 vertices behind 45,000 indices, and unindexed it would be three times the memory and
+/// three times the vertex fetch.
+const CAR_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
+    VERTEX_FORMAT.bits() | VertexType::INDEX_16BIT.bits(),
 );
 
 /// Render-state overrides for diagnosing hardware-only faults, cycled with the L trigger.
@@ -198,8 +193,6 @@ pub fn init(track: &Track) {
         build_props(track);
         build_mountains(track);
         build_starfield();
-        build_car();
-        build_wheel();
         sys::sceKernelDcacheWritebackAll();
     }
 }
@@ -284,64 +277,6 @@ unsafe fn build_dashes(track: &Track) {
             radius,
         };
     }
-}
-
-/// The car body, origin at ground centre, +Z forward.
-unsafe fn build_car() {
-    let out = core::slice::from_raw_parts_mut(&raw mut CAR_MESH as *mut Vertex, CAR_VERTS);
-    let mut w = 0usize;
-    let mut add = |bw: f32, bh: f32, bd: f32, x: f32, y: f32, z: f32, c: u32| {
-        w += mesh::build_box(&mut out[w..], bw, bh, bd, x, y, z, c);
-    };
-
-    add(1.78, 0.46, 4.24, 0.0, 0.50, 0.0, PAINT); // body lower
-    add(1.82, 0.30, 3.90, 0.0, 0.80, -0.05, PAINT); // body shoulder
-    add(1.70, 0.16, 1.30, 0.0, 0.96, 1.20, PAINT); // hood
-    add(1.56, 0.44, 1.94, 0.0, 1.16, -0.22, GLASS); // greenhouse
-    add(1.50, 0.10, 1.80, 0.0, 1.38, -0.30, PAINT); // roof
-    add(1.30, 0.26, 0.16, 0.0, 1.44, -1.22, PAINT); // roof spoiler
-    // Pillars, and the side windows are whatever they leave uncovered.
-    //
-    // This used to be one 1.70 m slab a side, which is not a pillar, it is the whole flank: it
-    // covered the glass from just behind the screen to the back of the rear quarter, so the
-    // aperture came out body-coloured with a five-centimetre glass outline round it. That outline
-    // is what the side windows have always been. Three posts leave a door glass and a rear quarter
-    // light either side, which is what the shape of the roof already implies.
-    //
-    // Each is a touch taller than the greenhouse and straddles its flank rather than sitting flush,
-    // because a face laid exactly on another is the one thing the depth buffer cannot settle.
-    for side in [-0.78f32, 0.78] {
-        add(0.10, 0.46, 0.18, side, 1.16, 0.68, PAINT); // A, behind the screen
-        add(0.10, 0.46, 0.12, side, 1.16, -0.16, PAINT); // B, between the doors
-        add(0.10, 0.46, 0.18, side, 1.16, -1.13, PAINT); // C, into the rear quarter
-    }
-    add(1.74, 0.22, 0.14, 0.0, 0.86, 2.10, TRIM); // grille
-    add(1.62, 0.12, 0.10, 0.0, 1.00, 2.06, CHROME); // chrome bar
-    // Dropped a centimetre off the chrome bar: level with it, the two shared a top face and fought.
-    add(0.46, 0.14, 0.10, -0.60, 0.98, 2.09, HEADLAMP); // headlights
-    add(0.46, 0.14, 0.10, 0.60, 0.98, 2.09, HEADLAMP);
-    add(0.40, 0.16, 0.08, -0.64, 1.00, -2.02, TAILLAMP); // tail lights
-    add(0.40, 0.16, 0.08, 0.64, 1.00, -2.02, TAILLAMP);
-    // Set 2 cm proud of the tail. Flush, it shared its back face with the body's and its front face
-    // with the shoulder's — 0.46 m2 of coplanar panel, the worst pair on the car.
-    add(1.66, 0.20, 0.12, 0.0, 0.72, -2.08, TRIM); // rear valance
-    add(0.16, 0.10, 0.12, -0.52, 0.42, -2.10, CHROME); // exhaust tips
-    add(0.16, 0.10, 0.12, 0.52, 0.42, -2.10, CHROME);
-    add(1.90, 0.12, 0.30, 0.0, 0.30, 1.86, TRIM); // front splitter
-    add(0.08, 0.20, 1.60, -0.92, 0.36, -0.10, TRIM); // side skirts
-    add(0.08, 0.20, 1.60, 0.92, 0.36, -0.10, TRIM);
-    add(0.14, 0.16, 0.30, -0.94, 1.06, 0.72, TRIM); // mirrors
-    add(0.14, 0.16, 0.30, 0.94, 1.06, 0.72, TRIM);
-
-    debug_assert!(w == CAR_VERTS);
-}
-
-unsafe fn build_wheel() {
-    let out = core::slice::from_raw_parts_mut(&raw mut WHEEL_MESH as *mut Vertex, WHEEL_VERTS);
-    let tyre = mesh::build_cylinder(out, 9, 0.36, 0.26, TYRE);
-    let rim = mesh::build_cylinder(&mut out[tyre..], 7, 0.22, 0.28, RIM);
-    TYRE_COUNT = tyre;
-    RIM_COUNT = rim;
 }
 
 /// Roadside props: street lamps and trees.
@@ -1488,8 +1423,19 @@ pub fn draw_world(camera: &Camera) {
 }
 
 /// Draws the car, wheels included, at its current pose and attitude.
+///
+/// Nothing here knows what car it is drawing. The meshes, their materials, how many wheels there
+/// are, where the hubs sit and which of them steer all come out of the compiled asset, so a second
+/// car is a second file and no code at all.
+///
+/// Two passes rather than one, in the order the depth buffer needs: everything opaque, then
+/// everything that blends. Glass drawn before the seats behind it would blend against the sky.
 pub fn draw_car(vehicle: &Vehicle, track: &Track) {
+    let Some(car) = super::car::get(vehicle.model) else {
+        return;
+    };
     let st: &CarState = &vehicle.state;
+
     unsafe {
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
@@ -1503,42 +1449,82 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
         sys::sceGumRotateX(vehicle.body_pitch(track));
         sys::sceGumRotateZ(vehicle.roll());
 
-        sys::sceGumDrawArray(
-            GuPrimitive::Triangles,
-            VERTEX_FORMAT,
-            CAR_VERTS as i32,
-            core::ptr::null(),
-            &raw const CAR_MESH as *const c_void,
-        );
-
-        // Wheels: fronts also steer. Hub offsets from the car model.
-        let hubs = [
-            (-0.86f32, 1.32f32, true),
-            (0.86, 1.32, true),
-            (-0.86, -1.38, false),
-            (0.86, -1.38, false),
-        ];
-        for (hx, hz, front) in hubs.iter() {
-            sys::sceGumPushMatrix();
-            sys::sceGumTranslate(&ScePspFVector3 {
-                x: *hx,
-                y: 0.36,
-                z: *hz,
-            });
-            if *front {
-                sys::sceGumRotateY(st.steer);
+        for blended in [false, true] {
+            if blended {
+                sys::sceGuEnable(GuState::Blend);
+                sys::sceGuBlendFunc(
+                    sys::BlendOp::Add,
+                    sys::BlendFactor::SrcAlpha,
+                    sys::BlendFactor::OneMinusSrcAlpha,
+                    0,
+                    0,
+                );
             }
-            sys::sceGumRotateX(st.wheel_spin);
-            sys::sceGumDrawArray(
-                GuPrimitive::Triangles,
-                VERTEX_FORMAT,
-                (TYRE_COUNT + RIM_COUNT) as i32,
-                core::ptr::null(),
-                &raw const WHEEL_MESH as *const c_void,
-            );
-            sys::sceGumPopMatrix();
+            let mut culling = true;
+
+            for i in 0..car.mesh_count() {
+                let mesh = car.mesh(i);
+                let material = car.material(mesh.material as usize);
+                if material.blended() != blended {
+                    continue;
+                }
+                // Glass, seats and door cards are modelled as single sheets with nothing behind
+                // them, and culled they show as holes into the cabin.
+                let want_culling = !material.two_sided();
+                if want_culling != culling {
+                    if want_culling {
+                        sys::sceGuEnable(GuState::CullFace);
+                    } else {
+                        sys::sceGuDisable(GuState::CullFace);
+                    }
+                    culling = want_culling;
+                }
+
+                if mesh.wheel == azcar::NO_WHEEL {
+                    draw_car_mesh(car, &mesh);
+                    continue;
+                }
+
+                // A wheel's geometry is stored about its own hub, so it can be put where it
+                // belongs and then turned, rather than being turned about the car's origin.
+                let wheel = car.wheel(mesh.wheel as usize);
+                sys::sceGumPushMatrix();
+                sys::sceGumTranslate(&ScePspFVector3 {
+                    x: wheel.hub[0],
+                    y: wheel.hub[1],
+                    z: wheel.hub[2],
+                });
+                if wheel.steers {
+                    sys::sceGumRotateY(st.steer);
+                }
+                sys::sceGumRotateX(st.wheel_spin);
+                draw_car_mesh(car, &mesh);
+                sys::sceGumPopMatrix();
+            }
+
+            if !culling {
+                sys::sceGuEnable(GuState::CullFace);
+            }
+            if blended {
+                sys::sceGuDisable(GuState::Blend);
+            }
         }
     }
+}
+
+/// One indexed run out of the car's buffers.
+///
+/// Both pointers are into the arena the file was read into: the vertices are already in the GE's
+/// own layout and the indices are already 16-bit, so there is nothing between the file on the
+/// memory stick and the hardware.
+unsafe fn draw_car_mesh(car: &azcar::Car<'static>, mesh: &azcar::Mesh) {
+    sys::sceGumDrawArray(
+        GuPrimitive::Triangles,
+        CAR_VERTEX_FORMAT,
+        mesh.index_count as i32,
+        car.indices_ptr().add(mesh.first_index as usize * 2) as *const c_void,
+        car.vertices_ptr() as *const c_void,
+    );
 }
 
 /// Skid marks and tyre smoke.

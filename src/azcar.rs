@@ -288,7 +288,12 @@ pub mod field {
     pub const STRINGS_BYTES: usize = 84;
     /// Where LOD meshes will go. Zero in version 1, and readers must tolerate that.
     pub const LODS_AT: usize = 88;
+    /// Offset into the string table of the attribution line, or `NO_CREDIT`.
+    pub const CREDIT: usize = 92;
 }
+
+/// The car carries no attribution line.
+pub const NO_CREDIT: u32 = 0xFFFF_FFFF;
 
 /// A validated car, borrowing the bytes it was loaded from.
 ///
@@ -513,6 +518,20 @@ impl<'a> Car<'a> {
 
     pub fn wheel(&self, i: usize) -> WheelDef {
         WheelDef::decode(&self.bytes[self.wheels_at + i * WHEEL_BYTES..])
+    }
+
+    /// Who made the source model, and under what licence.
+    ///
+    /// Not a nicety. Car models come from scanning and modelling sites under licences that require
+    /// attribution, so the obligation travels with the asset rather than with a line in a readme
+    /// that a rebuild can lose. A car that carries a credit is a car whose credit the game can
+    /// display without anybody having to remember to.
+    pub fn credit(&self) -> &'a [u8] {
+        let at = le_u32(self.bytes, field::CREDIT);
+        if at == NO_CREDIT || at > u16::MAX as u32 {
+            return b"";
+        }
+        self.name(at as u16)
     }
 
     /// A name out of the string table, without its terminator. Names are for diagnostics; nothing

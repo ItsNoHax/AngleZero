@@ -89,8 +89,20 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let assignment = categorise::assign(model, config, &found);
     report.note_categories(model, &assignment);
 
-    // Everything the runtime needs to name a mesh, a material or a wheel.
+    // Everything the runtime needs to name a mesh, a material or a wheel — and the attribution
+    // line, which is written first so that a car whose credit matters has it near the front of the
+    // table whatever else is in there.
     let mut strings = Strings::default();
+    let credit = credit_line(model);
+    let credit_at = credit
+        .as_deref()
+        .map(|c| strings.push(c) as u32)
+        .unwrap_or(azcar::NO_CREDIT);
+    if credit.is_none() {
+        report.warn(
+            "the source model records no author or licence, so the car carries no credit".into(),
+        );
+    }
 
     let mut buckets: Vec<Bucket> = Vec::new();
     for (i, part) in model.parts.iter().enumerate() {
@@ -282,6 +294,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         &materials,
         &wheel_defs,
         &strings.bytes,
+        credit_at,
         bounds,
     );
     report.note_size(&bytes);
@@ -484,6 +497,27 @@ fn share_budget(buckets: &[Bucket], budget: usize) -> Vec<usize> {
         .collect()
 }
 
+/// The attribution line the game will display, out of whatever the source model recorded.
+///
+/// Kept short and folded to uppercase because the console's font has no lowercase and draws
+/// anything it lacks as a blank — a credit that renders as gaps is not a credit. The URLs the
+/// exporter wraps around the author's name go too: they do not fit on a 480-pixel screen, and the
+/// licence asks for the name, not the link.
+fn credit_line(model: &SourceModel) -> Option<String> {
+    let c = &model.credit;
+    let author = c.author.as_deref().map(strip_url)?;
+    let mut line = format!("MODEL BY {author}");
+    if let Some(license) = c.license.as_deref().map(strip_url) {
+        line.push_str(&format!(", {license}"));
+    }
+    Some(line.to_uppercase())
+}
+
+/// `Black Snow (https://sketchfab.com/BlackSnow02)` becomes `Black Snow`.
+fn strip_url(s: &str) -> &str {
+    s.split(" (").next().unwrap_or(s).trim()
+}
+
 /// The string table, and the offsets into it.
 #[derive(Default)]
 struct Strings {
@@ -512,6 +546,7 @@ fn write(
     materials: &[MaterialDef],
     wheels: &[WheelDef],
     strings: &[u8],
+    credit: u32,
     bounds: Bounds,
 ) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_BYTES];
@@ -575,6 +610,7 @@ fn write(
     put_u32(&mut out, f::STRINGS_AT, strings_at as u32);
     put_u32(&mut out, f::STRINGS_BYTES, strings.len() as u32);
     put_u32(&mut out, f::LODS_AT, 0);
+    put_u32(&mut out, f::CREDIT, credit);
     let total = out.len() as u32;
     put_u32(&mut out, f::LENGTH, total);
     out

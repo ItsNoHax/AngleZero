@@ -325,6 +325,29 @@ fn draw_title(game: &Game) {
     text::draw_centered(b"SEKIRA DESCENT", SCREEN_W * 0.5, 58.0, 1.0, DIM);
     text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
     draw_best(game, 250.0);
+
+    // The car model is somebody else's work under a licence that asks for a credit. The line comes
+    // out of the asset rather than out of this file, so it stays true when the car is swapped.
+    if let Some(car) = super::car::get(0) {
+        let credit = car.credit();
+        if !credit.is_empty() {
+            text::draw_centered(credit, SCREEN_W * 0.5, 264.0, 1.0, DIM);
+        }
+    }
+
+    // The car is a file on the memory stick, and a file can be missing, stale, or half-copied. The
+    // game still runs without it — but silently driving an invisible car would send anyone who hit
+    // it looking at the renderer, so say what actually happened, where it will be read.
+    if let Some(fault) = super::car_fault() {
+        text::draw_centered(fault.message().as_bytes(), SCREEN_W * 0.5, 200.0, 1.0, WARN);
+        text::draw_centered(
+            super::car::DIR.as_bytes(),
+            SCREEN_W * 0.5,
+            212.0,
+            1.0,
+            DIM,
+        );
+    }
 }
 
 /// The stored record, shown once there is one to show.
