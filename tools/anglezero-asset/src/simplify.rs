@@ -23,6 +23,17 @@ use angle_zero::mesh::Vertex;
 /// transforming the same source vertex through two different node paths.
 const WELD_GRID: f32 = 1.0e-4;
 
+/// Geometric error that counts as free, in metres, and absolute rather than relative on purpose.
+///
+/// A fraction of each part's own size would mean two entirely different things: half a per cent of
+/// a wing mirror is a third of a millimetre, and half a per cent of a whole body shell is two
+/// centimetres of panel that has moved. Five millimetres is under a pixel at every distance the
+/// car is ever seen from — it is 4 cm to a pixel from the chase camera and 3 cm on the title
+/// screen — so it is free on the bodywork and still lets flat glass collapse to nothing.
+const FREE_ERROR: f32 = 0.005;
+/// The smallest thing worth asking for when finding out what a part costs at no visual price.
+const MIN_TRIANGLES: usize = 2;
+
 /// Merges vertices that share a position and a base colour, averaging their light.
 ///
 /// Returns how many vertices went away, which is worth reporting: on a model that welds badly, it
@@ -105,20 +116,80 @@ pub fn reduce(
         return 0.0;
     };
 
+    // First, find out what this part costs at no visual price at all.
+    //
+    // meshoptimizer stops at whichever binds first, the triangle target or the error limit. Asked
+    // for almost nothing within half a per cent of the part's own size, it returns the cheapest
+    // mesh that is still honestly the same shape. Flat glass, floor pans and door cards collapse
+    // to a fraction of their allocation this way, and a budget spent on a windscreen that a
+    // quarter of the triangles would have drawn identically is a budget taken from the wheels.
+    //
+    // Only used when it comes in under the allocation. When it does not, the allocation is what
+    // gets enforced.
+    let mut free_error = 0.0f32;
+    let cheap = meshopt::simplify(
+        indices,
+        &adapter,
+        MIN_TRIANGLES * 3,
+        FREE_ERROR,
+        meshopt::SimplifyOptions::Prune | meshopt::SimplifyOptions::ErrorAbsolute,
+        Some(&mut free_error),
+    );
+    if !cheap.is_empty() && cheap.len() / 3 <= target_triangles && cheap.len() < indices.len() {
+        *indices = cheap;
+        *indices = meshopt::optimize_vertex_cache(indices, vertices.len());
+        compact(vertices, light, indices);
+        return free_error;
+    }
+
     let mut error = 0.0f32;
     // The error limit is deliberately wide open. The budget is the constraint being enforced here;
     // whether it was affordable is reported afterwards rather than silently obeyed, because on a
     // car the right answer to an expensive budget is often to raise it.
+    //
+    // `Prune` is what makes a target reachable at all on this kind of model. Collapsing edges
+    // cannot take a closed shell below four faces, so a brake caliper made of two hundred bolts,
+    // clips and washers has a floor of eight hundred triangles no matter what it is asked for —
+    // the E36's wheel hardware came out at 1,060 against a target of 180, at 24% error, which is a
+    // decimator being asked to do something it structurally cannot. Pruning drops whole small
+    // components instead, which is the only reduction that works on a bag of tiny closed shells.
     let reduced = meshopt::simplify(
         indices,
         &adapter,
         target_triangles * 3,
         1.0,
-        meshopt::SimplifyOptions::None,
+        meshopt::SimplifyOptions::Prune,
         Some(&mut error),
     );
     if !reduced.is_empty() {
         *indices = reduced;
+    }
+
+    // Edge collapse is not always able to reach a target, and on a scanned car it routinely is
+    // not. The E36's engine block is 80,869 triangles of hoses, fins and fasteners with a great
+    // deal of non-manifold junk in it, and asked for four triangles it returns all 80,869: there
+    // is no legal collapse left that does not break topology it is trying to preserve. The error
+    // it reports says so — 92% of the part's own extent, having achieved nothing — but a converter
+    // that only reported it would still write a car twenty times the budget.
+    //
+    // So when the topological simplifier cannot get there, the vertex-clustering one does. It
+    // ignores topology entirely and always reaches the target, at the cost of a mesh that is no
+    // longer the shape it was. That trade is obviously right here and would be obviously wrong for
+    // a body panel — and it is never asked for on a body panel, because on clean geometry the
+    // first simplifier reaches the target and this never runs.
+    if indices.len() / 3 > target_triangles * 5 / 4 {
+        let mut sloppy_error = 0.0f32;
+        let sloppy = meshopt::simplify_sloppy(
+            indices,
+            &adapter,
+            target_triangles * 3,
+            1.0,
+            Some(&mut sloppy_error),
+        );
+        if !sloppy.is_empty() && sloppy.len() < indices.len() {
+            *indices = sloppy;
+            error = error.max(sloppy_error);
+        }
     }
 
     // Order the triangles for the post-transform cache before compacting, so the vertex order that

@@ -36,6 +36,92 @@ pub struct CarConfig {
 
     #[serde(default)]
     pub spawn: Spawn,
+
+    #[serde(default)]
+    pub reduce: Reduction,
+}
+
+/// How the triangle budget is shared out.
+///
+/// The budget is spent in proportion to how much of each category the player can actually see,
+/// which the converter measures. These multiply that measurement, for the cases where what is
+/// worth spending on differs from what is large on screen: a headlight is a small number of pixels
+/// and most of what makes a car recognisable, and a door card is a lot of pixels nobody looks at.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reduction {
+    #[serde(default = "one")]
+    pub body: f32,
+    #[serde(default = "one")]
+    pub window: f32,
+    #[serde(default = "one")]
+    pub tyre: f32,
+    #[serde(default = "default_interior_weight")]
+    pub interior: f32,
+    #[serde(default = "default_light_weight")]
+    pub light: f32,
+    #[serde(default = "one")]
+    pub chrome: f32,
+    /// Extra weight for anything that belongs to a wheel, on top of its category's.
+    ///
+    /// Four wheels share one allocation while a body panel has one, so an unweighted split gives
+    /// each wheel a quarter of what its importance deserves — and the plan puts wheels and tyres
+    /// in the top group. A wheel that decimates to a wedge is one of the two or three things that
+    /// most obviously says "cheap 3D".
+    #[serde(default = "default_wheel_weight")]
+    pub wheel: f32,
+    /// Parts the visibility pass never saw are dropped outright. Turn this off to compile a car
+    /// whole, which is the way to check what the pass is throwing away.
+    #[serde(default = "yes")]
+    pub drop_hidden: bool,
+}
+
+fn default_wheel_weight() -> f32 {
+    4.0
+}
+
+impl Default for Reduction {
+    fn default() -> Self {
+        Reduction {
+            body: 1.0,
+            window: 1.0,
+            tyre: 1.0,
+            interior: default_interior_weight(),
+            light: default_light_weight(),
+            chrome: 1.0,
+            wheel: default_wheel_weight(),
+            drop_hidden: true,
+        }
+    }
+}
+
+impl Reduction {
+    pub fn weight(&self, category: angle_zero::azcar::Category) -> f32 {
+        use angle_zero::azcar::Category::*;
+        match category {
+            Body => self.body,
+            Window => self.window,
+            Tyre => self.tyre,
+            Interior => self.interior,
+            Light => self.light,
+            Chrome => self.chrome,
+        }
+        .max(0.0)
+    }
+}
+
+/// Seen through glass, from outside, in the dark. It reads as shapes rather than as furniture.
+fn default_interior_weight() -> f32 {
+    0.4
+}
+
+/// Lamps, grille and badges: small on screen and most of what says which car this is.
+fn default_light_weight() -> f32 {
+    1.6
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// How to find the wheels.
@@ -142,6 +228,7 @@ impl CarConfig {
             wheels: Wheels::default(),
             materials: MaterialRules::default(),
             spawn: Spawn::default(),
+            reduce: Reduction::default(),
         }
     }
 

@@ -23,6 +23,7 @@ mod mat;
 mod model;
 mod report;
 mod simplify;
+mod visibility;
 mod wheels;
 
 /// Anything the tool refuses to do, phrased for the person running it. Section 25 of the plan is

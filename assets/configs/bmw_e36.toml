@@ -9,6 +9,22 @@
 
 name = "BMW E36"
 
+# Lands at 9,540 triangles, not 15,000, and that gap is the interesting part.
+#
+# The bodywork saturates at about 4,100 triangles. Sweeping the budget from 5,000 to 40,000 moves
+# it from 2,616 to 4,876 and no further, because past that point the converter can already draw
+# every panel within five millimetres of the original and refuses to spend more on something it
+# cannot improve. Five millimetres is well under a pixel at any distance the car is seen from.
+#
+# The wheels are the opposite: surfaces of revolution have no such ceiling, and they take every
+# triangle offered — 91 a tyre at a 5,000 budget, 276 at 15,000. They are also, with the lights,
+# most of what says which car this is, and a wheel decimated to a wedge is the single most obvious
+# tell of a cheap model. So the extra budget above the body's ceiling goes to them, deliberately.
+#
+# 15,000 is where that stops paying: 20,000 buys another 100 triangles of body and 200 of wheel,
+# which does not show at 480x272.
+triangles = 15000
+
 [wheels]
 # Each corner is three assemblies with three unrelated names, and all of them must turn together:
 #   Object_4.001-.004         the tyres, 13,166 triangles each

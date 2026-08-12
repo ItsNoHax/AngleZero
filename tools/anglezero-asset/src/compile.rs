@@ -31,6 +31,7 @@ use crate::mat::Bounds;
 use crate::model::SourceModel;
 use crate::report::Report;
 use crate::simplify;
+use crate::visibility;
 use crate::wheels::{self, CORNER_NAMES};
 use crate::Result;
 
@@ -50,23 +51,57 @@ pub struct Compiled {
     pub report: Report,
 }
 
-/// One output draw call: a category, optionally belonging to a wheel.
-struct Bucket {
-    category: Category,
-    /// `None` for the body.
-    wheel: Option<u8>,
+/// One source part, on its way to becoming part of a draw call.
+///
+/// Kept separate until decimation is done, because a budget is only meaningful per part: a part is
+/// the unit that is either on the outside of the car or not.
+struct Piece {
     /// Colours here are the material's base, unlit. The light term lives alongside until welding
     /// and decimation are done with it — see `simplify`.
     vertices: Vec<Vertex>,
     light: Vec<f32>,
     indices: Vec<u32>,
+    pixels: u64,
+    source_triangles: usize,
+}
+
+/// One output draw call: a category, optionally belonging to a wheel.
+struct Bucket {
+    category: Category,
+    /// `None` for the body.
+    wheel: Option<u8>,
+    pieces: Vec<Piece>,
+    /// Merged from the pieces once decimation is finished.
+    vertices: Vec<Vertex>,
+    indices: Vec<u32>,
     /// Source triangles that went in, before any simplification.
     source_triangles: usize,
+    /// Pixels this bucket's parts own across the visibility sweep. The budget follows this.
+    pixels: u64,
+    weight: f32,
 }
 
 impl Bucket {
     fn key(&self) -> (Option<u8>, Category) {
         (self.wheel, self.category)
+    }
+
+    /// What this bucket is worth, and what it already costs.
+    fn weights(&self) -> (f64, usize) {
+        (
+            self.pixels as f64 * self.weight as f64,
+            self.pieces.iter().map(|p| p.indices.len() / 3).sum(),
+        )
+    }
+
+    /// Concatenates the surviving pieces into the one array the bucket is drawn from.
+    fn flatten(&mut self) {
+        for p in &self.pieces {
+            let base = self.vertices.len() as u32;
+            self.vertices.extend_from_slice(&p.vertices);
+            self.indices.extend(p.indices.iter().map(|i| i + base));
+        }
+        self.pieces.clear();
     }
 }
 
@@ -89,6 +124,23 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let assignment = categorise::assign(model, config, &found);
     report.note_categories(model, &assignment);
 
+    // What the player can see, measured rather than assumed. This is what makes the budget
+    // meaningful: without it a third of the E36's goes on an engine behind a closed bonnet.
+    let transparent: Vec<bool> = assignment
+        .categories
+        .iter()
+        .map(|c| *c == Category::Window)
+        .collect();
+    let seen = visibility::measure(model, &transparent);
+    let hidden_triangles: usize = model
+        .parts
+        .iter()
+        .zip(&seen.pixels)
+        .filter(|(_, px)| **px == 0)
+        .map(|(p, _)| p.triangles())
+        .sum();
+    report.note_visibility(&seen, hidden_triangles);
+
     // Everything the runtime needs to name a mesh, a material or a wheel — and the attribution
     // line, which is written first so that a car whose credit matters has it near the front of the
     // table whatever else is in there.
@@ -106,6 +158,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     let mut buckets: Vec<Bucket> = Vec::new();
     for (i, part) in model.parts.iter().enumerate() {
+        if config.reduce.drop_hidden && seen.pixels[i] == 0 {
+            continue;
+        }
         let category = assignment.categories[i];
         let wheel = found.corner_of(i);
         // Wheel geometry is stored about its own hub, so the runtime can rotate it in place.
@@ -122,28 +177,47 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                 buckets.push(Bucket {
                     category,
                     wheel,
+                    pieces: Vec::new(),
                     vertices: Vec::new(),
-                    light: Vec::new(),
                     indices: Vec::new(),
                     source_triangles: 0,
+                    pixels: 0,
+                    // Wheels are weighted up on top of their category. They are small on screen
+                    // and, with the lights, most of what says which car this is — and there are
+                    // four of them sharing one allocation, so an unweighted split gives each a
+                    // quarter of what a single part of the same importance would get.
+                    weight: config.reduce.weight(category)
+                        * if wheel.is_some() {
+                            config.reduce.wheel
+                        } else {
+                            1.0
+                        },
                 });
                 buckets.len() - 1
             }
         };
-        let bucket = &mut buckets[slot];
-        let first = bucket.vertices.len() as u32;
         let packed = pack(base);
+        let mut piece = Piece {
+            vertices: Vec::with_capacity(part.positions.len()),
+            light: Vec::with_capacity(part.positions.len()),
+            indices: part.indices.clone(),
+            pixels: seen.pixels[i] as u64,
+            source_triangles: part.triangles(),
+        };
         for (v, n) in part.positions.iter().zip(&part.normals) {
-            bucket.vertices.push(Vertex::new(
+            piece.vertices.push(Vertex::new(
                 v[0] - origin[0],
                 v[1] - origin[1],
                 v[2] - origin[2],
                 packed,
             ));
-            bucket.light.push(light_at(*n, category));
+            piece.light.push(light_at(*n, category));
         }
-        bucket.indices.extend(part.indices.iter().map(|i| i + first));
-        bucket.source_triangles += part.triangles();
+
+        let bucket = &mut buckets[slot];
+        bucket.pixels += piece.pixels;
+        bucket.source_triangles += piece.source_triangles;
+        bucket.pieces.push(piece);
     }
 
     if buckets.is_empty() {
@@ -151,23 +225,89 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     }
 
     // Weld first, then spend the budget. Welding changes what a triangle costs, so a budget shared
-    // out before it would be shared out against the wrong numbers.
+    // out before it would be shared out against the wrong numbers. Per part, because that is the
+    // unit a source model splits its seams within — nothing is gained by welding a bumper to the
+    // wing it merely touches, and the boundary between them is better left alone.
     let mut welded_away = 0;
     for b in &mut buckets {
-        welded_away += simplify::weld(&mut b.vertices, &mut b.light, &mut b.indices);
+        for p in &mut b.pieces {
+            welded_away += simplify::weld(&mut p.vertices, &mut p.light, &mut p.indices);
+        }
     }
     report.note_welding(welded_away);
 
-    let shares = share_budget(&buckets, budget);
-    for (b, target) in buckets.iter_mut().zip(&shares) {
-        let before = b.indices.len() / 3;
-        let error = simplify::reduce(&mut b.vertices, &mut b.light, &mut b.indices, *target);
+    // The budget is shared out twice: between the categories, and then between the parts inside
+    // each one. Both steps are needed and the second is the one that matters most on a scanned
+    // car. The E36's engine is 137,000 triangles of `body` behind a closed bonnet, visible as a
+    // few pixels through the grille; given a share of its category's budget it takes a third of
+    // the paint's detail with it, because a decimator handed a whole category has no idea which
+    // half of it is on the outside.
+    let bucket_targets = share_budget(
+        &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
+        budget,
+        MIN_BUCKET_TRIANGLES,
+    );
+
+    for (b, bucket_target) in buckets.iter_mut().zip(&bucket_targets) {
+        let piece_targets = share_budget(
+            &b.pieces
+                .iter()
+                .map(|p| (p.pixels as f64, p.indices.len() / 3))
+                .collect::<Vec<_>>(),
+            *bucket_target,
+            MIN_PIECE_TRIANGLES,
+        );
+
+        let before: usize = b.pieces.iter().map(|p| p.indices.len() / 3).sum();
+        let mut stuck = 0;
+        // Weighted by how many triangles ended up carrying it, not the worst of them. A bolt taken
+        // from 200 triangles to 4 has moved half its own width and is still a bolt; the number
+        // that matters is what happened to the panel it is screwed to.
+        let mut error_sum = 0.0f64;
+        let mut error_weight = 0.0f64;
+        for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
+            let error = simplify::reduce(&mut p.vertices, &mut p.light, &mut p.indices, *target);
+
+            // Some geometry cannot be simplified at all. The E36's engine block is 80,869
+            // triangles that both simplifiers hand back untouched: it is a mass of hoses, fins and
+            // fasteners with enough non-manifold junk in it that there is no collapse left to make
+            // and no cluster the sloppy pass will accept. Keeping it means writing a car twenty
+            // times its budget for a part the budget valued at four triangles, so it goes.
+            //
+            // Only ever applied to parts that were allocated next to nothing, which by
+            // construction means the visibility sweep barely saw them. A part worth thousands of
+            // triangles that will not simplify is kept, and warned about, because dropping a wing
+            // to save a budget is the wrong trade in the other direction.
+            if *target <= STUCK_TARGET && p.indices.len() / 3 > target * 4 {
+                stuck += p.indices.len() / 3;
+                p.indices.clear();
+                p.vertices.clear();
+                p.light.clear();
+                continue;
+            }
+            // Only what survives counts towards the bucket's error. A part that was dropped for
+            // refusing to simplify would otherwise report its 92% against the panel next to it,
+            // and the warning that reads would be about the wrong thing entirely.
+            let weight = (p.indices.len() / 3) as f64;
+            error_sum += error as f64 * weight;
+            error_weight += weight;
+        }
+        let error = if error_weight > 0.0 {
+            (error_sum / error_weight) as f32
+        } else {
+            0.0
+        };
+        if stuck > 0 {
+            report.note_stuck(b.category, stuck);
+        }
+        b.pieces.retain(|p| p.indices.len() >= 3);
+
         report.note_bucket(
             b.category,
             b.wheel,
             b.source_triangles,
             before,
-            b.indices.len() / 3,
+            b.pieces.iter().map(|p| p.indices.len() / 3).sum(),
             error,
         );
     }
@@ -175,9 +315,12 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Only now is the light folded in: welding averaged it and decimation moved vertices about,
     // and both of those are the reason it was kept out of the colour until here.
     for b in &mut buckets {
-        for (v, l) in b.vertices.iter_mut().zip(&b.light) {
-            v.color = apply_light(v.color, *l);
+        for p in &mut b.pieces {
+            for (v, l) in p.vertices.iter_mut().zip(&p.light) {
+                v.color = apply_light(v.color, *l);
+            }
         }
+        b.flatten();
     }
 
     // Drop anything simplification emptied, so the file has no zero-triangle draw calls in it.
@@ -212,9 +355,10 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         let base = vertices.len();
         if base + b.vertices.len() > u16::MAX as usize + 1 {
             return Err(format!(
-                "the compiled car needs {} vertices, and the format holds {}. Lower the triangle \
-                 budget.",
+                "the compiled car needs {} vertices for {} triangles, and the format holds {}. \
+                 Lower the triangle budget.",
                 base + b.vertices.len(),
+                (indices.len() + b.indices.len()) / 3,
                 u16::MAX as usize + 1
             ));
         }
@@ -478,24 +622,111 @@ fn representative_colour(buckets: &[Bucket], category: Category) -> u32 {
 
 /// Shares the triangle budget between the buckets.
 ///
-/// Proportional to what each one arrived with, which is the honest starting point and a poor
-/// finishing one: it spends a third of an E36's budget on an engine behind a closed bonnet.
-/// Weighting by what the player can see is the next milestone's job.
-fn share_budget(buckets: &[Bucket], budget: usize) -> Vec<usize> {
-    let total: usize = buckets.iter().map(|b| b.indices.len() / 3).sum();
+/// Not proportionally: proportional sharing spends the budget on whatever the model happens to
+/// have the most triangles of, which on a scanned car is the engine and the seats. It goes by how
+/// many pixels each bucket owns across the visibility sweep, times the category's weight from the
+/// config — so the split follows what the player looks at, adjusted for the cases where screen
+/// area and importance disagree. A headlight is a handful of pixels and half of what makes a car
+/// recognisable; a door card is a lot of pixels nobody has ever looked at.
+///
+/// Two rules stop the arithmetic from doing something stupid:
+///
+/// * No bucket is given more than it arrived with. A wheel that is 300 triangles does not become
+///   better for being allocated 900, and the surplus is wanted elsewhere.
+/// * No bucket is reduced below a floor. A mesh that vanishes is a missing headlight or a missing
+///   window, and a coarse one reads far better than an absent one.
+///
+/// Anything left over after the caps is handed round again, so a budget is spent rather than
+/// merely divided.
+fn share_budget(claims: &[(f64, usize)], budget: usize, floor: usize) -> Vec<usize> {
+    let have: Vec<usize> = claims.iter().map(|c| c.1).collect();
+    let total: usize = have.iter().sum();
     if total <= budget {
-        return buckets.iter().map(|b| b.indices.len() / 3).collect();
+        return have;
     }
-    buckets
-        .iter()
-        .map(|b| {
-            let tris = b.indices.len() / 3;
-            // Even a bucket rounded down to nothing keeps a few triangles: a mesh that vanishes is
-            // a missing headlight, which reads worse than a coarse one.
-            ((tris * budget) / total).max(4).min(tris)
-        })
-        .collect()
+
+    let weights: Vec<f64> = claims.iter().map(|c| c.0).collect();
+    let n = claims.len();
+
+    let mut share = vec![0usize; n];
+    let mut fixed = vec![false; n];
+
+    // Water-filling. Each pass shares what is unspent between whatever is still open, in
+    // proportion to weight; anything that would go over its own size or under the floor is pinned
+    // there and taken out of the running, and the next pass shares out what it did not take.
+    //
+    // What is left is recomputed from the pinned shares at the top of each pass rather than
+    // decremented as the pass runs. Subtracting inside the loop makes each item's share depend on
+    // where it sits in the list, and the arithmetic stops adding up to the budget.
+    loop {
+        let spent: usize = share
+            .iter()
+            .zip(&fixed)
+            .filter(|(_, f)| **f)
+            .map(|(s, _)| *s)
+            .sum();
+        let left = budget.saturating_sub(spent);
+        let open: Vec<usize> = (0..n).filter(|i| !fixed[*i]).collect();
+        if open.is_empty() {
+            break;
+        }
+        let open_weight: f64 = open.iter().map(|i| weights[*i]).sum();
+
+        let want_of = |i: usize| -> usize {
+            if open_weight > 0.0 {
+                (left as f64 * weights[i] / open_weight) as usize
+            } else {
+                // Nothing here was seen at all. Split evenly rather than give it all to the first.
+                left / open.len()
+            }
+        };
+
+        let mut pinned = false;
+        for &i in &open {
+            let want = want_of(i);
+            if want >= have[i] {
+                // Asking for more than there is. Give it what it has; the surplus goes back.
+                share[i] = have[i];
+                fixed[i] = true;
+                pinned = true;
+            } else if want <= floor {
+                // A bucket nothing much saw still gets the floor, so an unlucky measurement costs
+                // detail rather than the whole part.
+                share[i] = floor.min(have[i]);
+                fixed[i] = true;
+                pinned = true;
+            }
+        }
+        if !pinned {
+            for &i in &open {
+                share[i] = want_of(i);
+                fixed[i] = true;
+            }
+            break;
+        }
+    }
+    share
 }
+
+/// Fewest triangles any one draw call is reduced to.
+///
+/// A tyre at 24 triangles is a hexagonal prism and reads as a wheel; at 8 it is a wedge. This is
+/// the line under which a mesh stops being the thing it was and starts being an artifact — and a
+/// category that disappears is much worse than a coarse one, because a car with no windows reads
+/// as broken rather than as low-detail.
+const MIN_BUCKET_TRIANGLES: usize = 24;
+
+/// Fewest triangles a single part is reduced to before it is dropped instead.
+///
+/// Far lower than the per-draw-call floor, and deliberately so: a part is a bolt or a badge or a
+/// wiper as often as it is a wing, and a bolt rendered as four triangles is a bolt. Below this
+/// there is nothing left to be a shape, and the triangles are better spent on the part next to it.
+const MIN_PIECE_TRIANGLES: usize = 4;
+
+/// A part allocated no more than this is one the visibility sweep barely saw, and one that may be
+/// dropped outright if it refuses to simplify. Above it, an unsimplifiable part is kept and
+/// warned about instead: losing a wing to save a budget is worse than going over.
+const STUCK_TARGET: usize = 64;
 
 /// The attribution line the game will display, out of whatever the source model recorded.
 ///
@@ -737,6 +968,98 @@ mod tests {
             generous.source_triangles, accounted,
             "every source triangle must be accounted for somewhere in the report"
         );
+    }
+
+    /// The budget split, on its own. It is a handful of arithmetic that decides what the whole
+    /// pipeline produces, and getting it wrong does not look like a bug: it looks like a car that
+    /// is coarse in the wrong places, or one that quietly comes out ten times the size asked for.
+    mod budget {
+        use super::super::share_budget;
+
+        /// Sum, plus what the floors are allowed to add on top.
+        fn total(share: &[usize]) -> usize {
+            share.iter().sum()
+        }
+
+        #[test]
+        fn a_model_that_already_fits_is_left_alone() {
+            let share = share_budget(&[(1.0, 100), (1.0, 200)], 10_000, 4);
+            assert_eq!(share, vec![100, 200]);
+        }
+
+        #[test]
+        fn equal_claims_get_equal_shares() {
+            let share = share_budget(&[(1.0, 1000), (1.0, 1000), (1.0, 1000)], 300, 4);
+            assert_eq!(share, vec![100, 100, 100]);
+        }
+
+        /// The whole point: what the player looks at gets the budget.
+        #[test]
+        fn the_share_follows_the_weight() {
+            let share = share_budget(&[(9.0, 10_000), (1.0, 10_000)], 1000, 4);
+            assert_eq!(share, vec![900, 100]);
+        }
+
+        /// The engine: a third of the model, seen through a grille, worth almost nothing.
+        #[test]
+        fn a_part_nobody_looks_at_does_not_get_a_share_of_its_size() {
+            let share = share_budget(
+                &[
+                    (5000.0, 36_000), // the body shell
+                    (10.0, 137_000),  // the engine
+                ],
+                10_000,
+                4,
+            );
+            assert!(share[1] < 100, "the engine took {} triangles", share[1]);
+            assert!(share[0] > 9_000, "the body only got {}", share[0]);
+        }
+
+        /// Surplus from a part that cannot use its share goes back into the pot rather than being
+        /// lost, or a budget would only ever be partly spent.
+        #[test]
+        fn what_a_small_part_cannot_use_is_handed_back() {
+            // The first would be entitled to half of 1000 but only has 50 to give.
+            let share = share_budget(&[(1.0, 50), (1.0, 10_000)], 1000, 4);
+            assert_eq!(share[0], 50);
+            assert_eq!(share[1], 950, "the surplus was not redistributed");
+        }
+
+        /// Overshooting the budget is what this used to do, by hundreds of per cent, and nothing
+        /// about the resulting car said so.
+        #[test]
+        fn the_budget_is_never_blown() {
+            // A hard case: many tiny claims, a few huge ones, and weights spanning four orders.
+            let mut claims: Vec<(f64, usize)> = Vec::new();
+            for i in 0..300 {
+                claims.push((i as f64 * i as f64, 100 + i * 37));
+            }
+            claims.push((1e6, 200_000));
+            claims.push((0.0, 5_000));
+
+            for budget in [500usize, 3_000, 10_000, 50_000] {
+                let share = share_budget(&claims, budget, 4);
+                // The floors are the one thing allowed to push past the budget, and only by the
+                // floor times the number of claims that hit it.
+                let ceiling = budget + 4 * claims.len();
+                assert!(
+                    total(&share) <= ceiling,
+                    "budget {budget} produced {} triangles",
+                    total(&share)
+                );
+                for (i, s) in share.iter().enumerate() {
+                    assert!(*s <= claims[i].1, "claim {i} was given more than it has");
+                }
+            }
+        }
+
+        /// A car whose visibility sweep saw nothing at all — every weight zero — still has to
+        /// compile into something rather than dividing by zero or handing it all to the first.
+        #[test]
+        fn claims_with_no_weight_at_all_split_evenly() {
+            let share = share_budget(&[(0.0, 1000), (0.0, 1000)], 400, 4);
+            assert_eq!(share, vec![200, 200]);
+        }
     }
 
     #[test]

@@ -34,6 +34,11 @@ pub struct Report {
     pub source_materials: usize,
     pub source_textures: usize,
     pub welded_away: usize,
+    /// Viewpoints the visibility sweep took, and what it found nobody can see.
+    pub views: usize,
+    pub hidden_parts: usize,
+    pub hidden_triangles: usize,
+    pub stuck: Vec<(Category, usize)>,
     pub lines: Vec<Line>,
     pub categories: Vec<(Category, usize, usize)>,
     /// How each category was arrived at, and for how many parts. Sorting materials is the stage
@@ -61,6 +66,10 @@ impl Report {
             source_materials: model.materials.len(),
             source_textures: model.images.len(),
             welded_away: 0,
+            views: 0,
+            hidden_parts: 0,
+            hidden_triangles: 0,
+            stuck: Vec::new(),
             lines: Vec::new(),
             categories: Vec::new(),
             reasons: Vec::new(),
@@ -83,6 +92,17 @@ impl Report {
 
     pub fn note_welding(&mut self, dropped: usize) {
         self.welded_away = dropped;
+    }
+
+    pub fn note_visibility(&mut self, seen: &crate::visibility::Visibility, triangles: usize) {
+        self.views = seen.views;
+        self.hidden_parts = seen.hidden_parts();
+        self.hidden_triangles = triangles;
+    }
+
+    /// Triangles dropped because nothing could simplify them and nothing much could see them.
+    pub fn note_stuck(&mut self, category: Category, triangles: usize) {
+        self.stuck.push((category, triangles));
     }
 
     pub fn note_categories(&mut self, model: &SourceModel, assignment: &Assignment) {
@@ -185,6 +205,14 @@ impl Report {
                 ));
             }
         }
+        let stuck: usize = self.stuck.iter().map(|(_, t)| *t).sum();
+        if stuck > 0 {
+            self.warnings.push(format!(
+                "{} triangles would not simplify at any budget and were dropped — geometry with no \
+                 collapse left to make, worth almost nothing on screen",
+                commas(stuck)
+            ));
+        }
         let size = self.bounds.size();
         if size[2] < 2.0 || size[2] > 7.0 {
             self.warn(format!(
@@ -236,6 +264,20 @@ impl Report {
             self.bounds.min[1]
         );
         println!();
+
+        if self.views > 0 {
+            println!(
+                "Visibility: {} parts and {} triangles are not visible from any of {} viewpoints",
+                commas(self.hidden_parts),
+                commas(self.hidden_triangles),
+                self.views
+            );
+            println!(
+                "            {:.1}% of the source model, dropped before the budget was shared out",
+                100.0 * self.hidden_triangles as f32 / self.source_triangles.max(1) as f32
+            );
+            println!();
+        }
 
         println!("Where the budget went:");
         println!(
