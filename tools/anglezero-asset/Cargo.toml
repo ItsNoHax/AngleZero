@@ -16,6 +16,7 @@ path = "src/main.rs"
 # converter runs the reader over its own output before writing it out.
 angle-zero = { path = "../.." }
 gltf = { version = "1.4", features = ["import", "extras"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 meshopt = "0.6.2"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.4"

@@ -17,7 +17,8 @@ use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::track::{Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
-    self, GuPrimitive, GuState, MatrixMode, ScePspFMatrix4, ScePspFVector3, VertexType,
+    self, GuPrimitive, GuState, MatrixMode, MipmapLevel, ScePspFMatrix4, ScePspFVector3,
+    TextureColorComponent, TextureEffect, TextureFilter, TexturePixelFormat, VertexType,
 };
 
 /// PSP colours are ABGR, not ARGB.
@@ -143,8 +144,11 @@ const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// geometry is a welded mesh rather than the loose triangles everything generated here is: the E36
 /// is 9,500 vertices behind 45,000 indices, and unindexed it would be three times the memory and
 /// three times the vertex fetch.
+/// `GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF | GU_INDEX_16BIT`, matching
+/// `azcar::CarVertex`. Cars are textured and the rest of the world is not, which is why this is a
+/// separate format rather than `VERTEX_FORMAT` with a flag added.
 const CAR_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
-    VERTEX_FORMAT.bits() | VertexType::INDEX_16BIT.bits(),
+    VERTEX_FORMAT.bits() | VertexType::TEXTURE_32BITF.bits() | VertexType::INDEX_16BIT.bits(),
 );
 
 /// Render-state overrides for diagnosing hardware-only faults, cycled with the L trigger.
@@ -1471,6 +1475,7 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
     let roll = vehicle.roll();
 
     unsafe {
+        bind_car_texture(car);
         draw_one_car(car, st, [st.x, st.y, st.z], st.yaw, pitch, roll);
 
         // The rest of the field, when a benchmark mode has asked for one. Costed exactly like the
@@ -1481,10 +1486,44 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
             let slot = BENCH_SLOT.min(super::car::count().saturating_sub(1));
             BENCH_SLOT = BENCH_SLOT.wrapping_add(1);
             if let Some(other) = super::car::get(slot) {
+                // A different car is a different atlas, so the bind moves inside the loop. This is
+                // the texture switching the benchmark exists to price.
+                bind_car_texture(other);
                 draw_one_car(other, st, at, yaw, pitch, roll);
             }
         }
+
+        sys::sceGuDisable(GuState::Texture2D);
     }
+}
+
+/// Points the hardware at a car's atlas.
+///
+/// Once per car, not once per mesh: the compiler packed every material into one image and rewrote
+/// the UVs to match, so a whole car is one bind. `Modulate` is what makes that work with the rest
+/// of the pipeline — the vertex still carries the material's base colour and its light term, and
+/// the texture multiplies into it, so a material with no image has a white tile and comes out
+/// exactly as it did before there were textures at all.
+///
+/// Nearest filtering, deliberately. Neighbouring tiles in an atlas are unrelated materials, and
+/// bilinear sampling at a tile edge would fetch one of them; nearest cannot. It also suits a car
+/// whose texels are already larger than the pixels they cover.
+unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
+    let Some(tex) = car.texture() else {
+        sys::sceGuDisable(GuState::Texture2D);
+        return;
+    };
+    sys::sceGuEnable(GuState::Texture2D);
+    sys::sceGuTexMode(TexturePixelFormat::Psm5650, 0, 0, 0);
+    sys::sceGuTexImage(
+        MipmapLevel::None,
+        tex.width as i32,
+        tex.height as i32,
+        tex.width as i32,
+        tex.pixels.as_ptr() as *const c_void,
+    );
+    sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
+    sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
 }
 
 /// The extra cars a benchmark mode puts on screen, as (position, heading).

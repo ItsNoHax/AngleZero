@@ -23,6 +23,7 @@ mod mat;
 mod model;
 mod report;
 mod simplify;
+mod texture;
 mod visibility;
 mod wheels;
 
@@ -66,6 +67,7 @@ fn usage() {
     println!("      --config <car.toml>   which config to use, if not the one beside the model");
     println!("      --triangles <n>       triangle budget, overriding the config's");
     println!("      --quiet               write the file and print nothing");
+    println!("      --atlas <out.png>     also write the car's texture out, to look at");
 }
 
 fn run_convert(args: &[&str]) -> Result<()> {
@@ -73,6 +75,7 @@ fn run_convert(args: &[&str]) -> Result<()> {
     let mut config = None;
     let mut triangles = None;
     let mut quiet = false;
+    let mut atlas = None;
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -90,6 +93,9 @@ fn run_convert(args: &[&str]) -> Result<()> {
                         .map_err(|_| format!("`{v}` is not a triangle count"))?,
                 );
             }
+            "--atlas" => {
+                atlas = Some(PathBuf::from(*it.next().ok_or("--atlas needs a path")?))
+            }
             "--quiet" => quiet = true,
             other if other.starts_with("--") => return Err(format!("unknown option `{other}`")),
             other => paths.push(other),
@@ -105,6 +111,7 @@ fn run_convert(args: &[&str]) -> Result<()> {
         config,
         triangles,
         quiet,
+        atlas,
     })
 }
 

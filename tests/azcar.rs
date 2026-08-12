@@ -11,15 +11,15 @@
 
 use angle_zero::azcar::{
     field, Car, Category, Error, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
-    MATERIAL_BYTES, MESH_BYTES, NO_CREDIT, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_COLOR_8888_F32,
+    MATERIAL_BYTES, MESH_BYTES, NO_CREDIT, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_TEX_F32_COLOR_8888_F32,
     WHEEL_BYTES, WHEEL_FRONT_LEFT,
 };
-use angle_zero::mesh::Vertex;
+use angle_zero::azcar::CarVertex;
 use angle_zero::vehicle::CarShape;
 
 /// A car with one body mesh and one wheel, laid out the way the writer lays one out.
 struct Builder {
-    vertices: Vec<Vertex>,
+    vertices: Vec<CarVertex>,
     indices: Vec<u16>,
     meshes: Vec<Mesh>,
     materials: Vec<MaterialDef>,
@@ -42,7 +42,14 @@ impl Builder {
         Builder {
             // Six vertices: a triangle for the body, a triangle for the wheel.
             vertices: (0..6)
-                .map(|i| Vertex::new(i as f32, 1.0, 2.0, 0xFF00_1122))
+                .map(|i| CarVertex {
+                    u: i as f32 * 0.1,
+                    v: 0.25,
+                    color: 0xFF00_1122,
+                    x: i as f32,
+                    y: 1.0,
+                    z: 2.0,
+                })
                 .collect(),
             indices: vec![0, 1, 2, 3, 4, 5],
             meshes: vec![
@@ -93,7 +100,7 @@ impl Builder {
             }],
             strings,
             version: VERSION,
-            vertex_format: VERTEX_COLOR_8888_F32,
+            vertex_format: VERTEX_TEX_F32_COLOR_8888_F32,
             credit: NO_CREDIT,
             name: NO_CREDIT,
         }
@@ -116,6 +123,11 @@ impl Builder {
         }
         let vertices_at = align(&mut out);
         for v in &self.vertices {
+            // Texture, colour, position — the order the GE reads a vertex in, written out by hand
+            // so that this test says what the layout is rather than agreeing with whatever the
+            // struct happens to be.
+            out.extend_from_slice(&v.u.to_le_bytes());
+            out.extend_from_slice(&v.v.to_le_bytes());
             out.extend_from_slice(&v.color.to_le_bytes());
             out.extend_from_slice(&v.x.to_le_bytes());
             out.extend_from_slice(&v.y.to_le_bytes());
@@ -181,11 +193,19 @@ fn put_f32(out: &mut [u8], at: usize, v: f32) {
 }
 
 /// Parsing has to be done out of an aligned buffer, which is what the runtime arena gives it.
-fn aligned(bytes: &[u8]) -> Vec<Vertex> {
-    let mut buf = vec![Vertex::ZERO; bytes.len().div_ceil(16)];
-    // Safety: `Vertex` is four 4-byte fields, so the vector is 16 bytes per element and at least
-    // 4-byte aligned; in practice the allocator gives more, which is what the console's static
-    // arena guarantees outright.
+/// A 16-byte-aligned box to copy a test car into.
+///
+/// The console reads a car straight out of a `repr(align(16))` static, and `Car::parse` refuses a
+/// misaligned vertex section, so a test that fed it a plain `Vec<u8>` would be testing a case the
+/// runtime never has.
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct Align16([u8; 16]);
+
+fn aligned(bytes: &[u8]) -> Vec<Align16> {
+    let mut buf = vec![Align16([0u8; 16]); bytes.len().div_ceil(16)];
+    // Safety: the vector is 16 bytes per element and 16-byte aligned by the type, which is what
+    // the console's static arena guarantees outright.
     unsafe {
         core::ptr::copy_nonoverlapping(
             bytes.as_ptr(),
@@ -222,7 +242,17 @@ fn a_well_formed_car_reads_back_exactly_what_was_written() {
     // the layout that was written.
     let verts = car.vertices();
     assert_eq!(verts.len(), 6);
-    assert_eq!(verts[3], Vertex::new(3.0, 1.0, 2.0, 0xFF00_1122));
+    assert_eq!(
+        verts[3],
+        CarVertex {
+            u: 0.3,
+            v: 0.25,
+            color: 0xFF00_1122,
+            x: 3.0,
+            y: 1.0,
+            z: 2.0,
+        }
+    );
     assert_eq!(car.indices(), &[0, 1, 2, 3, 4, 5]);
 
     let body = car.mesh(0);
@@ -447,5 +477,7 @@ fn the_header_is_a_whole_number_of_alignment_units() {
     assert_eq!(MESH_BYTES % 16, 0);
     assert_eq!(MATERIAL_BYTES % 16, 0);
     assert_eq!(WHEEL_BYTES % 16, 0);
-    assert_eq!(core::mem::size_of::<Vertex>(), 16);
+    // The vertex array is read in place by the GE, so its record has to be a whole number of
+    // 4-byte fields with no padding, and the section it starts has to stay 16-byte aligned.
+    assert_eq!(core::mem::size_of::<CarVertex>(), 24);
 }

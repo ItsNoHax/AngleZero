@@ -16,6 +16,9 @@ pub struct Options {
     /// Overrides whatever the config says.
     pub triangles: Option<usize>,
     pub quiet: bool,
+    /// Where to also write the packed texture as a PNG. Nothing reads it — it exists because a
+    /// texture that is wrong is quicker to recognise by looking at it than by anything else.
+    pub atlas: Option<PathBuf>,
 }
 
 pub fn run(options: &Options) -> Result<()> {
@@ -30,6 +33,16 @@ pub fn run(options: &Options) -> Result<()> {
 
     let mut model = extract::load(&options.input)?;
     let mut compiled = compile::compile(&mut model, &config, budget)?;
+    if let Some(path) = &options.atlas {
+        image::save_buffer(
+            path,
+            &compiled.atlas,
+            crate::texture::ATLAS as u32,
+            crate::texture::ATLAS as u32,
+            image::ColorType::Rgba8,
+        )
+        .map_err(|e| format!("could not write {}: {e}", path.display()))?;
+    }
     compiled.report.check(budget);
 
     // Read the file back through the runtime's own reader before it is written. The converter and

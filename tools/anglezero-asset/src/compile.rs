@@ -21,7 +21,8 @@ use std::collections::HashMap;
 
 use angle_zero::azcar::{
     self, Category, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
-    MATERIAL_TWO_SIDED, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_COLOR_8888_F32,
+    MATERIAL_TWO_SIDED, NO_TEXTURE, NO_WHEEL, TEXTURE_5650, TEXTURE_HEADER_BYTES, VERSION,
+    VERTEX_TEX_F32_COLOR_8888_F32,
 };
 use angle_zero::mesh::Vertex;
 
@@ -30,7 +31,8 @@ use crate::config::CarConfig;
 use crate::mat::Bounds;
 use crate::model::SourceModel;
 use crate::report::Report;
-use crate::simplify;
+use crate::simplify::{self, Attr};
+use crate::texture;
 use crate::visibility;
 use crate::wheels::{self, CORNER_NAMES};
 use crate::Result;
@@ -57,6 +59,8 @@ const LOD_DISTANCES: [f32; 3] = [0.0, 18.0, 45.0];
 pub struct Compiled {
     pub bytes: Vec<u8>,
     pub report: Report,
+    /// The packed texture as RGBA, kept only so `--atlas` can write it out to be looked at.
+    pub atlas: Vec<u8>,
 }
 
 /// One source part, on its way to becoming part of a draw call.
@@ -65,10 +69,10 @@ pub struct Compiled {
 /// the unit that is either on the outside of the car or not.
 #[derive(Clone)]
 struct Piece {
-    /// Colours here are the material's base, unlit. The light term lives alongside until welding
-    /// and decimation are done with it — see `simplify`.
+    /// Colours here are the material's base, unlit. The light term and the texture coordinate live
+    /// alongside until welding and decimation are done with them — see `simplify`.
     vertices: Vec<Vertex>,
-    light: Vec<f32>,
+    attrs: Vec<Attr>,
     indices: Vec<u32>,
     pixels: u64,
     source_triangles: usize,
@@ -83,6 +87,7 @@ struct Bucket {
     pieces: Vec<Piece>,
     /// Merged from the pieces once decimation is finished.
     vertices: Vec<Vertex>,
+    uvs: Vec<[f32; 2]>,
     indices: Vec<u32>,
     /// Source triangles that went in, before any simplification.
     source_triangles: usize,
@@ -109,6 +114,7 @@ impl Bucket {
         for p in &self.pieces {
             let base = self.vertices.len() as u32;
             self.vertices.extend_from_slice(&p.vertices);
+            self.uvs.extend(p.attrs.iter().map(|a| a.uv));
             self.indices.extend(p.indices.iter().map(|i| i + base));
         }
         self.pieces.clear();
@@ -181,6 +187,15 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         );
     }
 
+    // One texture for the whole car, with every source material packed into a tile of it. Built
+    // before the parts are walked because each part's UVs have to be rewritten into its material's
+    // tile on the way in — after that, nothing downstream has to know an atlas was involved.
+    let atlas = texture::Atlas::build(model);
+    for w in &atlas.warnings {
+        report.warn(w.clone());
+    }
+    report.note_texture(atlas.textured, model.images.len(), &atlas.resized);
+
     let mut buckets: Vec<Bucket> = Vec::new();
     for (i, part) in model.parts.iter().enumerate() {
         if config.reduce.drop_hidden && seen.pixels[i] == 0 {
@@ -195,6 +210,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
         let material = &model.materials[part.material];
         let base = base_colour(material, category);
+        let tile = atlas.tiles[part.material];
 
         let slot = match buckets.iter().position(|b| b.key() == (wheel, category)) {
             Some(at) => at,
@@ -204,6 +220,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                     wheel,
                     pieces: Vec::new(),
                     vertices: Vec::new(),
+                    uvs: Vec::new(),
                     indices: Vec::new(),
                     source_triangles: 0,
                     pixels: 0,
@@ -224,19 +241,25 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         let packed = pack(base);
         let mut piece = Piece {
             vertices: Vec::with_capacity(part.positions.len()),
-            light: Vec::with_capacity(part.positions.len()),
+            attrs: Vec::with_capacity(part.positions.len()),
             indices: part.indices.clone(),
             pixels: seen.pixels[i] as u64,
             source_triangles: part.triangles(),
         };
-        for (v, n) in part.positions.iter().zip(&part.normals) {
+        for (j, (v, n)) in part.positions.iter().zip(&part.normals).enumerate() {
             piece.vertices.push(Vertex::new(
                 v[0] - origin[0],
                 v[1] - origin[1],
                 v[2] - origin[2],
                 packed,
             ));
-            piece.light.push(light_at(*n, category));
+            // A part with no texture coordinates at all still gets a valid one: its tile is a flat
+            // colour, so any point inside it is the same answer.
+            let uv = part.uvs.get(j).copied().unwrap_or([0.0, 0.0]);
+            piece.attrs.push(Attr {
+                light: light_at(*n, category),
+                uv: tile.map(uv),
+            });
         }
 
         let bucket = &mut buckets[slot];
@@ -256,7 +279,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut welded_away = 0;
     for b in &mut buckets {
         for p in &mut b.pieces {
-            welded_away += simplify::weld(&mut p.vertices, &mut p.light, &mut p.indices);
+            welded_away += simplify::weld(&mut p.vertices, &mut p.attrs, &mut p.indices);
         }
     }
     report.note_welding(welded_away);
@@ -320,6 +343,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         .collect();
 
     let mut vertices: Vec<Vertex> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
     let mut meshes: Vec<Mesh> = Vec::new();
     // Where each level's meshes begin. LOD0's are first, so a reader that knows nothing about
@@ -347,6 +371,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             }
             let first_index = indices.len() as u32;
             vertices.extend_from_slice(&b.vertices);
+            uvs.extend_from_slice(&b.uvs);
             indices.extend(b.indices.iter().map(|i| (*i as usize + base) as u16));
 
             let mut bounds = Bounds::EMPTY;
@@ -445,6 +470,8 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     let bytes = write(
         &vertices,
+        &uvs,
+        &atlas,
         &indices,
         &meshes,
         &materials,
@@ -457,7 +484,11 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         bounds,
     );
     report.note_size(&bytes);
-    Ok(Compiled { bytes, report })
+    Ok(Compiled {
+        bytes,
+        report,
+        atlas: atlas.pixels,
+    })
 }
 
 /// Where the model has to move to sit where the game expects a car.
@@ -787,6 +818,8 @@ impl Strings {
 /// Lays the sections out with every one of them 16-byte aligned.
 fn write(
     vertices: &[Vertex],
+    uvs: &[[f32; 2]],
+    atlas: &texture::Atlas,
     indices: &[u16],
     meshes: &[Mesh],
     materials: &[MaterialDef],
@@ -813,7 +846,11 @@ fn write(
         out.extend_from_slice(&w.encode());
     }
     let vertices_at = pad(&mut out);
-    for v in vertices {
+    for (i, v) in vertices.iter().enumerate() {
+        // Texture, then colour, then position: the order the GE reads a vertex in, not a choice.
+        let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+        out.extend_from_slice(&uv[0].to_le_bytes());
+        out.extend_from_slice(&uv[1].to_le_bytes());
         out.extend_from_slice(&v.color.to_le_bytes());
         out.extend_from_slice(&v.x.to_le_bytes());
         out.extend_from_slice(&v.y.to_le_bytes());
@@ -848,6 +885,14 @@ fn write(
     } else {
         0
     };
+    let texture_at = pad(&mut out);
+    out.extend_from_slice(&(texture::ATLAS as u16).to_le_bytes());
+    out.extend_from_slice(&(texture::ATLAS as u16).to_le_bytes());
+    out.extend_from_slice(&TEXTURE_5650.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&[0u8; TEXTURE_HEADER_BYTES - 8]);
+    out.extend_from_slice(&atlas.to_5650());
+
     let handling_at = pad(&mut out);
     for v in [
         handling.mass,
@@ -867,12 +912,12 @@ fn write(
     use azcar::field as f;
     out[f::MAGIC..4].copy_from_slice(&MAGIC);
     put_u16(&mut out, f::VERSION, VERSION);
-    put_u32(&mut out, f::VERTEX_FORMAT, VERTEX_COLOR_8888_F32);
+    put_u32(&mut out, f::VERTEX_FORMAT, VERTEX_TEX_F32_COLOR_8888_F32);
     put_u32(&mut out, f::VERTEX_COUNT, vertices.len() as u32);
     put_u32(&mut out, f::INDEX_COUNT, indices.len() as u32);
     put_u16(&mut out, f::MESH_COUNT, meshes.len() as u16);
     put_u16(&mut out, f::MATERIAL_COUNT, materials.len() as u16);
-    put_u16(&mut out, f::TEXTURE_COUNT, 0);
+    put_u16(&mut out, f::TEXTURE_COUNT, 1);
     put_u16(&mut out, f::WHEEL_COUNT, wheels.len() as u16);
     for (i, v) in [
         bounds.min[0],
@@ -889,7 +934,7 @@ fn write(
     }
     put_u32(&mut out, f::MESHES_AT, meshes_at as u32);
     put_u32(&mut out, f::MATERIALS_AT, materials_at as u32);
-    put_u32(&mut out, f::TEXTURES_AT, 0);
+    put_u32(&mut out, f::TEXTURES_AT, texture_at as u32);
     put_u32(&mut out, f::WHEELS_AT, wheels_at as u32);
     put_u32(&mut out, f::VERTICES_AT, vertices_at as u32);
     put_u32(&mut out, f::INDICES_AT, indices_at as u32);
@@ -955,7 +1000,7 @@ fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, mut report: Option<&mu
         let mut error_sum = 0.0f64;
         let mut error_weight = 0.0f64;
         for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
-            let error = simplify::reduce(&mut p.vertices, &mut p.light, &mut p.indices, *target);
+            let error = simplify::reduce(&mut p.vertices, &mut p.attrs, &mut p.indices, *target);
 
             // Some geometry cannot be simplified at all. The E36's engine block is 80,869
             // triangles that both simplifiers hand back untouched: it is a mass of hoses, fins and
@@ -971,7 +1016,7 @@ fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, mut report: Option<&mu
                 stuck += p.indices.len() / 3;
                 p.indices.clear();
                 p.vertices.clear();
-                p.light.clear();
+                p.attrs.clear();
                 continue;
             }
             // Only what survives counts towards the bucket's error. A part that was dropped for
@@ -1007,8 +1052,8 @@ fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, mut report: Option<&mu
     // and both of those are the reason it was kept out of the colour until here.
     for b in buckets.iter_mut() {
         for p in &mut b.pieces {
-            for (v, l) in p.vertices.iter_mut().zip(&p.light) {
-                v.color = apply_light(v.color, *l);
+            for (v, a) in p.vertices.iter_mut().zip(&p.attrs) {
+                v.color = apply_light(v.color, a.light);
             }
         }
         b.flatten();
@@ -1077,6 +1122,74 @@ mod tests {
                 < 1e-3,
             "inertia was {}",
             h.inertia
+        );
+    }
+
+    fn clone_material(m: &crate::model::Material) -> crate::model::Material {
+        crate::model::Material {
+            name: m.name.clone(),
+            base_color: m.base_color,
+            metallic: m.metallic,
+            roughness: m.roughness,
+            emissive: m.emissive,
+            image: m.image,
+            double_sided: m.double_sided,
+            transparent: m.transparent,
+        }
+    }
+
+    /// Every compiled vertex points inside a tile that belongs to some material, and different
+    /// materials end up in different tiles.
+    ///
+    /// This is the check that the atlas is actually wired up rather than merely built. A UV of
+    /// (0, 0) everywhere would look identical in game — most tiles are white, so a car sampling
+    /// one corner forever is a car that looks exactly like it did before textures existed — and
+    /// the only thing that distinguishes the two is where the coordinates point.
+    #[test]
+    fn every_vertex_samples_its_own_materials_tile() {
+        let mut model = four_wheeled_model();
+        // A second material, so there is a second tile for a vertex to land in wrongly, and UVs
+        // that span the unit square rather than sitting at one corner.
+        let mut second = crate::model::Material {
+            name: "trim".into(),
+            ..clone_material(&model.materials[0])
+        };
+        second.base_color = [0.1, 0.1, 0.1, 1.0];
+        model.materials.push(second);
+        for (i, part) in model.parts.iter_mut().enumerate() {
+            part.material = i % 2;
+            part.uvs = part
+                .positions
+                .iter()
+                .map(|p| [p[0].rem_euclid(1.0), p[2].rem_euclid(1.0)])
+                .collect();
+        }
+
+        let config = config_matching(&["tyre_", "rim_"]);
+        let compiled = compile(&mut model, &config, 10_000).unwrap();
+        let car = angle_zero::azcar::Car::parse(&compiled.bytes).unwrap();
+
+        // Rebuilt from the same materials, so the same tiles: `compile` moves geometry about but
+        // never touches the material list.
+        let atlas = crate::texture::Atlas::build(&model);
+        assert!(atlas.tiles.len() >= 2, "the test car needs several materials");
+
+        let mut used = std::collections::HashSet::new();
+        for v in car.vertices() {
+            let inside = atlas.tiles.iter().position(|t| {
+                v.u >= t.u0 - 1e-6
+                    && v.u <= t.u1 + 1e-6
+                    && v.v >= t.v0 - 1e-6
+                    && v.v <= t.v1 + 1e-6
+            });
+            let Some(tile) = inside else {
+                panic!("({}, {}) is not inside any material's tile", v.u, v.v);
+            };
+            used.insert(tile);
+        }
+        assert!(
+            used.len() >= 2,
+            "every vertex landed in the same tile ({used:?}), so the UVs are not per-material"
         );
     }
 

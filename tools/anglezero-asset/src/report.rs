@@ -9,7 +9,7 @@
 //! refuses to write a car over a warning — an oversized car is still a car worth looking at — but
 //! it says so, every time, at the end where it will be read.
 
-use angle_zero::azcar::{Category, MaterialDef, Mesh, WheelDef};
+use angle_zero::azcar::{CarVertex, Category, MaterialDef, Mesh, WheelDef};
 use angle_zero::mesh::Vertex;
 
 use crate::categorise::Assignment;
@@ -53,6 +53,10 @@ pub struct Report {
     pub wheel_radius: f32,
     /// Triangles at each level of detail, LOD0 first.
     pub levels: Vec<usize>,
+    /// How many source materials brought a real image into the atlas.
+    pub textured_materials: usize,
+    /// Source images that had to be resized into their tile, as (name, from, to).
+    pub resized: Vec<(String, (u32, u32), (u32, u32))>,
     /// What the car will drive like, after the config's defaults have been filled in.
     pub handling: angle_zero::vehicle::CarHandling,
     pub bounds: Bounds,
@@ -84,6 +88,8 @@ impl Report {
             out_wheels: 0,
             wheel_radius: 0.0,
             levels: Vec::new(),
+            textured_materials: 0,
+            resized: Vec::new(),
             handling: angle_zero::vehicle::CarHandling::DEFAULT,
             bounds: Bounds::EMPTY,
             bytes: 0,
@@ -169,7 +175,7 @@ impl Report {
         self.out_wheels = wheels.len();
         self.wheel_radius = wheels.first().map(|w| w.radius).unwrap_or(0.0);
         self.bounds = bounds;
-        self.mesh_bytes = vertices.len() * core::mem::size_of::<Vertex>() + indices.len() * 2;
+        self.mesh_bytes = vertices.len() * core::mem::size_of::<CarVertex>() + indices.len() * 2;
     }
 
     /// Triangles at each level, LOD0 first, and what every level costs in memory together.
@@ -179,7 +185,20 @@ impl Report {
     /// drawn this frame.
     pub fn note_levels(&mut self, triangles: Vec<usize>, vertices: usize, indices: usize) {
         self.levels = triangles;
-        self.mesh_bytes = vertices * core::mem::size_of::<Vertex>() + indices * 2;
+        self.mesh_bytes = vertices * core::mem::size_of::<CarVertex>() + indices * 2;
+    }
+
+    /// What went into the car's one texture: how many materials brought an image, how many images
+    /// the source had, and what each was resized to.
+    pub fn note_texture(
+        &mut self,
+        textured: usize,
+        images: usize,
+        resized: &[(String, (u32, u32), (u32, u32))],
+    ) {
+        self.textured_materials = textured;
+        self.source_textures = images;
+        self.resized = resized.to_vec();
     }
 
     pub fn note_size(&mut self, bytes: &[u8]) {
@@ -343,6 +362,25 @@ impl Report {
         println!("How the parts were sorted:");
         for (category, reason, count) in &self.reasons {
             println!("  {:<10} {count:>4} parts   {reason}", category.name());
+        }
+        println!();
+
+        println!(
+            "Texture: one {}x{} atlas, {} of {} source images used, {} materials textured",
+            crate::texture::ATLAS,
+            crate::texture::ATLAS,
+            self.resized.len(),
+            self.source_textures,
+            self.textured_materials,
+        );
+        if let Some((name, from, _)) = self.resized.iter().max_by_key(|(_, f, _)| f.0 * f.1) {
+            println!(
+                "         largest was `{}` at {}x{}, into a {}px tile",
+                name,
+                from.0,
+                from.1,
+                crate::texture::ATLAS / crate::texture::tiles_across(self.source_materials),
+            );
         }
         println!();
 

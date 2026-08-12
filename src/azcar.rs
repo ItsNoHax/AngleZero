@@ -7,9 +7,10 @@
 //!
 //! Three things shape the layout:
 //!
-//! * **Vertices and indices are read in place.** Every section starts on a 16-byte boundary, so
-//!   when the file is loaded into a 16-byte-aligned buffer the vertex array is already where the
-//!   GE wants it, in `GU_COLOR_8888 | GU_VERTEX_32BITF` order. Nothing is copied or converted at
+//! * **Vertices, indices and texture pixels are read in place.** Every section starts on a
+//!   16-byte boundary, so when the file is loaded into a 16-byte-aligned buffer the vertex array
+//!   is already where the GE wants it, in `GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF`
+//!   order, and the texture is already 5650 for `sceGuTexImage`. Nothing is copied or converted at
 //!   load time, which is what makes loading a car a file read and a bounds check.
 //! * **Records are decoded, not cast.** The handful of mesh, material and wheel records are
 //!   little-endian byte layouts with explicit `decode`, like `save::Record`. Casting structs out
@@ -23,7 +24,6 @@
 //! would draw as scattered triangles at the origin, which is a much worse way to learn that an
 //! asset is stale than an error at boot.
 
-use crate::mesh::Vertex;
 
 /// Stable magic. Present in every version.
 pub const MAGIC: [u8; 4] = *b"AZCR";
@@ -41,10 +41,37 @@ pub const HANDLING_BYTES: usize = 48;
 pub const LOD_HEADER_BYTES: usize = 16;
 pub const LOD_BYTES: usize = 16;
 
-/// Vertex layout tag written into the header. One value today; the field exists so that a compact
-/// vertex format can be introduced later and refused cleanly by an older build rather than drawn
-/// as noise.
+/// Vertex layout tags written into the header. The field exists so that a change of layout is
+/// refused cleanly by a build that predates it rather than drawn as noise.
+///
+/// `GU_COLOR_8888 | GU_VERTEX_32BITF`. What cars were before they had textures.
 pub const VERTEX_COLOR_8888_F32: u32 = 1;
+/// `GU_TEXTURE_32BITF | GU_COLOR_8888 | GU_VERTEX_32BITF`, in that order, which is the order the
+/// GE reads them in. Floats rather than the 16-bit texture coordinates the hardware also takes:
+/// eight bytes a vertex more, and no scale convention to get wrong on a machine with no debugger.
+/// The compact form is the obvious next thing to try if a car ever has to be smaller.
+pub const VERTEX_TEX_F32_COLOR_8888_F32: u32 = 2;
+
+/// A car's vertex. Field order is the hardware's, not a preference.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct CarVertex {
+    pub u: f32,
+    pub v: f32,
+    pub color: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// Pixel formats a texture section can be in. Only one so far.
+///
+/// 5650 rather than anything with alpha: what blends on a car is decided per material by the
+/// renderer, and the alpha it uses is in the vertex colour, so a texture channel for it would
+/// spend a fifth of every texel on something nothing reads.
+pub const TEXTURE_5650: u16 = 0;
+/// Width, height, format, flags, then the pixels.
+pub const TEXTURE_HEADER_BYTES: usize = 16;
 
 /// Which corner a wheel is, in the order the writer emits them.
 pub const WHEEL_FRONT_LEFT: u8 = 0;
@@ -326,9 +353,21 @@ pub struct Car<'a> {
     indices_at: usize,
     strings: (usize, usize),
     handling_at: usize,
+    /// Offset of the texture section, or zero for a car drawn on vertex colour alone.
+    texture_at: usize,
     /// Offset of the level table and how many levels it holds, or `(0, 0)` for a car with one.
     lods: (usize, usize),
     bounds: [f32; 6],
+}
+
+/// A car's texture, borrowed from the loaded file.
+#[derive(Clone, Copy, Debug)]
+pub struct Texture<'a> {
+    pub width: usize,
+    pub height: usize,
+    /// `TEXTURE_5650`.
+    pub format: u16,
+    pub pixels: &'a [u8],
 }
 
 /// One level of detail: a run of meshes, and how far away it is good enough.
@@ -359,7 +398,7 @@ impl<'a> Car<'a> {
             return Err(Error::UnsupportedVersion(version));
         }
         let format = le_u32(bytes, field::VERTEX_FORMAT);
-        if format != VERTEX_COLOR_8888_F32 {
+        if format != VERTEX_TEX_F32_COLOR_8888_F32 {
             return Err(Error::UnsupportedVertexFormat(format));
         }
         if le_u32(bytes, field::LENGTH) as usize != bytes.len() {
@@ -380,6 +419,21 @@ impl<'a> Car<'a> {
         let strings_at = le_u32(bytes, field::STRINGS_AT) as usize;
         let strings_bytes = le_u32(bytes, field::STRINGS_BYTES) as usize;
         let handling_at = le_u32(bytes, field::HANDLING_AT) as usize;
+        let texture_at = le_u32(bytes, field::TEXTURES_AT) as usize;
+        let texture_count = le_u16(bytes, field::TEXTURE_COUNT) as usize;
+        // One atlas or none. More than one would mean the renderer binding per mesh, which is the
+        // cost the atlas exists to avoid, so the format says so rather than leaving it implied.
+        if texture_count > 1 {
+            return Err(Error::BadSection);
+        }
+        let texture_bytes = if texture_count == 1 && texture_at + TEXTURE_HEADER_BYTES <= bytes.len()
+        {
+            let w = le_u16(bytes, texture_at) as usize;
+            let h = le_u16(bytes, texture_at + 2) as usize;
+            TEXTURE_HEADER_BYTES + w * h * 2
+        } else {
+            0
+        };
         let lods_at = le_u32(bytes, field::LODS_AT) as usize;
         // The count lives in the section rather than the header, because the header had one field
         // left for this and the section is the thing that grows.
@@ -403,6 +457,7 @@ impl<'a> Car<'a> {
             indices_at,
             strings: (strings_at, strings_bytes),
             handling_at,
+            texture_at: if texture_bytes > 0 { texture_at } else { 0 },
             lods: (lods_at, lod_count),
             bounds: [
                 le_f32(bytes, field::BOUNDS),
@@ -421,7 +476,7 @@ impl<'a> Car<'a> {
             (wheels_at, wheel_count * WHEEL_BYTES, true),
             (
                 vertices_at,
-                vertex_count * core::mem::size_of::<Vertex>(),
+                vertex_count * core::mem::size_of::<CarVertex>(),
                 true,
             ),
             (indices_at, index_count * 2, true),
@@ -442,6 +497,7 @@ impl<'a> Car<'a> {
                 },
                 true,
             ),
+            (texture_at, texture_bytes, true),
         ] {
             if len == 0 {
                 continue;
@@ -546,13 +602,13 @@ impl<'a> Car<'a> {
     }
 
     /// The vertex array, laid out exactly as the GU consumes it.
-    pub fn vertices(&self) -> &'a [Vertex] {
+    pub fn vertices(&self) -> &'a [CarVertex] {
         // Safety: `parse` checked that the section is 16-byte aligned inside a buffer the caller
-        // aligned, and that `vertex_count` vertices fit. `Vertex` is `repr(C)` over four 4-byte
+        // aligned, and that `vertex_count` vertices fit. `CarVertex` is `repr(C)` over six 4-byte
         // fields with no padding and no invalid bit patterns.
         unsafe {
             core::slice::from_raw_parts(
-                self.bytes.as_ptr().add(self.vertices_at) as *const Vertex,
+                self.bytes.as_ptr().add(self.vertices_at) as *const CarVertex,
                 self.vertex_count,
             )
         }
@@ -628,6 +684,26 @@ impl<'a> Car<'a> {
             return crate::vehicle::CarShape::DEFAULT;
         }
         crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count])
+    }
+
+    /// The car's texture: size, format, and the pixels, ready for `sceGuTexImage`.
+    ///
+    /// One for the whole car. Every source material has a tile in it and the compiler rewrote the
+    /// UVs to match, so the renderer binds this once and never switches texture again — which is
+    /// the entire reason the compiler packs an atlas rather than keeping textures apart.
+    pub fn texture(&self) -> Option<Texture<'a>> {
+        if self.texture_at == 0 {
+            return None;
+        }
+        let at = self.texture_at;
+        let width = le_u16(self.bytes, at) as usize;
+        let height = le_u16(self.bytes, at + 2) as usize;
+        Some(Texture {
+            width,
+            height,
+            format: le_u16(self.bytes, at + 4),
+            pixels: &self.bytes[at + TEXTURE_HEADER_BYTES..at + TEXTURE_HEADER_BYTES + width * height * 2],
+        })
     }
 
     /// How many levels of detail the car carries. One means only the meshes `mesh_count` covers.
