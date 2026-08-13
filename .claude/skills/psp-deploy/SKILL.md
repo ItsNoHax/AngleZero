@@ -30,8 +30,8 @@ invent new ones:
 
 | Slot | Build | Why |
 | --- | --- | --- |
-| `PSP/GAME/AngleZero/EBOOT.PBP` | `cargo psp --release` | What actually gets played. ~756 KB. |
-| `PSP/GAME/AngleZeroDev/EBOOT.PBP` | `cargo psp --release --features devtools` | START toggles the counter overlay, SELECT saves a frame burst. ~958 KB. |
+| `PSP/GAME/AngleZero/EBOOT.PBP` | `cargo psp --release` | What actually gets played. ~765 KB. |
+| `PSP/GAME/AngleZeroDev/EBOOT.PBP` | `cargo psp --release --features devtools` | START toggles the counter overlay, SELECT saves a frame burst. ~932 KB. |
 
 "Push the new builds" means **both**. The `EBOOT.PBP` is the only *build* artifact in each folder —
 `Psp.toml` bundles the icon, background and music into the PBP itself — but the cars are separate
@@ -57,10 +57,13 @@ new, the model is not, and nothing on screen says so.
 Without them the game boots to a title screen reading `car asset not found on the memory stick` and
 no car. That is the message to expect on a stick that has only ever had builds copied to it.
 
-There is a ceiling, and it is closer than the directory suggests. Cars are loaded into a fixed
-1.5 MB arena (`ARENA_BYTES` in `src/psp/car.rs`) and the two current ones are 1.1 MB of it, so a
-third will be refused with `car asset is too large to load` rather than silently dropped. Copying
-more cars on is not free: either raise the arena, lower a triangle budget, or take one off.
+There is a ceiling, and it is the arena rather than the twelve slots behind it. Cars are loaded
+into a fixed 6 MB arena (`ARENA_BYTES` in `src/psp/car.rs`); the seven current ones come to 3.7 MB,
+leaving room for about four more. A car that does not fit is refused with `not enough room for
+every car on the stick` rather than silently dropped, and the rest still load — so the symptom is
+one car missing from the title screen's rotation and a message under the car's name, not a build
+that fails to boot. If that happens, either raise the arena, lower a triangle budget, or take a car
+off.
 
 Both builds write to the same `target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP`, so build and
 copy one, then build and copy the other. Doing both builds first silently installs the same binary
