@@ -10,6 +10,7 @@
 //! belongs to, which comes from the geometry, because that is a question the geometry answers
 //! better than any name.
 
+use crate::compile::rotate_y;
 use crate::config::CarConfig;
 use crate::mat::Bounds;
 use crate::model::{Part, SourceModel};
@@ -196,20 +197,39 @@ pub fn identify(model: &mut SourceModel, config: &CarConfig) -> Found {
     split_merged_wheels(model, &matched);
     let matched = matching(model, &config.wheels.patterns);
 
+    // Corners are decided in the orientation the car ends up in, not the one it was modelled in.
+    //
+    // `[spawn] yaw` is the documented answer to a model whose idea of straight ahead is not the
+    // game's, and it is applied to the geometry further down the pipeline — so a car authored
+    // nose-to--Z has its nose turned to +Z well after this runs. Classifying the raw centres would
+    // label the corner that finishes at the front as a rear one, and the corner label is not
+    // cosmetic: `steers` is set from it, and the tyre marks come out from under whichever pair is
+    // called the rear.
+    //
+    // That combination is the worst kind of wrong available here — a car that looks completely
+    // correct and turns its back wheels, which is what this function's "no wheels rather than
+    // wrong ones" rule exists to avoid, and it would have been introduced by taking the fix the
+    // documentation offers for a backwards model. The E39 is the first car to need that fix and
+    // the reason this was found.
+    //
+    // `rotate_y` returns its argument untouched at a yaw of zero, so every car that does not use
+    // the option classifies exactly as it did before.
+    let yaw = config.spawn.yaw.to_radians();
+
     // Split about the middle of what matched, not about the origin: a model can be off-centre, and
     // the wheels are the most symmetric thing on a car, so their own extent is the best axis.
     let mut all = Bounds::EMPTY;
     for &i in &matched {
         let b = model.parts[i].bounds();
-        all.add(b.min);
-        all.add(b.max);
+        all.add(rotate_y(b.min, yaw));
+        all.add(rotate_y(b.max, yaw));
     }
     let mid_x = (all.min[0] + all.max[0]) * 0.5;
     let mid_z = (all.min[2] + all.max[2]) * 0.5;
 
     let mut groups: Vec<Vec<usize>> = vec![Vec::new(); 4];
     for &i in &matched {
-        let c = centre(&model.parts[i].bounds());
+        let c = rotate_y(centre(&model.parts[i].bounds()), yaw);
         // The car faces +Z with +Y up, which in a right-handed frame puts +X on its left.
         let left = c[0] > mid_x;
         let front = c[2] > mid_z;

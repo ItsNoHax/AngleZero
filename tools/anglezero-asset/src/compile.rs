@@ -616,7 +616,9 @@ impl Placement {
     }
 }
 
-fn rotate_y(p: [f32; 3], yaw: f32) -> [f32; 3] {
+/// Shared with `wheels`, which has to classify corners in the orientation the car ends up in
+/// rather than the one it was authored in.
+pub(crate) fn rotate_y(p: [f32; 3], yaw: f32) -> [f32; 3] {
     if yaw == 0.0 {
         return p;
     }

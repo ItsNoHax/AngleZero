@@ -13,6 +13,17 @@ name = "BMW E39"
 triangles = 15000
 lods = [4500, 1800]
 
+[spawn]
+# The one car in the set that was modelled facing the other way, and the only thing here that
+# cannot be measured off the bounding box — a box is the same either way round. What says so is
+# which end the lamps are: this model's headlights sit at z = -2.14 and its tail lights at +1.98,
+# where the E36, the AE86, the 190E, the Golf and both Nissans all put headlights at +Z.
+#
+# Left alone the car drove the whole descent backwards. It looked correct standing still on the
+# title screen, because a saloon seen from three-quarters on is a saloon either way round, and it
+# was only obvious from the chase camera, which spent the run looking at the car's nose.
+yaw = 180.0
+
 [wheels]
 # Three assemblies a corner, and the suffix is the corner:
 #   Object_4.001-.004    the alloys, 22,558 tris each and the largest thing on the car

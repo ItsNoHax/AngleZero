@@ -45,9 +45,16 @@ Everything about a source model that decides what the converter has to do is vis
 vertex is read — the accessors carry their own bounds, so a full report costs 28 ms rather than
 the half-minute decoding the embedded PNGs would take. Three things are worth looking for:
 
-* **Units and facing.** The report guesses from the bounding box. A car authored in centimetres
-  loads as a hundred-metre building; one facing −Z drives backwards. Both are silent until it is
-  on screen, and `scale` in the config is the fix.
+* **Units.** The report guesses from the bounding box. A car authored in centimetres loads as a
+  hundred-metre building. `scale` is the fix, and the report says enough to work it out: three of
+  the seven cars here are 0.04 units long and want multiplying by 100.
+* **Facing.** A bounding box cannot answer this — it is the same box either way round — so the
+  report cannot guess and does not try. Look at which end the lamps are on. Every car here bar one
+  puts its headlights at **+Z** and its tail lights at −Z; the E39 is the exception, with headlights
+  at z = −2.14, and `[spawn] yaw = 180` is the fix. Get it wrong and the car drives the whole
+  descent backwards, which is invisible on the title screen — a saloon three-quarters on is a
+  saloon either way round — and obvious from the chase camera, which spends the run looking at the
+  car's nose.
 * **Which parts are wheels.** This is the one question no model answers reliably. `inspect` prints
   each part's centre, and four similar parts at mirrored X and two Z stations are the wheels.
 * **How the parts are split.** The E36 is one node per part with a child per material; the AE86 is
@@ -64,6 +71,7 @@ centring, which of 57 materials is glass — the converter works out.
 |---|---|
 | `name` | Always. Shown on the title screen, folded to uppercase because the font has no lowercase. |
 | `scale` | The model is not in metres, or not life size. |
+| `[spawn] yaw` | Degrees about Y, for a model that does not face +Z. The E39 needs 180. |
 | `triangles` | The budget for LOD0. Default 10,000. |
 | `lods` | Coarser budgets, nearest first, e.g. `[4500, 1800]`. |
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
@@ -176,6 +184,20 @@ clean five-spoke wheel with a caliper behind it and the compiled one was not.
 of the tyre through the hole in the near side, which covers the alloy completely and makes every
 wheel look like a featureless blob however good it is. The GE culls; a debugging tool that does not
 will lie to you, and it cost a wrong diagnosis here before it was noticed.
+
+## When the car is the right way round and steers with the wrong wheels
+
+`[spawn] yaw` turns the geometry, and until the E39 needed it, it turned nothing else. Corners are
+worked out from where the wheels sit — `front` is simply the greater Z — and that ran on the model
+as authored, before the rotation. So the option advertised above as the fix for a backwards car
+would have turned the body to face front and left the corner labels behind it, and the labels are
+not cosmetic: `steers` comes straight from them, and the tyre marks come out from under whichever
+pair is called the rear.
+
+The result would have been a car that looks completely correct and turns its back wheels. `wheels`
+classifies in the rotated frame now, which is a no-op at a yaw of zero, so the six cars that do not
+use the option are unaffected. Worth knowing because the failure has no visual signature at all —
+the check is that the two wheels that turn are the two at the end with the headlights.
 
 ## When the whole car looks wrong
 
