@@ -12,9 +12,10 @@ use core::ffi::c_void;
 use angle_zero::azcar;
 use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
+use angle_zero::lights;
 use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
-use angle_zero::track::{Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
+use angle_zero::track::{Locator, Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
     self, GuPrimitive, GuState, MatrixMode, MipmapLevel, ScePspFMatrix4, ScePspFVector3,
@@ -1174,6 +1175,11 @@ pub struct DrawStats {
     pub rails: u16,
     pub dashes: u16,
     pub props: u16,
+    /// Lamp glows and beam patches actually submitted. The two halves of vehicle lighting cost
+    /// very different amounts — a glow is eight triangles, a beam is six but covers a great deal
+    /// more of the screen — so a field of cars is only explicable if they are counted apart.
+    pub lamps: u16,
+    pub beams: u16,
     pub verts: u32,
     /// One bit per chunk index actually submitted. There are 28 chunks, so a u32 holds the lot.
     ///
@@ -1197,6 +1203,8 @@ static mut STATS: DrawStats = DrawStats {
     rails: 0,
     dashes: 0,
     props: 0,
+    lamps: 0,
+    beams: 0,
     verts: 0,
     road_mask: 0,
     terrain_mask: 0,
@@ -1213,6 +1221,12 @@ static mut STATS_SLOT: u8 = 0;
 #[cfg(feature = "devtools")]
 pub fn car_calls() -> u32 {
     unsafe { STATS.cars as u32 }
+}
+
+/// This frame's lamp glows and beam patches, read before `take_stats` for the same reason.
+#[cfg(feature = "devtools")]
+pub fn light_counts() -> (u32, u32) {
+    unsafe { (STATS.lamps as u32, STATS.beams as u32) }
 }
 
 /// Snapshot and clear the tally. Call once per frame, after drawing.
@@ -1482,9 +1496,7 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
         // player's car — same meshes, same passes, same state changes — because the question it
         // answers is what happens to the frame when there are several of these on screen.
         #[cfg(feature = "devtools")]
-        for (at, yaw) in bench_field(st) {
-            let slot = BENCH_SLOT.min(super::car::count().saturating_sub(1));
-            BENCH_SLOT = BENCH_SLOT.wrapping_add(1);
+        for (slot, at, yaw) in bench_field(*st) {
             if let Some(other) = super::car::get(slot) {
                 // A different car is a different atlas, so the bind moves inside the loop. This is
                 // the texture switching the benchmark exists to price.
@@ -1526,7 +1538,7 @@ unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
     sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
 }
 
-/// The extra cars a benchmark mode puts on screen, as (position, heading).
+/// The extra cars a benchmark mode puts on screen, as (which car, position, heading).
 ///
 /// Laid out ahead of the player, two lanes abreast and receding, so that every one of them is on
 /// screen at a different distance. That matters more than it sounds: the first version of this put
@@ -1538,19 +1550,29 @@ unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
 /// Their height is the player's rather than the road's — on a 7% slope the furthest is most of a
 /// metre off the surface — because this measures what the renderer costs, and a car in the air
 /// costs what one on the road does.
+/// Which car each copy takes is `i % count`, so a field is a mix of every car on the stick rather
+/// than one model repeated — material and vertex-buffer switching is part of what is being timed.
+///
+/// A counter advanced per draw did this before, and it had two faults that only mattered once the
+/// lamps arrived. It never wrapped — it was clamped to the last slot, so after a few frames every
+/// extra car was the same model — and being per *draw* rather than per *position*, nothing else
+/// could work out which car stood where. The lighting pass has to: a field of cars whose lamps
+/// belong to a different model than their bodies is a mystery nobody needs.
 #[cfg(feature = "devtools")]
-fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
+fn bench_field(st: CarState) -> impl Iterator<Item = (usize, [f32; 3], f32)> {
     let extras = match debug_mode() {
         MODE_FOUR_CARS => 3,
         MODE_EIGHT_CARS => 7,
         _ => 0,
     };
+    let count = super::car::count().max(1);
     let (s, c) = (sin(st.yaw), cos(st.yaw));
     (0..extras).map(move |i| {
         // Alternating sides, receding: 3.2 m out and 9 m further up the road each pair.
         let lateral = if i % 2 == 0 { 3.2 } else { -3.2 };
         let along = 9.0 * (1 + i / 2) as f32;
         (
+            (i + 1) % count,
             [
                 st.x + lateral * c + along * s,
                 st.y,
@@ -1560,11 +1582,6 @@ fn bench_field(st: &CarState) -> impl Iterator<Item = ([f32; 3], f32)> + '_ {
         )
     })
 }
-
-/// Which car the next benchmark copy takes, so a field is a mix of every car on the stick rather
-/// than one model repeated — material and vertex-buffer switching is part of what is being timed.
-#[cfg(feature = "devtools")]
-static mut BENCH_SLOT: usize = 0;
 
 /// One car, at a pose. Everything car-specific comes out of the asset.
 ///
@@ -1963,15 +1980,119 @@ unsafe fn alloc_verts(n: usize) -> Option<*mut Vertex> {
     }
 }
 
-/// Additive glows around the head and tail lamps. The tail lamps jump in size and
-/// brightness under braking, which is most of what tells you what the car ahead is doing.
-pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
+/// How much flatter a lamp's glow is than it is wide.
+///
+/// A lens is a letterbox, not a disc — headlamps especially — and a round glow on a car reads as a
+/// ball of light stuck to the bodywork. The asset carries one radius because that is what can be
+/// measured off a lens whose shape the compiler has no opinion about; the squash is the renderer's,
+/// because it is about how a billboard looks rather than about the car.
+const LAMP_ASPECT: f32 = 0.68;
+
+/// Every car on screen that has lamps, as (asset, pose).
+///
+/// The player's car, and whatever the benchmark modes have put in front of it. This exists so that
+/// the lighting passes and `draw_car` cannot disagree about which car is where — a field of lit
+/// cars whose lamps are one model behind the bodies would be a very confusing thing to look at.
+fn lit_cars(vehicle: &Vehicle) -> impl Iterator<Item = (&'static azcar::Car<'static>, CarState)> + '_ {
+    let st = vehicle.state;
+    let player = super::car::get(vehicle.model).map(|car| (car, st));
+
+    #[cfg(feature = "devtools")]
+    let others = bench_field(st).filter_map(move |(slot, at, yaw)| {
+        let car = super::car::get(slot)?;
+        Some((
+            car,
+            CarState {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+                yaw,
+                ..st
+            },
+        ))
+    });
+    #[cfg(not(feature = "devtools"))]
+    let others = core::iter::empty();
+
+    player.into_iter().chain(others)
+}
+
+/// What the lamps on every car are being asked to do this frame.
+fn signals(vehicle: &Vehicle, braking: bool) -> lights::Signals {
+    // Every car on screen is doing what the player's car is doing, because every car on screen *is*
+    // the player's car — the benchmark field is copies of it. When these are other drivers they
+    // will carry their own state, and nothing here changes: the signals travel with the pose.
+    lights::Signals::of(&vehicle.state, braking, true)
+}
+
+/// How far a car is from the eye, which is what every quality decision here is made on.
+fn eye_distance(st: &CarState) -> f32 {
+    let eye = camera_eye();
+    let d = [st.x - eye[0], st.y - eye[1], st.z - eye[2]];
+    sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
+}
+
+/// Additive glows around every lamp on every car. The tail lamps jump in size and brightness under
+/// braking, which is most of what tells you what the car ahead is doing.
+///
+/// Where the lamps are is the asset's business — see `azcar::LightDef` — and whether each one is
+/// burning is `lights::intensity`'s. What is left here is the part that genuinely is the renderer's:
+/// one buffer, one draw call, whatever the number of cars.
+pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
     // Mode 10 drops them.
     #[cfg(feature = "devtools")]
     if debug_mode() == 10 {
         return;
     }
+    let signals = signals(vehicle, braking);
+    // An upper bound rather than a second pass over the lamps: reading a count out of each car's
+    // header is free, and resolving every lamp twice is not.
+    let budget: usize = lit_cars(vehicle).map(|(car, _)| car.light_count()).sum();
+    if budget == 0 {
+        return;
+    }
+
     unsafe {
+        let Some(verts) = alloc_verts(budget * GLOW_VERTS) else {
+            return;
+        };
+        let mut w = 0usize;
+        let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
+
+        for (car, st) in lit_cars(vehicle) {
+            let metres = eye_distance(&st);
+            // A glow is a billboard with no depth of its own, so without this the headlamps shine
+            // straight through the car whenever the camera is behind it — which, with a chase
+            // camera, is almost always. Each lamp is shown only from the side it actually faces.
+            let (s, c) = (sin(st.yaw), cos(st.yaw));
+            let facing = (camera.pos.x - st.x) * s + (camera.pos.z - st.z) * c;
+
+            for def in car.lights() {
+                let Some(lamp) = lights::lamp(&def, &st, &signals, metres) else {
+                    continue;
+                };
+                if lamp.forward != (facing > 0.0) {
+                    continue;
+                }
+                STATS.lamps = STATS.lamps.saturating_add(1);
+                push_glow(
+                    verts,
+                    &mut w,
+                    lamp.at[0],
+                    lamp.at[1],
+                    lamp.at[2],
+                    (right_x, right_z),
+                    lamp.radius,
+                    lamp.radius * LAMP_ASPECT,
+                    lamp.color,
+                );
+            }
+        }
+        if w == 0 {
+            return;
+        }
+        STATS.verts = STATS.verts.saturating_add(w as u32);
+
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
             sys::BlendOp::Add,
@@ -1985,59 +2106,13 @@ pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
         sys::sceGuDisable(GuState::Fog);
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
-
-        let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
-        let (s, c) = (sin(st.yaw), cos(st.yaw));
-        // Local (x, z) offset of a lamp, into world space.
-        let place = |lx: f32, lz: f32| (st.x + lx * c + lz * s, st.z - lx * s + lz * c);
-
-        let tail_alpha = if braking { 0xF2 } else { 0x66 };
-        let (tail_w, tail_h) = if braking { (0.95, 0.65) } else { (0.60, 0.40) };
-
-        // A lamp glow is a billboard with no depth of its own, so without this the headlamps
-        // shine straight through the car whenever the camera is behind it — which, with a chase
-        // camera, is almost always. Show each pair only from the side it actually faces.
-        let to_camera_x = camera.pos.x - st.x;
-        let to_camera_z = camera.pos.z - st.z;
-        let facing = to_camera_x * s + to_camera_z * c;
-        let show_head = facing > 0.0;
-        let show_tail = facing < 0.0;
-
-        let lamps: [(f32, f32, f32, f32, f32, u32, bool); 4] = [
-            (-0.60, 2.09, 1.00, 0.85, 0.60, rgba(0xFF, 0xF3, 0xD2, 0x59), show_head),
-            (0.60, 2.09, 1.00, 0.85, 0.60, rgba(0xFF, 0xF3, 0xD2, 0x59), show_head),
-            (-0.64, -2.02, 1.00, tail_w, tail_h, rgba(0xFF, 0x55, 0x44, tail_alpha), show_tail),
-            (0.64, -2.02, 1.00, tail_w, tail_h, rgba(0xFF, 0x55, 0x44, tail_alpha), show_tail),
-        ];
-
-        if let Some(verts) = alloc_verts(lamps.len() * GLOW_VERTS) {
-            let mut w = 0usize;
-            for (lx, lz, ly, hw, hh, color, visible) in lamps {
-                if !visible {
-                    continue;
-                }
-                let (px, pz) = place(lx, lz);
-                push_glow(
-                    verts,
-                    &mut w,
-                    px,
-                    st.y + ly,
-                    pz,
-                    (right_x, right_z),
-                    hw,
-                    hh,
-                    color,
-                );
-            }
-            sys::sceGumDrawArray(
-                GuPrimitive::Triangles,
-                VERTEX_FORMAT,
-                w as i32,
-                core::ptr::null(),
-                verts as *const c_void,
-            );
-        }
-
+        sys::sceGumDrawArray(
+            GuPrimitive::Triangles,
+            VERTEX_FORMAT,
+            w as i32,
+            core::ptr::null(),
+            verts as *const c_void,
+        );
         sys::sceGuEnable(GuState::Fog);
         sys::sceGuEnable(GuState::CullFace);
         sys::sceGuDepthMask(0);
@@ -2045,8 +2120,12 @@ pub fn draw_lamp_glows(st: &CarState, camera: &Camera, braking: bool) {
     }
 }
 
-/// The two additive ground beams that stand in for a real headlight spot.
-pub fn draw_headlight_beams(st: &CarState) {
+/// The patches of lit road that stand in for headlight beams.
+///
+/// Built in world space and drawn under one identity matrix, rather than one matrix per car: every
+/// beam on screen is a single draw call, which is what makes a field of cars affordable. It is also
+/// the more honest arrangement — a beam belongs to the road it lands on, not to the car.
+pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
     // Mode 9 drops them. The additive passes all land on the road in front of the car, on top of
     // each other, so telling which one is responsible for something there means removing them one
     // at a time.
@@ -2054,7 +2133,40 @@ pub fn draw_headlight_beams(st: &CarState) {
     if debug_mode() == 9 {
         return;
     }
+    let signals = signals(vehicle, braking);
+    let budget: usize = lit_cars(vehicle).map(|(car, _)| car.light_count()).sum();
+    if budget == 0 {
+        return;
+    }
+
     unsafe {
+        let Some(verts) = alloc_verts(budget * lights::BEAM_VERTS) else {
+            return;
+        };
+        let out = core::slice::from_raw_parts_mut(verts, budget * lights::BEAM_VERTS);
+        let mut w = 0usize;
+        // One locator for every beam on screen, seeded where the player is. It walks from wherever
+        // it last answered, and the stations it is asked about are a few metres apart on the same
+        // stretch of road, so the whole pass costs one short search and a handful of steps.
+        let mut where_on_the_road = Locator::new();
+        where_on_the_road.reset_to(vehicle.locator.last_idx);
+
+        for (car, st) in lit_cars(vehicle) {
+            let metres = eye_distance(&st);
+            for def in car.lights() {
+                if let Some(beam) = lights::beam(&def, &st, &signals, metres) {
+                    STATS.beams = STATS.beams.saturating_add(1);
+                    lights::push_beam(out, &mut w, &beam, |x, z| {
+                        track.nodes[where_on_the_road.nearest(track, x, z).index].p.y
+                    });
+                }
+            }
+        }
+        if w == 0 {
+            return;
+        }
+        STATS.verts = STATS.verts.saturating_add(w as u32);
+
         sys::sceGuEnable(GuState::Blend);
         sys::sceGuBlendFunc(
             sys::BlendOp::Add,
@@ -2063,64 +2175,29 @@ pub fn draw_headlight_beams(st: &CarState) {
             0,
             0xffff_ffff,
         );
-        sys::sceGuDepthMask(1); // no depth write for the glow
+        sys::sceGuDepthMask(1); // no depth write for the light
+        // The same bias the roadside light pools need, and for the same reason: a beam is a flat
+        // patch lying on a strip of flat facets, so over most of it the two surfaces are within a
+        // depth step of each other and which one wins is decided facet by facet. Taking the height
+        // off the road is what stops the beam being buried; this is what stops it flickering
+        // against the tarmac it is lying on.
+        sys::sceGuDepthOffset(POOL_DEPTH_BIAS);
         sys::sceGuDisable(GuState::Fog);
-        // These quads are wound right-then-forward, which faces away from a camera looking down at
-        // the road, so with culling on they were thrown away and the headlights lit nothing at all.
-        // Every other additive ground pass here draws double-sided for the same reason: a flat quad
-        // has one winding and the camera can be on either side of it.
+        // A beam is a flat patch lying on the road, and the camera can be on either side of a flat
+        // patch. Culled, they were thrown away wholesale and the headlights lit nothing at all —
+        // every additive ground pass here is double-sided for the same reason.
         sys::sceGuDisable(GuState::CullFace);
         sys::sceGumMatrixMode(MatrixMode::Model);
         sys::sceGumLoadIdentity();
-        // Clearance measured against what is actually under here rather than guessed: the road is
-        // crowned, so `ROAD_STATIONS` puts its centre 3 cm above the centreline the car's `y`
-        // follows, and the edge-line ribbons sit at 5 cm. The old 4 cm left the beam *below* the
-        // paint and one centimetre off the tarmac — survivable in the software rasteriser, but
-        // hardware has a real 16-bit depth buffer, which is where that kind of margin stops holding.
-        sys::sceGumTranslate(&ScePspFVector3 {
-            x: st.x,
-            y: st.y + 0.08,
-            z: st.z,
-        });
-        // The beam is bolted to the body, so it points where the car points. It used to be swung by
-        // `steer` as well, which read as the lamps tracking the front wheels — they are fixed units
-        // behind a fixed grille, and a car that is sliding should have its beams pointing where its
-        // nose is, not where its tyres are.
-        sys::sceGumRotateY(st.yaw);
-
-        // Two 3.6 x 22 m quads, bright at the car and fading out ahead.
-        let near = rgba(0xFF, 0xF3, 0xD2, 0x50);
-        let far = rgba(0xFF, 0xF3, 0xD2, 0x00);
-        let quad = super::scratch::alloc::<Vertex>(12);
-        if quad.is_null() {
-            return;
-        }
-        let mut w = 0;
-        for side in [-1.0f32, 1.0] {
-            let cx = side * 0.56;
-            let (l, r) = (cx - 1.8, cx + 1.8);
-            let (z0, z1) = (2.2, 24.2);
-            let corners = [
-                Vertex::new(l, 0.0, z0, near),
-                Vertex::new(r, 0.0, z0, near),
-                Vertex::new(r, 0.0, z1, far),
-                Vertex::new(l, 0.0, z0, near),
-                Vertex::new(r, 0.0, z1, far),
-                Vertex::new(l, 0.0, z1, far),
-            ];
-            for c in corners {
-                *quad.add(w) = c;
-                w += 1;
-            }
-        }
         sys::sceGumDrawArray(
             GuPrimitive::Triangles,
             VERTEX_FORMAT,
-            12,
+            w as i32,
             core::ptr::null(),
-            quad as *const c_void,
+            verts as *const c_void,
         );
 
+        sys::sceGuDepthOffset(0);
         sys::sceGuDepthMask(0);
         sys::sceGuDisable(GuState::Blend);
         sys::sceGuEnable(GuState::Fog);

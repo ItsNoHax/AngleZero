@@ -27,13 +27,20 @@ use crate::vehicle::CarState;
 /// How much of its full brightness a tail lamp burns at when the driver is not braking.
 ///
 /// The gap between this and 1.0 is the whole point of a tail lamp: at night, on a car ahead, it is
-/// the only thing that says the driver has lifted. A third is about where the two stop being
-/// confusable at the distance the chase camera puts a car at.
-pub const TAIL_IDLE: f32 = 0.30;
+/// the only thing that says the driver has lifted.
+///
+/// Both ends of this were measured on screen rather than chosen. At 0.30 a tail lamp added about
+/// seventy to the red channel over bodywork that is already dark red, which came out as no glow at
+/// all — a car that only had lights when it was braking. What keeps the two apart at 0.42 is that
+/// braking also blooms the lens: see [`BRAKE_BLOOM`], which is the half of the difference that
+/// survives being looked at from a hundred metres.
+pub const TAIL_IDLE: f32 = 0.42;
 /// How much wider a lamp's glow gets at full brightness than at rest. A brake light does not only
 /// get brighter, it visibly blooms, and on a 480-pixel screen the size change carries further than
 /// the brightness change does.
 pub const BRAKE_BLOOM: f32 = 1.55;
+/// How far a lamp's glow stands off its lens, as a fraction of the glow's own radius.
+pub const GLOW_PROUD: f32 = 0.8;
 /// Forward speed below which the car counts as reversing, m/s.
 ///
 /// Not zero. The car idles against a rail with a few centimetres a second of numerical creep in it,
@@ -196,12 +203,23 @@ pub fn lamp(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
     } else {
         1.0
     };
+    let radius = def.radius * bloom;
+    // The glow stands off the lens rather than on it, and this is not decoration.
+    //
+    // A glow is a camera-facing disc, and a disc centred exactly on a lens is half buried in the
+    // bodywork the lens is set into — the depth test then throws away everything behind the boot
+    // lid, which on a car seen from behind is most of it. Two tail lamps came to forty-nine pixels
+    // between them. Standing the glow proud of the glass is also what a real lamp looks like: the
+    // light is in the air in front of the lens, not painted on it.
+    let forward = def.at[2] >= 0.0;
+    let out = radius * GLOW_PROUD * if forward { 1.0 } else { -1.0 };
+    let (s, c) = (sin(st.yaw), cos(st.yaw));
     Some(Lamp {
         kind: def.kind,
-        at: [x, y, z],
+        at: [x + out * s, y, z + out * c],
         color: dim(def.color, scale),
-        radius: def.radius * bloom,
-        forward: def.at[2] >= 0.0,
+        radius,
+        forward,
     })
 }
 
@@ -221,16 +239,24 @@ pub fn beam(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
     // A lamp that steers swings with the road wheels; one that does not is a fixed unit behind a
     // fixed grille, and points where the car's nose points however the car is sliding.
     let yaw = st.yaw + if def.steers() { st.steer } else { 0.0 };
-    let half = max(def.radius, 0.2);
+    let far_half = max(def.spread, max(def.radius, 0.2));
+    // How wide the light already is by the time it reaches the road.
+    //
+    // Not the width of the lens, which is what this started as and which is wrong twice over. A
+    // dipped beam has spread to most of a lane within a few metres — and, more to the point, a
+    // patch narrower than the car sits in the one part of the screen the car itself is covering.
+    // From a chase camera that is the whole of it: two beams a lens wide lit 709 pixels, all of
+    // them in the sliver of road visible over the roof.
+    let near_half = max(def.radius, far_half * 0.3);
     Some(Beam {
         at: [x, st.y + BEAM_LIFT, z],
         yaw,
         // The light lands a little ahead of the lens rather than under it. A patch that starts at
         // the bumper puts a bright pool beneath the car, where no headlight has ever put one.
-        near: half * 2.0,
-        far: max(def.range, half * 4.0),
-        near_half: half,
-        far_half: max(def.spread, half),
+        near: max(def.radius, 0.2) * 2.0,
+        far: max(def.range, far_half * 2.0),
+        near_half,
+        far_half,
         color: dim(def.color, scale),
     })
 }
@@ -255,51 +281,84 @@ pub fn dim(color: u32, scale: f32) -> u32 {
     (color & 0x00ff_ffff) | ((alpha as u32) << 24)
 }
 
-/// Triangles one beam costs.
+/// Where the beam is measured along its length, and how bright it is there.
 ///
-/// Three quads across: a bright core and a fading strip either side of it. That is what gives the
-/// beam a soft edge without a texture — the same trick the lamp glows use, where the falloff is in
-/// the vertex colours rather than in an image.
-pub const BEAM_VERTS: usize = 18;
+/// Three stations rather than two, and the light does not simply ramp from full to nothing: a
+/// headlight's hot spot is a few metres in front of the car rather than at the lens, which is where
+/// the road is actually brightest and where the eye expects it. It fades to nothing by the far end,
+/// so the patch has no edge across it.
+const BEAM_STATIONS: [(f32, f32); 3] = [(0.0, 0.85), (0.30, 1.0), (1.0, 0.0)];
 
-/// Writes one beam's triangles, in world space, on the ground.
+/// How much of the beam's width is at full brightness before it starts fading to its edge.
+const BEAM_CORE: f32 = 0.45;
+
+/// Vertices one beam costs: two lengthwise segments by three crosswise strips, six each.
 ///
-/// Four lengthwise stations, not two, and the light does not simply ramp from full to nothing:
-/// a beam is at its brightest a few metres in front of the car rather than at the lens, which is
-/// where the road is actually lit and where the eye expects the hot spot to be.
-pub fn push_beam(out: &mut [Vertex], w: &mut usize, beam: &Beam) -> usize {
+/// Three strips across — a bright core and a fading one either side — is what gives the beam a soft
+/// edge without a texture, the same trick the lamp glows use. Twelve triangles, against the plan's
+/// ceiling of twenty.
+pub const BEAM_VERTS: usize = (BEAM_STATIONS.len() - 1) * 3 * 6;
+
+/// Writes one beam's triangles, in world space, lying on the road.
+///
+/// `ground` gives the height of the road at a world (x, z), and the beam takes its own height from
+/// that at every station rather than lying flat. That is not a refinement: the pass falls seven
+/// centimetres a metre, so a horizontal patch 24 m long is a metre out by its far end — floating in
+/// the air where the road drops away, and buried under the tarmac where it climbs. Buried is what it
+/// actually did, and a beam that reached two metres in front of the bumper and stopped dead was the
+/// result. `push_bay_pool` lays the lay-by's light pool on its paving for exactly this reason.
+///
+/// Sampled once per station and not once per vertex: the height is a property of how far up the
+/// road the light has reached, and asking the track eighteen times for a beam that has three
+/// answers would make the cheap half of vehicle lighting the expensive one.
+pub fn push_beam(
+    out: &mut [Vertex],
+    w: &mut usize,
+    beam: &Beam,
+    mut ground: impl FnMut(f32, f32) -> f32,
+) -> usize {
     let (s, c) = (sin(beam.yaw), cos(beam.yaw));
     let start = *w;
 
-    // A point on the beam: `along` from 0 at the lens to 1 at the far end, `across` from -1 to 1.
-    let at = |along: f32, across: f32, alpha: f32| {
+    // Each station: how far along, how wide, how bright, and how high the road is there.
+    let mut station = [(0.0f32, 0.0f32, 0.0f32, 0.0f32); BEAM_STATIONS.len()];
+    for (i, (along, intensity)) in BEAM_STATIONS.iter().enumerate() {
         let d = beam.near + (beam.far - beam.near) * along;
-        let half = beam.near_half + (beam.far_half - beam.near_half) * along;
+        let (cx, cz) = (beam.at[0] + d * s, beam.at[2] + d * c);
+        station[i] = (
+            d,
+            beam.near_half + (beam.far_half - beam.near_half) * along,
+            *intensity,
+            ground(cx, cz) + BEAM_LIFT,
+        );
+    }
+
+    // A point on the beam: which station, and `across` from -1 to 1.
+    let at = |i: usize, across: f32, alpha: f32| {
+        let (d, half, _, y) = station[i];
         let off = across * half;
         Vertex::new(
             beam.at[0] + d * s + off * c,
-            beam.at[1],
+            y,
             beam.at[2] + d * c - off * s,
             dim(beam.color, alpha),
         )
     };
 
-    // Lengthwise: bright close in, fading out. Crosswise: full through the middle, nothing at the
-    // edges, so neither end of the patch has a line on it.
-    let core = 0.45f32;
-    for (a0, a1, i0, i1) in [(0.0f32, 0.30f32, 0.85f32, 1.0f32), (0.30, 1.0, 1.0, 0.0)] {
+    for i in 0..BEAM_STATIONS.len() - 1 {
+        let (i0, i1) = (station[i].2, station[i + 1].2);
         for (x0, x1, e0, e1) in [
-            (-1.0f32, -core, 0.0f32, 1.0f32),
-            (-core, core, 1.0, 1.0),
-            (core, 1.0, 1.0, 0.0),
+            (-1.0f32, -BEAM_CORE, 0.0f32, 1.0f32),
+            (-BEAM_CORE, BEAM_CORE, 1.0, 1.0),
+            (BEAM_CORE, 1.0, 1.0, 0.0),
         ] {
             let quad = [
-                at(a0, x0, i0 * e0),
-                at(a0, x1, i0 * e1),
-                at(a1, x1, i1 * e1),
-                at(a0, x0, i0 * e0),
-                at(a1, x1, i1 * e1),
-                at(a1, x0, i1 * e0),
+                at(i, x0, i0 * e0),
+                at(i, x1, i0 * e1),
+                at(i + 1, x1, i1 * e1),
+                at(i, x0, i0 * e0),
+                at(i + 1, x1, i1 * e1),
+                at(i + 1, x0, i1 * e0),
             ];
             for v in quad {
                 if *w >= out.len() {

@@ -27,6 +27,10 @@ pub struct Diagnostics {
     /// Car draw calls submitted last frame. One car is a dozen; a benchmark mode's field is that
     /// many times over, and this is what says the extra cars were actually drawn.
     pub car_calls: u32,
+    /// Lamp glows and beam patches drawn. Vehicle lighting's two halves cost very different
+    /// amounts, and a field of cars is only explicable if they are counted apart.
+    pub lamps: u32,
+    pub beams: u32,
     pub live_skids: u32,
     pub live_puffs: u32,
     pub drifting: bool,

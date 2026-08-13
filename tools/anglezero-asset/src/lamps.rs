@@ -504,7 +504,7 @@ fn default_color(kind: LightKind) -> [f32; 3] {
 /// carry at a hundred metres.
 fn default_intensity(kind: LightKind) -> f32 {
     match kind {
-        LightKind::Head => 0.35,
+        LightKind::Head => 0.30,
         LightKind::Tail | LightKind::Brake => 0.95,
         LightKind::Reverse => 0.70,
     }

@@ -345,9 +345,12 @@ pub fn psp_main() {
             render::draw_world(&game.camera);
             render::draw_car(&game.vehicle, track);
             if game.phase != Phase::Title {
-                render::draw_headlight_beams(&game.vehicle.state);
+                // Beams first: they lie on the road, under the smoke and the glows that stand
+                // above it. Every one of these is additive with no depth write, so the order is
+                // about what looks right rather than about what is occluded.
+                render::draw_light_beams(&game.vehicle, track, game.braking_hint());
                 render::draw_effects(&game.effects, &game.camera);
-                render::draw_lamp_glows(&game.vehicle.state, &game.camera, game.braking_hint());
+                render::draw_lamp_glows(&game.vehicle, &game.camera, game.braking_hint());
             }
 
             hud::begin();
@@ -386,6 +389,8 @@ pub fn psp_main() {
                     scratch_peak: scratch::high_water() as u32,
                     scratch_failures: scratch::failures(),
                     car_calls: render::car_calls(),
+                    lamps: render::light_counts().0,
+                    beams: render::light_counts().1,
                     live_skids: game.effects.live_skids() as u32,
                     live_puffs: game.effects.live_puffs() as u32,
                     drifting: game.vehicle.drifting,

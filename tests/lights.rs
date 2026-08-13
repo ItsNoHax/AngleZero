@@ -150,7 +150,9 @@ fn a_lamp_is_carried_by_the_car_that_owns_it() {
     let l = lamp(&def, &st, &LIT, 5.0).expect("a lit tail lamp");
     assert!((l.at[0] - 30.64).abs() < 1e-4, "{:?}", l.at);
     assert!((l.at[1] - 5.0).abs() < 1e-4, "the lamp rides at the car's height plus its own");
-    assert!((l.at[2] + 14.0).abs() < 1e-4, "{:?}", l.at);
+    // The car's z, the lens's own z, and the standoff that keeps the glow out of the bodywork.
+    let standoff = def.radius * angle_zero::lights::GLOW_PROUD;
+    assert!((l.at[2] - (-12.0 - 2.0 - standoff)).abs() < 1e-4, "{:?}", l.at);
     assert!(!l.forward, "a lamp behind the origin faces backwards");
 }
 
@@ -162,10 +164,11 @@ fn turning_the_car_swings_its_lamps_around_it() {
     st.yaw = core::f32::consts::FRAC_PI_2;
 
     let l = lamp(&def, &st, &LIT, 5.0).unwrap();
-    // Yawed a quarter turn, the car's +X points along world -Z... whichever way round it is, the
-    // lamp must have left the axis it started on entirely.
-    assert!(l.at[0].abs() < 1e-3, "the lamp did not follow the car's heading: {:?}", l.at);
-    assert!(l.at[2].abs() > 0.9, "{:?}", l.at);
+    // Yawed a quarter turn, a lamp a metre out on the car's left is a metre along the world's z.
+    // The only x it keeps is the standoff that holds the glow off its own lens.
+    let standoff = def.radius * angle_zero::lights::GLOW_PROUD;
+    assert!(l.at[2].abs() > 0.9, "the lamp did not follow the car's heading: {:?}", l.at);
+    assert!(l.at[0].abs() <= standoff + 1e-4, "{:?}", l.at);
 }
 
 #[test]
@@ -234,25 +237,55 @@ fn steering_swings_only_the_lamps_configured_to_follow_it() {
     );
 }
 
+/// Flat ground, for the tests that are not about the road's shape.
+fn flat(_x: f32, _z: f32) -> f32 {
+    0.0
+}
+
 #[test]
 fn a_beam_is_the_handful_of_triangles_it_was_budgeted() {
     let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
-    let mut out = [Vertex::ZERO; BEAM_VERTS];
+    // Twice the room it should need, so that what this measures is how much a beam costs rather
+    // than how much it was given — which is the mistake this test made when it was first written.
+    let mut out = [Vertex::ZERO; BEAM_VERTS * 2];
     let mut w = 0;
-    let written = push_beam(&mut out, &mut w, &b);
+    let written = push_beam(&mut out, &mut w, &b, flat);
 
-    assert_eq!(written, BEAM_VERTS);
+    assert_eq!(written, BEAM_VERTS, "a beam costs what the constant says it costs");
     assert_eq!(written % 3, 0);
     assert!(written / 3 <= 20, "the plan's ceiling is 20 triangles a beam");
 
-    // Every vertex is on the road, and the light fades to nothing at the far end and at the edges
-    // rather than stopping at a line.
-    assert!(out.iter().all(|v| (v.y - b.at[1]).abs() < 1e-6), "the patch is flat");
+    // The light fades to nothing at the far end and at the edges rather than stopping at a line.
+    let drawn = &out[..written];
     assert!(
-        out.iter().any(|v| v.color >> 24 == 0),
+        drawn.iter().any(|v| v.color >> 24 == 0),
         "a beam with no transparent edge is a visible polygon"
     );
-    assert!(out.iter().any(|v| v.color >> 24 > 0x40), "and it is lit somewhere");
+    assert!(drawn.iter().any(|v| v.color >> 24 > 0x40), "and it is lit somewhere");
+}
+
+/// The fault that made the beam stop two metres in front of the bumper: the road falls away, and a
+/// patch that stays at one height is under the tarmac as soon as the road climbs relative to it.
+#[test]
+fn a_beam_takes_its_height_from_the_road_it_lands_on() {
+    let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
+    let mut out = [Vertex::ZERO; BEAM_VERTS];
+    let mut w = 0;
+
+    // A road climbing at 7% away from the car, which is this track's gradient.
+    push_beam(&mut out, &mut w, &b, |_x, z| z * 0.07);
+    let near = out[..6].iter().map(|v| v.y).fold(f32::MAX, f32::min);
+    let far = out[BEAM_VERTS - 6..].iter().map(|v| v.y).fold(f32::MIN, f32::max);
+    assert!(
+        far > near + 1.0,
+        "the far end did not climb with the road: {near} to {far}"
+    );
+
+    // On the flat it is flat, and it clears the tarmac rather than lying in it.
+    let mut out = [Vertex::ZERO; BEAM_VERTS];
+    let mut w = 0;
+    push_beam(&mut out, &mut w, &b, flat);
+    assert!(out.iter().all(|v| (v.y - angle_zero::lights::BEAM_LIFT).abs() < 1e-6));
 }
 
 /// Writing into a buffer that has run out must stop, not run off the end. The renderer's scratch
@@ -262,8 +295,23 @@ fn a_beam_written_into_a_full_buffer_stops_short() {
     let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
     let mut out = [Vertex::ZERO; 8];
     let mut w = 0;
-    assert_eq!(push_beam(&mut out, &mut w, &b), 8);
+    assert_eq!(push_beam(&mut out, &mut w, &b, flat), 8);
     assert_eq!(w, 8);
+}
+
+/// A glow centred exactly on its lens is half buried in the bodywork, and the depth test throws
+/// that half away — two tail lamps came to forty-nine pixels between them.
+#[test]
+fn a_lamp_glow_stands_off_the_lens_it_comes_from() {
+    let tail = light(LightKind::Tail, [0.64, 1.0, -2.0]);
+    let head = headlight([0.62, 0.7, 2.0]);
+    let l = lamp(&tail, &parked(), &LIT, 5.0).unwrap();
+    let h = lamp(&head, &parked(), &LIT, 5.0).unwrap();
+
+    assert!(l.at[2] < tail.at[2], "a tail lamp's glow is behind its lens");
+    assert!(h.at[2] > head.at[2], "a headlamp's glow is in front of its lens");
+    // Along the car's axis only: a lamp does not wander sideways off its own lens.
+    assert!((l.at[0] - tail.at[0]).abs() < 1e-6);
 }
 
 // --- distance -------------------------------------------------------------------------

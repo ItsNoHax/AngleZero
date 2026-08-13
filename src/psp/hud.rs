@@ -274,6 +274,8 @@ pub fn debug_overlay(diag: &super::capture::Diagnostics, shots: u32) {
     field(&mut l, &mut w, b" SCR", diag.scratch_peak);
     field(&mut l, &mut w, b" SCF", diag.scratch_failures);
     field(&mut l, &mut w, b" CAR", diag.car_calls);
+    field(&mut l, &mut w, b" LMP", diag.lamps);
+    field(&mut l, &mut w, b" BM", diag.beams);
     field(&mut l, &mut w, b" SK", diag.live_skids);
     field(&mut l, &mut w, b" SM", diag.live_puffs);
     field(&mut l, &mut w, b" SHOT", shots);

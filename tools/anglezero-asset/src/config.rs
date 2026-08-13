@@ -265,12 +265,19 @@ impl Lights {
     }
 }
 
+/// How far a headlight throws, and how wide the light is where it lands.
+///
+/// Tuned against the chase camera rather than against a real headlight, because that is the only
+/// place anybody looks at it from. At 24 m the lit patch stopped inside the length of road the
+/// camera can see over the car's roof, which read as a bright smudge at the bumper rather than as
+/// headlights; the light has to reach past what the eye is looking at. 40 m is about where the fog
+/// starts taking it anyway.
 fn default_range() -> f32 {
-    24.0
+    40.0
 }
 
 fn default_spread() -> f32 {
-    2.6
+    3.8
 }
 
 /// How the triangle budget is shared out.
