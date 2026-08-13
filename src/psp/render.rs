@@ -337,6 +337,10 @@ const LAMP_POOL: u32 = rgba(0xFF, 0xE4, 0xB0, 0x54);
 /// spans. Enough to win a tie against the facet a pool lies on; small enough that a pool cannot
 /// climb in front of something genuinely nearer, such as the car or a guard rail.
 const POOL_DEPTH_BIAS: i32 = 64;
+/// The same, for lamp glows against the bodywork they are set into. Four times the pools' because a
+/// glow is a disc facing the camera and the panel behind it curves away, where a pool and its road
+/// are two flat things a few centimetres apart.
+const LAMP_DEPTH_BIAS: i32 = 256;
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
 const TREE_STRIDE: usize = 4;
@@ -2136,6 +2140,13 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, track: &Track, camera: &Camera, brakin
             0xffff_ffff,
         );
         sys::sceGuDepthMask(1);
+        // A glow sits on its lens, so it is very nearly coplanar with the bodywork the lens is set
+        // into, and about half of every disc loses the depth comparison by a hair — two tail lamps
+        // once came to forty-nine lit pixels between them. This is the same instrument the light
+        // pools use against the road they lie on, and for the same reason. Larger than theirs
+        // because a lamp is a flat disc against curved panels rather than one flat thing on
+        // another, and still far too small for a lamp to climb in front of a car in the way.
+        sys::sceGuDepthOffset(LAMP_DEPTH_BIAS);
         sys::sceGuDisable(GuState::CullFace);
         sys::sceGuDisable(GuState::Fog);
         sys::sceGumMatrixMode(MatrixMode::Model);
@@ -2147,6 +2158,7 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, track: &Track, camera: &Camera, brakin
             core::ptr::null(),
             verts as *const c_void,
         );
+        sys::sceGuDepthOffset(0);
         sys::sceGuEnable(GuState::Fog);
         sys::sceGuEnable(GuState::CullFace);
         sys::sceGuDepthMask(0);

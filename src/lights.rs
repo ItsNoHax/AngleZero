@@ -39,8 +39,18 @@ pub const TAIL_IDLE: f32 = 0.42;
 /// get brighter, it visibly blooms, and on a 480-pixel screen the size change carries further than
 /// the brightness change does.
 pub const BRAKE_BLOOM: f32 = 1.55;
-/// How far a lamp's glow stands off its lens, as a fraction of the glow's own radius.
-pub const GLOW_PROUD: f32 = 0.8;
+/// How far a lamp's glow stands off its lens, in metres.
+///
+/// Three centimetres, and a fixed distance rather than a fraction of the glow: it exists only to
+/// put the billboard on the outside of the glass rather than level with it, which is where the
+/// light of a real lamp is. It used to be eight tenths of the radius, which on a 35 cm lamp is 28 cm
+/// — a hand's breadth of night between the car and its own lights, and plainly visible as a gap.
+///
+/// What that distance was really doing was winning the depth test, and it was the wrong instrument
+/// for the job. A camera-facing disc centred on a lens is very nearly coplanar with the lens, so
+/// about half of it loses by a hair; the fix for a decal that is coplanar with what it lies on is to
+/// bias the comparison, which is what the roadside light pools do and what the glow pass now does.
+pub const GLOW_STANDOFF: f32 = 0.03;
 /// Forward speed below which the car counts as reversing, m/s.
 ///
 /// Not zero. The car idles against a rail with a few centimetres a second of numerical creep in it,
@@ -277,7 +287,7 @@ pub fn lamp(def: &LightDef, pose: &Pose, signals: &Signals, metres: f32) -> Opti
     let forward = def.at[2] >= 0.0;
     // Along the car's own axis, which the body's attitude has turned as well: the standoff has to
     // leave the bodywork the lens is set into, and on a slope that is not the horizontal.
-    let out = radius * GLOW_PROUD * if forward { 1.0 } else { -1.0 };
+    let out = GLOW_STANDOFF * if forward { 1.0 } else { -1.0 };
     let (x, y, z) = place(pose, [def.at[0], def.at[1], def.at[2] + out]);
     Some(Lamp {
         kind: def.kind,

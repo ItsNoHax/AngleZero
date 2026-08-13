@@ -162,7 +162,7 @@ fn a_lamp_is_carried_by_the_car_that_owns_it() {
     assert!((l.at[0] - 30.64).abs() < 1e-4, "{:?}", l.at);
     assert!((l.at[1] - 5.0).abs() < 1e-4, "the lamp rides at the car's height plus its own");
     // The car's z, the lens's own z, and the standoff that keeps the glow out of the bodywork.
-    let standoff = def.radius * angle_zero::lights::GLOW_PROUD;
+    let standoff = angle_zero::lights::GLOW_STANDOFF;
     assert!((l.at[2] - (-12.0 - 2.0 - standoff)).abs() < 1e-4, "{:?}", l.at);
     assert!(!l.forward, "a lamp behind the origin faces backwards");
 }
@@ -177,7 +177,7 @@ fn turning_the_car_swings_its_lamps_around_it() {
     let l = lamp(&def, &poised(&st), &LIT, 5.0).unwrap();
     // Yawed a quarter turn, a lamp a metre out on the car's left is a metre along the world's z.
     // The only x it keeps is the standoff that holds the glow off its own lens.
-    let standoff = def.radius * angle_zero::lights::GLOW_PROUD;
+    let standoff = angle_zero::lights::GLOW_STANDOFF;
     assert!(l.at[2].abs() > 0.9, "the lamp did not follow the car's heading: {:?}", l.at);
     assert!(l.at[0].abs() <= standoff + 1e-4, "{:?}", l.at);
 }
@@ -393,10 +393,11 @@ fn a_beam_written_into_a_full_buffer_stops_short() {
     assert_eq!(w, 8);
 }
 
-/// A glow centred exactly on its lens is half buried in the bodywork, and the depth test throws
-/// that half away — two tail lamps came to forty-nine pixels between them.
+/// A glow sits on the outside of its glass — but only just. Anything more is a visible gap between
+/// the car and its own lights, which is what eight tenths of the radius bought: 28 cm on a big lamp.
+/// Keeping the disc out of the bodywork is the depth bias's job, not this distance's.
 #[test]
-fn a_lamp_glow_stands_off_the_lens_it_comes_from() {
+fn a_lamp_glow_sits_on_its_lens_rather_than_off_in_the_air() {
     let tail = light(LightKind::Tail, [0.64, 1.0, -2.0]);
     let head = headlight([0.62, 0.7, 2.0]);
     let l = lamp(&tail, &level(), &LIT, 5.0).unwrap();
@@ -406,6 +407,22 @@ fn a_lamp_glow_stands_off_the_lens_it_comes_from() {
     assert!(h.at[2] > head.at[2], "a headlamp's glow is in front of its lens");
     // Along the car's axis only: a lamp does not wander sideways off its own lens.
     assert!((l.at[0] - tail.at[0]).abs() < 1e-6);
+
+    // And close enough to the glass to read as coming out of it. A tenth of a metre is already
+    // four pixels of gap at the distance the chase camera sits at.
+    for (glow, def) in [(l, tail), (h, head)] {
+        let gap = (glow.at[2] - def.at[2]).abs();
+        assert!(gap < 0.1, "{:.2} m of night between a lamp and its lens", gap);
+    }
+    // Whatever the lamp's size: a big lens must not float further away than a small one.
+    let big = lamp(
+        &LightDef { radius: 0.5, ..tail },
+        &level(),
+        &LIT,
+        5.0,
+    )
+    .unwrap();
+    assert!((big.at[2] - l.at[2]).abs() < 1e-6, "the standoff followed the radius");
 }
 
 // --- distance -------------------------------------------------------------------------
