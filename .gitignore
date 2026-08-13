@@ -7,5 +7,6 @@ __pycache__/
 /dist/
 
 # Source car models: tens of megabytes each, and nothing builds from them — the compiled .azcar in
-# assets/compiled/ is what ships, and that is committed. See docs/assets.md for where to get them.
+# assets/compiled/ is what ships, and that is committed. The licence table in docs/cars.md says
+# where each one came from.
 /assets/source/*.glb

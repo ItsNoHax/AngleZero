@@ -1,0 +1,65 @@
+# Nissan Silvia S15, Vertex Edge kit — the smallest source model in the set at 99,304 triangles,
+# which is a sixth of the AE86 and a third of the Golf.
+#
+# That changes what the budget is for. Every other car here is an exercise in deciding what to
+# throw away; this one is close enough to 15,000 after the visibility sweep that most parts keep
+# something like their shape without being argued over.
+
+name = "Nissan S15"
+
+# 0.045 units across the box, 4.50 m at 100x. A stock S15 is 4.45 m and the Vertex kit adds a
+# front lip and a rear diffuser, so 4.50 is the right answer rather than a rounding error.
+scale = 100.0
+
+triangles = 15000
+lods = [4500, 1800]
+
+[wheels]
+# The corners are named twice over, because the wheels came from another car: the rim is a Subaru
+# Impreza WRX STI's under `Wh:Subaru_...Wheel1`, and the tyre, disc and caliper are Nissan parts
+# under an `N:` prefix. Four patterns, and the `1A` suffixes are load-bearing — `Tire1A` must not
+# be shortened to `Tire`, which would also take `TireBlur` if this model had one.
+match = ["Wheel1", "Tire1A", "BrakeDisc", "Caliper"]
+
+[reduce]
+# The rim is 21,580 triangles across four corners against 5,900 of tyre, and it is a mesh-spoke
+# STI wheel — the pattern between the spokes is most of what it looks like, and the first thing to
+# close under an edge collapse.
+wheel = 1.6
+
+interior = 0.5
+light = 8.0
+
+# Left at 8.0 after trying 12.0 and getting the identical 163 triangles at the identical 13.64%
+# error. That is the second allocation pass saying something worth hearing: this bucket is not
+# short of budget, it is short of geometry it can keep. 1,138 triangles spread over a dozen small
+# separate trim pieces have very few collapses between them that do not change a silhouette, so
+# raising the weight only moved the surplus into the cabin, which did not need it either.
+chrome = 8.0
+
+[materials]
+# Maya `phongNSG1` numbers with no words in them at all, so nothing can be guessed from a name and
+# the mesh names are what say which is which — `M_Carpaint`, `M_Glass_WindowRear`, `M_LGlass` for
+# the lamp lenses, `M_Interior`. These map the phong numbers those meshes wear.
+#
+# `phong13/14/15` are the lamp lenses and `phong21` is the rear window: four numbers that would
+# all otherwise land in the body, which is the difference between lit tail lamps and painted ones.
+light = ["phong13SG", "phong14SG", "phong15SG"]
+window = ["phong21SG", "phong20SG"]
+interior = ["phong18SG", "phong8SG", "phong19SG", "phong17SG"]
+chrome = ["phong16SG", "phong10SG", "phong11SG", "Caliper", "Wheel1"]
+tyre = ["Tire1A"]
+body = ["phong1SG", "phong2SG", "phong4SG", "phong6SG"]
+
+[handling]
+# 1240 kg, 2.525 m between the axles, rear-wheel drive and the most steering lock of anything here
+# — which is what the car is for. An S15 with a Vertex kit on it was never a fast car and was
+# always a drift car, so it gets the AE86's disposition with twenty years more power behind it.
+mass = 1240.0
+front_axle = 1.14
+rear_axle = 1.39
+engine = 7300.0
+top_speed = 55.0
+brake = 9800.0
+steer_lock = 0.72
+grip = 0.98

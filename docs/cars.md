@@ -27,12 +27,17 @@ cargo run --release -p anglezero-asset -- convert \
     assets/source/your_car.glb assets/compiled/your_car.azcar \
     --config assets/configs/your_car.toml
 
-# 4. Put it on the stick. The game loads every .azcar it finds, up to four.
+# 4. Put it on the stick. The game loads every .azcar it finds that fits in the arena.
 cp assets/compiled/*.azcar ~/.ppsspp/PSP/GAME/AngleZero/CARS/     # emulator
 ```
 
-L and R on the title screen pick between them. That is the architectural test: the AE86 was added
-with a thirty-line TOML and no renderer change at all.
+Left and right on the title screen pick between them. That is the architectural test: the AE86 was
+added with a thirty-line TOML and no renderer change at all.
+
+There are twelve slots and a 6 MB arena behind them, so the limit anybody reaches is the arena —
+which is a number of bytes that can be measured, rather than a number of cars somebody picked. Seven
+cars at the budgets in this repo come to 3.7 MB, leaving room for about four more. A car that does
+not fit is refused by name on the title screen and the rest still load.
 
 ## What `inspect` is for
 
@@ -126,8 +131,13 @@ carries one decimation's error and not three.
 
 With eight cars on screen this halves the vertex load — 260,223 to 138,225 a frame — for 0.05% of
 pixels differing at all. It costs file size: the E36 is 580 KB, of which 129 KB is the texture and
-the rest is geometry across three levels. Both cars together are 1.1 MB of the runtime's 1.5 MB
-arena, so a third car needs either a bigger arena or a smaller budget.
+the rest is geometry across three levels.
+
+That is what made the arena the binding limit. Seven cars run from the 190E's 450 KB to the R34's
+627 KB and come to 3.7 MB together — against an arena that was 1.5 MB, which is why the four slots
+next to it were never once reached: the third car was refused for want of bytes long before a
+fourth was asked for. The arena is 6 MB now and the slots are twelve, deliberately more than it can
+hold, so that the failure names the resource that actually ran out.
 
 ## Measuring
 
@@ -155,6 +165,23 @@ clean five-spoke wheel with a caliper behind it and the compiled one was not.
 of the tyre through the hole in the near side, which covers the alloy completely and makes every
 wheel look like a featureless blob however good it is. The GE culls; a debugging tool that does not
 will lie to you, and it cost a wrong diagnosis here before it was noticed.
+
+## When the whole car looks wrong
+
+Check the order of its meshes before suspecting anything else. The S15 arrived drawing as a handful
+of pixels on the road, and every offline measurement said the asset was perfect — 4.47 m of vertex
+data at all three levels, four wheels at the right hubs, sane materials, and thirteen draw calls
+issued on the console. What was different about it was that the compiler emitted its wheel meshes
+before its body meshes, and it is the only car in the set that does.
+
+That mattered because `sceGumPushMatrix` and `sceGumPopMatrix` do not address the same stack slot in
+rust-psp 0.3.13 — push advances the pointer then saves, pop retreats the pointer then loads, so what
+is popped is never what was pushed. It only appears to work once a draw has synced the right matrix
+into the slot underneath. Every car whose body comes first does exactly that on its first mesh; the
+S15 pushed and popped before drawing anything, restored leftovers, and rendered its whole body
+through them. `draw_one_car` now rebuilds the car's transform before each mesh and uses no stack at
+all, so mesh order means nothing again — but the failure is worth recognising, because "the asset is
+fine and the car is missing" points at the renderer and not at the pipeline.
 
 ## The texture
 
@@ -190,9 +217,23 @@ The models are other people's work, under licences that require attribution. The
 out of the asset — the converter reads it from the glTF's `asset.extras` — so the title screen
 shows it without anybody having to remember to.
 
-| Car | Author | Licence |
-|---|---|---|
-| BMW 3-Series E36 | [Black Snow](https://sketchfab.com/BlackSnow02) | CC-BY-4.0 |
-| Toyota AE86 Trueno | Stanbox | CC-BY-NC-4.0 |
+The source `.glb` are tens of megabytes each and are not in git. These are where they came from; the
+file name each one is expected to have is in `assets/configs/`, beside the config that compiles it.
 
-**The AE86 is non-commercial.** Fine for a hobby build, not for a paid release.
+| Car | Model | Author | Licence |
+|---|---|---|---|
+| BMW 3-Series E36 | [Sketchfab](https://sketchfab.com/3d-models/bmw-3-series-e36-street-13d0a12ecda04317b96ce1e618300412) | [Black Snow](https://sketchfab.com/BlackSnow02) | CC-BY-4.0 |
+| BMW 5-Series E39 | [Sketchfab](https://sketchfab.com/3d-models/bmw-e39-free-531a5a93da5d493d9918eb36f011c20d) | [Black Snow](https://sketchfab.com/BlackSnow02) | CC-BY-4.0 |
+| Mercedes-Benz 190E (W201) | [Sketchfab](https://sketchfab.com/3d-models/1982-mercedes-w201-9b2ea34482654173a7f421aab8f1b287) | [Dave Love](https://sketchfab.com/Tyler_Dave) | CC-BY-4.0 |
+| Toyota AE86 Trueno | [Sketchfab](https://sketchfab.com/3d-models/toyota-ae86-trueno-da86f9fb5e6149878b433f8a2b81443a) | [StanBox](https://sketchfab.com/StanBox) | CC-BY-NC-4.0 |
+| Nissan Skyline R34 GT-R | [Sketchfab](https://sketchfab.com/3d-models/2002-nissan-skyline-gt-r-v-spec-ii-nur-r34-778a13fa476c4806b9df75a87a6ecf7c) | [OUTPISTON](https://sketchfab.com/outpiston) | CC-BY-NC-SA-4.0 |
+| Nissan Silvia S15 (Vertex Edge) | [Sketchfab](https://sketchfab.com/3d-models/2010-vertex-edge-nissan-s15-silvia-1edf4f37e6284bdaa6df0f9572389875) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Volkswagen Golf R Mk7.5 | [Sketchfab](https://sketchfab.com/3d-models/2019-volkswagen-golf-r-ae63f9a1b236480588bd2e8dcce7b7b2) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+
+**Four of the seven are non-commercial, and three of those are also share-alike.** Fine for a hobby
+build; a paid release could ship the E36, the E39 and the 190E and nothing else. `ShareAlike` is the
+stricter half of that — it reaches the derivative, which is the compiled `.azcar` and arguably the
+screenshots of it, not merely the sale.
+
+The credit line is read out of each model's `asset.extras` by the converter and drawn on the title
+screen, so this table is a convenience: the attribution ships whether or not anybody updates it.

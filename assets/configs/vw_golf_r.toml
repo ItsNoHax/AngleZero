@@ -1,0 +1,85 @@
+# Volkswagen Golf R Mk7.5 — the first model in the set that is not in metres.
+#
+# Its bounding box is 0.043 units long. `inspect` reports that as "hundreds of metres, or a model
+# in odd units", which is the honest answer: nothing in a glTF says what a unit is, and 0.043 is
+# only a car if you already know it is one. Multiplying by 100 gives 4.28 m against a real Mk7.5
+# Golf R's 4.26, and the same factor turns out to be right for both Nissans, which came off the
+# same site from the same kind of source.
+
+name = "VW Golf R"
+
+scale = 100.0
+
+triangles = 15000
+lods = [4500, 1800]
+
+[wheels]
+# Everything at a corner is under an `Ani_` node — the rig's animation handles, kept by the
+# exporter — and they are the only names on this model that mean anything:
+#   Ani_Wheel_*, Ani_Wheel_Scale_*   the alloy and the tyre, 6,916 + 780 tris a corner
+#   Ani_Wheel_Caliper_*              the caliper
+#   Ani_Disc_Scale_*                 the brake disc
+#
+# `Ani_Wheel` alone would take the calipers with it, which is wanted, but it would also miss the
+# discs, so both prefixes are named. What is deliberately *not* matched is `Ani_DoorLifting_FL1`:
+# it is the largest mesh on the car at 50,880 triangles, it is the body, and `FL` in the middle of
+# it makes it look like a front-left anything to a pattern that is not careful.
+match = ["Ani_Wheel", "Ani_Disc"]
+
+[reduce]
+# Two thirds of this model is cabin. `Int_Plas_SH` and `Leather_Int` are 92,000 triangles between
+# them against the paint's 40,000, and the visibility sweep can see a good deal of it through the
+# glass — so left alone the interior takes a share of the budget out of all proportion to a cabin
+# seen at night, from behind, through a tinted rear window.
+#
+# 0.35 was too far: it bought 166 triangles at 40% error, which is not a cabin held down, it is a
+# cabin gone. 0.5 is the number where the seat backs are still seat backs.
+interior = 0.5
+
+# The alloys, once they are sorted out of the tyre bucket — see `rimBC` below. 6,916 triangles a
+# corner of five twin spokes, and the same argument the E36 makes about spoke windows applies to a
+# wheel this open.
+wheel = 2.0
+
+# The Mk7.5's face is its headlights, and they are one continuous lit strip into the grille. It is
+# the thing that makes the car recognisable at the distance the chase camera sits at.
+light = 8.0
+chrome = 6.0
+
+# 33,372 triangles of engine bay, and unlike the E36's the visibility sweep can see it — the model
+# has no closed bonnet shell over it, so 72 viewpoints all agree it is on screen. It is not: the
+# car is driven at night with the bonnet shut in every frame this game draws. This is the case
+# `drop` exists for, and it is the difference between a cabin at 281 triangles and one at 900.
+drop = ["SM_Engine"]
+
+[materials]
+# Maya's naming, exported through Sketchfab: a `Golf` prefix on some, a `phong` on others, and one
+# material called `material`. `Light_Map` is the biggest trap here — it is a name about how the
+# surface is shaded, not what it is, and it is worn by seven parts including the headlights, the
+# tail lights and the spoiler. It goes with the lights because that is where most of it is.
+light = ["Light_Map", "light_glass", "red_glass"]
+window = ["glass", "display"]
+interior = ["Int_Plas", "Leather_Int", "Carpet_Int", "cabin_T", "int_til", "speakers", "Engine_Col"]
+chrome = ["carbon", "mirrors", "Color_2", "rimBC"]
+tyre = ["tire"]
+body = ["CarPaint"]
+
+# `rimBC` is the line that separates the alloy from the tyre. Unnamed, the rim is simply the
+# largest part of each corner, and the converter's fallback calls the largest part of a wheel the
+# tyre — so alloy and tyre went into one 7,696-triangle bucket per corner and were decimated as
+# one thing. They are not one thing: a tyre is a black torus that survives being cut to a few
+# hundred triangles, and an alloy is the detail on the corner that does not.
+
+[handling]
+# 1500 kg, 2.63 m between the axles, and the mass over the front wheels that a transverse engine
+# puts there. Four-wheel drive and modern rubber, so it has more grip than anything else in the
+# set — and the least of the thing the game scores, because a car that will not rotate is a car
+# that will not hold a slide. It is here as the one that is quick and does not want to drift.
+mass = 1500.0
+front_axle = 1.05
+rear_axle = 1.58
+engine = 9300.0
+top_speed = 60.0
+brake = 12000.0
+steer_lock = 0.58
+grip = 1.06

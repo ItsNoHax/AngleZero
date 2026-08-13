@@ -1,0 +1,124 @@
+# Mercedes-Benz 190E (W201) — the model that is one mesh per material and nothing else.
+#
+# 62 nodes, 62 meshes, 62 materials, one mesh apiece: the exporter merged by material and threw
+# the object names away, so every part is called `Object_N` and the number says nothing about what
+# it is. That makes this the AE86's case taken to its conclusion — all four corners of every wheel
+# component are a single mesh about the origin, and the numbers below are the only handle there is.
+#
+# `anglezero-asset inspect --deep assets/source/1982_mercedes_w201.glb` prints the material beside
+# each `Object_N`, which is how these were read off.
+
+name = "Mercedes 190E"
+
+# 4.43 m across the bounding box against a real W201's 4.42 m. Already life size in metres.
+
+triangles = 15000
+lods = [4500, 1800]
+
+[wheels]
+# Six of the seven wheel meshes, by the only names the model has:
+#   Object_21  EXT_Rim          22,260 tris   the alloys
+#   Object_26  EXT_Tyre          6,528         the tyres
+#   Object_28  EXT_Calipers      4,300
+#   Object_20  EXT_Brake_Disc      776
+#   Object_22  EXT_Rim_Badge       664
+#   Object_23  EXT_Rim_Bolts       360
+# Every one of them sits at (0.00, 0.18, 0.00) — the centre of the car at hub height — because
+# each is all four corners in one mesh. The converter cuts them into quadrants, which is exactly
+# what it does for the AE86's `pneu` and `jante`.
+match = [
+    "Object_21",
+    "Object_26",
+    "Object_28",
+    "Object_20",
+    "Object_22",
+    "Object_23",
+]
+
+[reduce]
+# The two blur meshes are the seventh and eighth wheel components, and they are not geometry — they
+# are the translucent discs a renderer draws over a spinning wheel to fake motion blur, modelled
+# here as solid rings at the hub. Left in they turn with nothing and read as a grey plate over each
+# alloy; matched as wheels they would spin, which is worse, because a blur disc that visibly
+# rotates is the one thing it is meant not to do.
+drop = ["Object_24", "Object_25"]
+
+# Same argument as the E36: thin bright strips measure few pixels and starve without help, and the
+# W201 wears more of them than most — window surrounds, the rubbing strips down both flanks, the
+# grille. This is the car those are the shape of.
+light = 8.0
+
+# 60, which is five times the E36's and needs saying why.
+#
+# On every other car here `chrome` is about the brightwork — the strips and surrounds that measure
+# too few pixels to earn their share. It does that job on this car too, but it saturates early:
+# the trim goes from 661 triangles at `chrome = 10` to 770 at `chrome = 150` and no further. Past
+# about 25 this number is not buying trim at all. What it is buying is the alloy, which shares the
+# category, and which the visibility sweep undersells badly on this particular wheel — a fifteen-
+# hole Mercedes disc is mostly holes, so the tyre behind it measures more pixels than the wheel in
+# front, and at `chrome = 10` the corner came out at 50 triangles against the tyre's 272.
+#
+# 60 puts the alloys at 650–800, which is the range the E36 (552–570) and the AE86 (320–335) sit
+# in. See the note in `[reduce.parts]` for why this is a category weight and not a part weight.
+chrome = 60.0
+
+# Both raised only enough to stop the alloys taking their share. Sweeping `chrome` upward starves
+# whatever is next in line, and on this car that was first the cabin — 43 triangles at one point,
+# which is no cabin — and then the lamps.
+tyre = 2.0
+interior = 2.0
+
+# Modest, and deliberately not more. The first attempt at this car put `wheel` at 2.5 and `tyre` at
+# 3.0 and made every number worse — the alloys fell from 67 triangles to 35 — because at that point
+# `EXT_Rim` was still being sorted as a tyre (see `[materials]`), so both weights pointed at the
+# same bucket and squeezed the brake hardware out of the corner entirely. With the rim named, the
+# corner splits properly and needs very little help.
+wheel = 1.4
+
+# No `[reduce.parts]` here, and the reason is worth recording because it is not obvious from the
+# documentation: a part weight only redistributes budget *within* a bucket, and a bucket is one
+# category at one corner. `Object_21` is the entire `wheel_XX chrome` bucket on this car — the
+# calipers and disc did not survive the visibility sweep — so weighting it against itself is
+# arithmetically a no-op. It was tried, at 8.0, and changed not one triangle of the output.
+#
+# The E36's `[reduce.parts]` works because its corner holds two parts that compete: the alloy and
+# the brake hardware behind it. Where a corner holds one part, the category weight is the only
+# lever there is.
+
+[materials]
+# The prefixes are the whole vocabulary: EXT_ outside, INT_ inside, ENG_ under the bonnet, HL_ and
+# TL_ the head and tail lamps. The guesser reads `EXT_Glass` as glass on its own, but `HL_Glass_*`
+# and `TL_Glass_*` are lenses rather than windows and belong with the lamps — six lens materials
+# between them, which is more than any other car here carries.
+window = ["EXT_Glass", "INT_Glass"]
+light = ["HL_", "TL_", "INT_Lamps", "INT_Reflector"]
+interior = ["INT_", "ENG_"]
+chrome = [
+    "EXT_Chrome",
+    "EXT_Exhaust",
+    "EXT_Mirror",
+    "EXT_Badges",
+    # The alloy and everything bolted through it. `EXT_Rim` is the important one and the reason
+    # this car's first build had no wheels: nothing names it, so it fell to the converter's last
+    # resort, which is that the largest part of a wheel is the tyre. At 22,260 triangles against
+    # the tyre's 6,528 the rim is comfortably the largest part, so alloy and tyre became one
+    # 7,197-triangle bucket per corner and were decimated as though they were one object — and a
+    # tyre is a black torus that survives that, where a fifteen-hole Mercedes alloy does not.
+    "EXT_Rim",
+    "EXT_Brake_Disc",
+    "EXT_Calipers",
+]
+tyre = ["EXT_Tyre"]
+
+[handling]
+# A 2.3-litre W201: 1220 kg, 2.665 m between the axles, and a multi-link rear that was the point
+# of the car. Slower than the E36 and steadier than the AE86 — this is the one that rewards being
+# smooth rather than the one that rewards being brave.
+mass = 1220.0
+front_axle = 1.25
+rear_axle = 1.42
+engine = 6700.0
+top_speed = 55.0
+brake = 9500.0
+steer_lock = 0.62
+grip = 0.96

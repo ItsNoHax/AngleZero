@@ -1,0 +1,72 @@
+# BMW 5-Series E39 — the E36's sibling, from the same author and built the same way.
+#
+# Which makes it the cheapest car in the set to configure: `Object_N.001`–`.004` at the four
+# corners, exactly as `bmw_e36.toml` describes, so the wheel patterns are the same shape and only
+# the numbers change. What it does not share is a vocabulary for its materials — half of them are
+# named after what they are made of (`chrome`, `glass`, `weatherstrip`) and half after nothing at
+# all (`Scene_-_Root`, `.005`), including the one the alloys wear.
+
+name = "BMW E39"
+
+# 4.77 m across the box against a real E39's 4.775 m. Life size in metres.
+
+triangles = 15000
+lods = [4500, 1800]
+
+[wheels]
+# Three assemblies a corner, and the suffix is the corner:
+#   Object_4.001-.004    the alloys, 22,558 tris each and the largest thing on the car
+#   Object_24.001-.004   the brake disc and its carrier, two meshes sharing a node
+#   Object_39.001,.003-.005   the tyre, as tread and sidewall
+# The trailing dots matter for the same reason they do on the E36: `Object_4.` must not also take
+# `Object_44`, and `Object_39.` must not take the bare `Object_39`, which is a bumper trim in the
+# middle of the car. The tyre's numbering skips `.002` — the corners are `.001`, `.003`, `.004`,
+# `.005` — which is one more reason not to try to read the corner off the name.
+match = ["Object_4.", "Object_24.", "Object_39."]
+
+[reduce]
+# The alloys are 22,558 triangles a corner behind a disc and a carrier that between them are 2,200,
+# so the E36's problem is here too but milder: the hardware is a tenth of the corner rather than a
+# third of it. Held apart the same way.
+wheel = 1.5
+light = 8.0
+chrome = 10.0
+
+# The one car here whose bodywork does not saturate. The E36's panels run out of things to improve
+# at about 3,600 triangles and refuse more; the E39's are 131,346 source triangles — a longer car,
+# modelled with the doors, sills and arches as separate shells — and at 2,644 they were still at
+# 4.5% error, which is four times what every other car in the set manages and the only body figure
+# that showed up as a number rather than as a shrug.
+body = 1.4
+
+[materials]
+# `Scene_-_Root` is the exporter's name for a material that never had one, and on this model it is
+# what the alloys wear — 90,232 triangles of it, all of it at the four corners. Nothing about that
+# string says metal, so the guesser has to be told, and it is the single most important line in
+# this file: without it the wheels are sorted as bodywork and decimated on the paint's budget.
+chrome = ["Scene_-_Root", "chrome", "black_chrome", "metal", "bumper_frame", "emblem"]
+tyre = ["tire_protector", "tire_left_L"]
+window = ["glass", "window", "black_glass"]
+light = ["head_light", "tail_light", "lights_glass", "reflector", "detail_glass"]
+interior = ["bump_leather", "cloth", "mottled", "gauge", "bump_plastic"]
+
+# `rubber_trim` is not a tyre. It is 5,652 triangles of window seal and roof channel sitting at
+# y = 0.99 in the middle of the car, and the guesser took the word `rubber` at face value and put
+# it in with the wheels — where it was decimated on a tyre's budget to 102 triangles at 53% error,
+# by some distance the worst number this model produced. `weatherstrip` is the same part of the car
+# under a name that does not read as rubber, which is why only one of the two went wrong.
+body = ["rubber_trim", "weatherstrip"]
+
+[handling]
+# A 540i: 1600 kg, 2.83 m between the axles, and the 50/50 the marketing was about. The heaviest
+# car in the set and the one with the least steering lock — it carries speed and resents being
+# asked to change direction, which on a descent scored by slides is a genuinely different problem
+# from the AE86's.
+mass = 1600.0
+front_axle = 1.40
+rear_axle = 1.43
+engine = 9000.0
+top_speed = 62.0
+brake = 12000.0
+steer_lock = 0.55
+grip = 1.00
