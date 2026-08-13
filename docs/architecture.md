@@ -30,3 +30,10 @@ format all have their own suite. The two worth knowing about are `tests/track_qu
 covers the nearest-node queries that containment, gravity and scoring all go through, and
 `tests/stability.rs`, which drives the car hard enough to catch a model that blows up rather than
 one that merely handles badly.
+
+`src/lights.rs` is the clearest example of why the split is drawn where it is. Vehicle lighting looks
+like a rendering feature, but almost none of it is: whether the tail lamps are hard on, whether the
+reverse lamps are lit, where each lamp has been carried to by a car that is pitched onto a slope —
+all of that is arithmetic about the game, and all of it is wrong in ways a screenshot cannot settle.
+It lives on the host side and `tests/lights.rs` asks it directly. What is left on the PSP side is two
+additive passes that draw what they are handed.

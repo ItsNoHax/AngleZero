@@ -69,7 +69,7 @@ Toolchain, emulator setup and controls are in [Building and running](docs/buildi
 src/            game core — no PSP dependency, runs and is tested on the host
 src/psp/        the shell: GU setup, rendering, audio, save data, diagnostics
 tools/          the car asset compiler — host-only, never built for the console
-tests/          243 tests, all host-side
+tests/          288 tests, all host-side
 scripts/        music encoding, the glitch hunt, pulling captures off a PSP
 assets/         XMB icon, background, music, and the car models in three stages
 docs/           everything above
@@ -86,9 +86,7 @@ model, a config file and a conversion — no renderer code. See [Cars](docs/cars
 
 ## Credits
 
-The car models are other people's work, used under licences that require attribution. The game
-shows each car's credit on the title screen, read out of the compiled asset rather than written
-into the source.
-
-* **BMW 3-Series E36** by [Black Snow](https://sketchfab.com/BlackSnow02) — [CC-BY-4.0](http://creativecommons.org/licenses/by/4.0/)
-* **Toyota AE86 Trueno** by Stanbox — CC-BY-NC-4.0 (non-commercial)
+The car models are other people's work, under licences that require attribution — four of the seven
+are non-commercial. Each car's credit is read out of its compiled asset and drawn on the title
+screen, so the attribution ships with the car rather than with this file. The models, their authors
+and what each licence allows are in [Cars](docs/cars.md#licences).

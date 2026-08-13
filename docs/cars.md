@@ -155,14 +155,17 @@ Lights:
   Tail lights:     2
   Brake lights:    0
   Reverse:         2
-  headlight       left at ( 0.50, 0.61,  2.04), 0.44 m across, 40 m beam   named in the model
-  tail light      left at ( 0.38, 0.91, -2.09), 1.10 m across              named in the model
-  reverse light   left at ( 0.57, 0.75, -2.34), 0.36 m across              named in the model
+  headlight       left at ( 0.46, 0.61,  2.04), 0.38 m across, 40 m beam   named in the model
+  tail light      left at ( 0.66, 0.75, -2.30), 0.36 m across              named in the model
+  reverse light   left at ( 0.56, 0.75, -2.34), 0.36 m across              named in the model
 ```
 
 Almost none of that is configured. The material sorter has always put lenses in the `light`
 category, so the parts are already known; where a lamp is and how big it is are measured off the
-lens itself. What a lens is *for* is the part a model does not answer — nothing about a red lens
+lens itself — from the *mean* of its vertices and their spread, not from a bounding box. That is not
+a nicety: a box is fixed by its two extreme vertices, so one strip of trim modelled into the same
+mesh drags it the whole way. The E39's rear lens mesh runs from 0.78 up to 1.29, which put its tail
+lamps a quarter of a metre above the lamps, on the bodywork, where they plainly looked wrong. What a lens is *for* is the part a model does not answer — nothing about a red lens
 says whether it comes on under braking — so the kind comes from the part's name where the name is
 clear, from which end of the car it is on where it is not, and from the config where neither will
 do.
@@ -210,6 +213,21 @@ The other keys are for the cases where a model has nothing to point at (`at` pla
 outright), or where the light should look different (`color`, `intensity`, `radius`, `range`,
 `spread`, `steer`). `enabled = false` gives a car no lamps at all.
 
+### Where they are drawn
+
+Wherever the bodywork is, which means the car's whole attitude and not merely its heading. The
+renderer turns a car by yaw, then pitch, then roll before drawing a vertex of it, and a lamp placed
+by yaw alone stays level while the body noses down the hill. This pass falls 7.4 cm a metre — 4.2
+degrees — and at that angle a headlight 1.86 m ahead of the origin belongs 14 cm lower than a level
+frame puts it, while a tail lamp 2.06 m behind belongs 15 cm higher. It reads as two separate faults,
+the brake lights too low and the headlights too high, and it is one.
+
+The glow itself sits on its lens, three centimetres proud of the glass and no more. Keeping it out of
+the panel it is set into is the depth bias's job — a camera-facing disc centred on a lens is very
+nearly coplanar with it, exactly like a light pool on the road, and `sceGuDepthOffset` is what both
+of them use. Standing the glow off far enough to win on geometry alone takes a hand's breadth, which
+is visible as a gap between a car and its own lights.
+
 ### What it costs
 
 Two draw calls a frame, whatever the number of cars, because both passes build world-space triangles
@@ -229,18 +247,24 @@ Geometry is not where lighting shows up: 8 cars carry 960 vertices of lamps and 
 contradicts the assumption it was made under. Turning each pass off for one car:
 
 ```
-  1 car, everything    64,601 us
-  1 car, no beams      58,619 us      the beams cost 6.0 ms
-  1 car, no glows      51,313 us      the glows cost 13.3 ms
+  1 car, everything    65,412 us
+  1 car, no beams      58,688 us      the beams cost 6.7 ms
+  1 car, no glows      52,253 us      the glows cost 13.2 ms
 ```
 
 The glows are twice the beams, not a rounding error beside them. Both are additive passes with the
-depth test on, and a camera-facing disc centred a few centimetres off a lens rasterises a great many
-fragments that the bodywork behind it then discards — a beam lies on open road where most of what it
-rasterises survives. Treat the ratio as indicative rather than as the console's: this is PPSSPP's
-software rasteriser, which pays per fragment on a CPU, and the GE does not. The levers if hardware
-disagrees are `lights::BEAM_FAR` and `LAMP_FAR`, which decide how far away each effect stops
-existing, and the glow radius the compiler measures off each lens.
+depth test on, and a camera-facing disc rasterises a great many fragments that the bodywork behind it
+then discards — a beam lies on open road, where most of what it rasterises survives.
+
+That reading is worth the detail, because it was measured twice either side of a change that took the
+glows from 49 lit pixels to 256 — five times the light on screen, for the *same* 13 ms. What a
+discarded fragment costs is what it costs to rasterise; the depth test only decides whether anybody
+sees it.
+
+Treat the ratio as indicative rather than as the console's: this is PPSSPP's software rasteriser,
+which pays per fragment on a CPU, and the GE does not. The levers if hardware disagrees are
+`lights::BEAM_FAR` and `LAMP_FAR`, which decide how far away each effect stops existing, and the glow
+radius the compiler measures off each lens.
 
 ## Levels of detail
 

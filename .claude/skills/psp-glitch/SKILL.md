@@ -52,6 +52,11 @@ frame every run. It is still the right tool for a one-off "hold a button and scr
 track is unreachable: driving there means a steering script that survives every corner in between, and
 one mistake ends the run against a guard rail.
 
+It **replaces** the input script rather than adding to it, so any `--hold` given alongside it is
+silently ignored. A run that has to be braking, or steering, when the burst starts needs its
+`SCRIPT.TXT` written by hand and headless run directly — which is worth knowing before spending a run
+wondering why the brake lights never came on.
+
 ## Reading the output, and not over-trusting half of it
 
 **The draw tally is exact.** It records the draw call, not its result: holes in the road or terrain
@@ -89,6 +94,7 @@ re-run the same frames with one suspect removed and see whether the artifact sur
 | 5 | the sky | 10 | the car's lamp glows |
 | 6 | the terrain | 11 | skid marks and smoke |
 | | | 12 | the roadside light pools |
+| | | 15 | *adds*: every lamp on every car, lit from both sides |
 
 Two things make this quantitative rather than a matter of squinting:
 
@@ -108,6 +114,14 @@ gives that pass's own contribution and nothing else — the fastest way to see w
 draws. This is how the headlight beams were caught contributing *zero pixels*, and how the light pools
 were caught being cut short.
 
+**Submitted is not painted, and the counters cannot tell you which.** The trace counts draw calls —
+`cars`, `lamps`, `beams` among them — and every one of those was non-zero, every frame, while the two
+vehicle-lighting passes were lighting under eight hundred pixels between them: the beams buried under
+the road they lay on, the glows inside the bodywork they belonged to. A count proves a pass ran. Only
+the subtraction above proves anybody can see it. The same subtraction, run either side of a fix, is
+also how to tell a change that helped from one that merely moved something: 49 lit pixels became 256,
+for the same 13 ms, because a discarded fragment costs what it costs to rasterise.
+
 Then measure the thing itself over frames rather than arguing about the images. A stationary pool being
 driven past must extend further down the screen every frame; any step backwards is the artifact.
 
@@ -120,6 +134,14 @@ driven past must extend further down the screen every frame; any step backwards 
   is `sceGuDepthOffset(POOL_DEPTH_BIAS)` around the pass, reset to 0 afterwards because it is context
   state. A bias fixes a *tie*; it will not lift geometry that is genuinely buried, and if eight times
   the bias changes nothing then the problem is not depth.
+- **Anything drawn beside the car must use the car's whole transform**, not its heading. `draw_one_car`
+  turns the body by yaw, then pitch, then roll; on a pass that falls 7.4 cm a metre that is 4.2° of
+  pitch, which moves a point 2 m from the origin by 15 cm — in *opposite* directions at the two ends
+  of the car. That is what made the brake lights sit too low and the headlights too high at the same
+  time, and two symptoms in opposite directions is the signature of a missing rotation rather than a
+  wrong offset. rust-psp builds those matrices in VFPU assembly; read the `vrot.q` columns rather than
+  assuming the convention, since this repo has already been caught by two of that crate's matrix
+  helpers.
 - Every additive ground pass here draws **double-sided**. A flat quad has one winding and the camera
   can be on either side of it; one pass missing `sceGuDisable(GuState::CullFace)` had its headlights
   invisible for the whole history of the file.
