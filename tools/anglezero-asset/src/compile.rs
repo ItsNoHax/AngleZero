@@ -1032,6 +1032,51 @@ fn put_f32(out: &mut [u8], at: usize, v: f32) {
 /// rather than by their own geometry — which on a car means the wheels, because a surface of
 /// revolution takes every triangle it is offered. It is one extra simplification pass over the
 /// welded geometry, and it is what turns "the body cannot use this" into "so the wheels will".
+/// Levels what one category's four corners are counted as having used, at the best of them.
+///
+/// The pin below is an inference: a bucket that came in under its share is taken to have been
+/// stopped by its own geometry rather than by its target, so it is held at what it managed and the
+/// difference is given to buckets that can spend it. That inference is sound for a body panel and
+/// wrong for a wheel, because a car's four corners are the same wheel four times and the simplifier
+/// does not treat them as such. They are mirrored, so the greedy collapse order differs, and on
+/// geometry it finds hard it can stop far short on one corner and not on its reflection.
+///
+/// Left alone the pin then makes that permanent. The 190E's alloys — 5,565 triangles a corner of a
+/// fifteen-hole disc, identical geometry and identical shares — came out at 2,217, 2,143, 1,049 and
+/// 821 triangles, and raising the budget never moved the last of them: it had been declared full at
+/// 821 on the first pass and pinned there, while its own reflection was declared hungry and refilled
+/// to nearly three times as much. One wheel visibly coarser than the one across from it reads as a
+/// fault rather than as detail, which is the same argument that already averages the corners'
+/// measured pixels before the split.
+///
+/// So the best any corner achieved is taken as what that geometry can do, and every corner in the
+/// group is judged and pinned at it. A corner that still cannot reach it simply returns less; a
+/// target is not a promise. The alternative — believing each corner's own number — is believing the
+/// collapse order, and that is the thing that is arbitrary here.
+fn level_corners(buckets: &[Bucket], used: &[usize]) -> Vec<usize> {
+    let mut levelled = used.to_vec();
+    for category in [
+        Category::Tyre,
+        Category::Chrome,
+        Category::Body,
+        Category::Interior,
+        Category::Light,
+        Category::Window,
+    ] {
+        let corners: Vec<usize> = (0..buckets.len())
+            .filter(|&i| buckets[i].wheel.is_some() && buckets[i].category == category)
+            .collect();
+        if corners.len() < 2 {
+            continue;
+        }
+        let best = corners.iter().map(|&i| used[i]).max().unwrap_or(0);
+        for i in corners {
+            levelled[i] = best;
+        }
+    }
+    levelled
+}
+
 fn spend_and_refill(
     buckets: &mut Vec<Bucket>,
     welded: &[Bucket],
@@ -1046,6 +1091,9 @@ fn spend_and_refill(
     spend_budget_with(buckets, &first, None);
 
     let used: Vec<usize> = buckets.iter().map(|b| b.indices.len() / 3).collect();
+    // What the four corners of a category are judged to have used, which is not always what each
+    // one of them actually did. See `level_corners`.
+    let used = level_corners(buckets, &used);
     let spent: usize = used.iter().sum();
     // Nothing meaningful came back, so the first pass was already the answer.
     if spent + spent / 20 >= budget {

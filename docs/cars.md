@@ -97,11 +97,22 @@ twice: the second pass pins every bucket that came in under its share at what it
 shares the difference among the ones that were stopped by their target rather than by their own
 geometry. Wheels and glass take it, because a surface of revolution accepts every triangle offered.
 
-Two things had to be true for that to be safe. The four corners are averaged before the split — the
-sweep sees the near side of a car far more than the off side, and following that literally gave one
-tyre 2,648 triangles and the one across from it 647. And "filled its share" has a five per cent
+Three things had to be true for that to be safe. The four corners are averaged before the split —
+the sweep sees the near side of a car far more than the off side, and following that literally gave
+one tyre 2,648 triangles and the one across from it 647. And "filled its share" has a five per cent
 tolerance, because mirrored geometry collapses in slightly different orders and an exact test
 called two of four identical tyres full and handed the surplus to the other two.
+
+The third is that the pin itself is levelled across a category's corners, at the best any of them
+reached. Pinning a bucket at what it used says the simplifier was stopped by the geometry rather
+than by the target, which is true of a body panel and not of a wheel: four corners are the same
+wheel four times, mirrored, and on geometry the simplifier finds hard it can stop far short on one
+and not on its reflection. The 190E's alloys — identical 5,565-triangle corners on identical shares
+— came out at 2,217, 2,143, 1,049 and 821, and raising the budget never moved the last of them,
+because it had been declared full at 821 on the first pass and held there while its own reflection
+was refilled to nearly three times as much. Judging all four at the best of them fixes it: they now
+land within 7% of each other instead of a factor of nearly three. A corner that still cannot reach
+the levelled target simply returns less, which costs nothing — a target was never a promise.
 
 ### What the sweep does not answer
 
