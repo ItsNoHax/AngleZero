@@ -69,6 +69,11 @@ impl Side {
 /// How much larger a lamp's glow is than the lens it comes out of.
 const GLOW_OVER_LENS: f32 = 1.8;
 
+/// How big a lamp is when the config placed it outright and there is no lens to measure. A little
+/// smaller than a real headlight, on the grounds that a lamp nobody measured should not be the
+/// brightest thing on the car.
+const PLACED_RADIUS: f32 = 0.28;
+
 /// Words that name what a lamp is for, across the models this has been pointed at.
 ///
 /// Ordered by how specific they are, and tested in that order: `brakelight` contains `light`, and
@@ -326,7 +331,7 @@ fn resolve(
     if let Some(a) = anchor {
         if let Some(at) = a.at {
             return Ok(Some((
-                build(kind, side, at, 0.28, a, config, strings),
+                build(kind, side, at, PLACED_RADIUS, a, config, strings),
                 "placed by the config",
             )));
         }
@@ -392,8 +397,8 @@ fn resolve(
         if matches!(kind, LightKind::Brake | LightKind::Reverse) && anchor.is_none() {
             return Ok(None);
         }
-        // A part named for a *different* kind is not this one either. Left in, the tail lens would
-        // be averaged into the headlight.
+        // A part named for a *different* kind is not this one either: a lens the model calls a
+        // reverse lamp is not the tail lamp merely because it is the biggest thing back there.
         matched.retain(|c| c.named.is_none() || c.named == Some(kind));
         if matched.is_empty() {
             return Ok(None);
