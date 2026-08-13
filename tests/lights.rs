@@ -7,7 +7,8 @@
 
 use angle_zero::azcar::{LightDef, LightKind, LIGHT_STEERS};
 use angle_zero::lights::{
-    beam, dim, fade, intensity, lamp, push_beam, Signals, BEAM_FAR, BEAM_VERTS, LAMP_FAR, TAIL_IDLE,
+    beam, dim, fade, intensity, lamp, push_beam, seen_from, Signals, BEAM_FAR, BEAM_VERTS,
+    LAMP_FAR, TAIL_IDLE,
 };
 use angle_zero::mesh::Vertex;
 use angle_zero::vehicle::CarState;
@@ -177,6 +178,34 @@ fn a_headlight_is_seen_from_in_front_and_a_tail_lamp_from_behind() {
     let tail = lamp(&light(LightKind::Tail, [0.6, 1.0, -2.0]), &parked(), &LIT, 5.0).unwrap();
     assert!(head.forward);
     assert!(!tail.forward);
+}
+
+/// A lamp fades with the angle it is seen at rather than switching off at the wing mirror. The
+/// chase camera spends its life at the one angle where this matters: the tail lamps have to be
+/// full and the headlamps must not shine through the car.
+#[test]
+fn a_lamp_fades_with_the_angle_it_is_seen_from() {
+    // Dead astern: tail lamps whole, headlamps gone.
+    assert_eq!(seen_from(false, -1.0), 1.0);
+    assert_eq!(seen_from(true, -1.0), 0.0);
+    // Dead ahead, the other way round.
+    assert_eq!(seen_from(true, 1.0), 1.0);
+    assert_eq!(seen_from(false, 1.0), 0.0);
+
+    // Alongside, both ends of the car show something, and neither shows everything.
+    for forward in [true, false] {
+        let side_on = seen_from(forward, 0.0);
+        assert!(side_on > 0.0 && side_on < 1.0, "{side_on}");
+    }
+
+    // And it is monotone as the camera comes round the nose — no step anywhere in it.
+    let mut last = 0.0;
+    for i in 0..=20 {
+        let facing = -1.0 + i as f32 * 0.1;
+        let seen = seen_from(true, facing);
+        assert!(seen >= last - 1e-6, "a headlamp dimmed as the eye came round to it: {facing}");
+        last = seen;
+    }
 }
 
 #[test]

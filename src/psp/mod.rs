@@ -344,14 +344,21 @@ pub fn psp_main() {
             render::draw_sky(&game.camera);
             render::draw_world(&game.camera);
             render::draw_car(&game.vehicle, track);
+            // Beams first: they lie on the road, under the smoke and the glows that stand above it.
+            // Every one of these is additive with no depth write, so the order is about what looks
+            // right rather than about what is occluded.
+            //
+            // The title screen gets its lamps too. It used to be left out with the tyre smoke, which
+            // is the right treatment for smoke and the wrong one for lights: the orbiting camera is
+            // the only view in the game that sees the front of the car, so it was the one place the
+            // headlights could have been looked at and the one place they were switched off. A car
+            // parked at night with its lights on is also just what a car in a lay-by at night looks
+            // like.
+            render::draw_light_beams(&game.vehicle, track, game.braking_hint());
             if game.phase != Phase::Title {
-                // Beams first: they lie on the road, under the smoke and the glows that stand
-                // above it. Every one of these is additive with no depth write, so the order is
-                // about what looks right rather than about what is occluded.
-                render::draw_light_beams(&game.vehicle, track, game.braking_hint());
                 render::draw_effects(&game.effects, &game.camera);
-                render::draw_lamp_glows(&game.vehicle, &game.camera, game.braking_hint());
             }
+            render::draw_lamp_glows(&game.vehicle, &game.camera, game.braking_hint());
 
             hud::begin();
             // Both of these draw over the frame, so a harness build leaves them out: the detector

@@ -189,6 +189,32 @@ pub struct Beam {
     pub color: u32,
 }
 
+/// How much of a lamp is seen from straight along the side of the car.
+///
+/// A lens is set into bodywork, so it is at its brightest looked at head on and gone once the car
+/// has turned its back — but it does not switch off, and a hard cut between "in front" and "behind"
+/// is a lamp that pops. This is what it is worth exactly side-on, and everything between is
+/// interpolated from the angle. Non-zero on purpose: a headlamp still throws light onto the road and
+/// the air beside it from there, which is where most of a headlight is ever seen from in this game.
+pub const LAMP_SIDE_ON: f32 = 0.35;
+
+/// How much of a lamp reaches an eye at this angle to it.
+///
+/// `facing` is how far the eye is in front of the car along its own axis, normalised: +1 dead ahead
+/// of the nose, -1 dead behind, 0 alongside. A lamp on the other end of the car keeps
+/// [`LAMP_SIDE_ON`] of itself at the beam ends and fades to nothing past that, which is what stops
+/// the headlamps shining through the bodywork at a chase camera.
+pub fn seen_from(forward: bool, facing: f32) -> f32 {
+    let toward = if forward { facing } else { -facing };
+    if toward >= 0.0 {
+        // Facing the eye: full at head on, easing off toward side-on.
+        LAMP_SIDE_ON + (1.0 - LAMP_SIDE_ON) * min(1.0, toward)
+    } else {
+        // Turned away: what is left of the side-on value, gone by a quarter turn past it.
+        max(0.0, LAMP_SIDE_ON * (1.0 + toward * 2.0))
+    }
+}
+
 /// Puts a lamp where the car has carried it, or `None` if it is dark or too far away to matter.
 ///
 /// `metres` is how far the car is from the eye.

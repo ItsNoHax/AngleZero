@@ -2079,23 +2079,31 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
 
         for (car, st) in lit_cars(vehicle) {
             let metres = eye_distance(&st);
-            // A glow is a billboard with no depth of its own, so without this the headlamps shine
-            // straight through the car whenever the camera is behind it — which, with a chase
-            // camera, is almost always. Each lamp is shown only from the side it actually faces.
+            // A glow is a billboard with no depth of its own, so a lamp the car has its back to
+            // would otherwise shine straight through the bodywork — which, with a chase camera, is
+            // almost always. How much of each lamp reaches the eye is decided by the angle rather
+            // than by which half of the car it is on, so a lamp fades in as the camera comes round
+            // the nose instead of appearing whole the moment it crosses the wing mirror.
             let (s, c) = (sin(st.yaw), cos(st.yaw));
-            let facing = (camera.pos.x - st.x) * s + (camera.pos.z - st.z) * c;
+            let (dx, dz) = (camera.pos.x - st.x, camera.pos.z - st.z);
+            let away = sqrt(dx * dx + dz * dz).max(0.001);
+            let facing = (dx * s + dz * c) / away;
 
             for def in car.lights() {
                 let Some(lamp) = lights::lamp(&def, &st, &signals, metres) else {
                     continue;
                 };
-                // Mode 15 shows both ends of the car at once; otherwise a lamp is drawn only from
-                // the side it faces, or the headlamps shine through the car at a chase camera.
+                // Mode 15 shows every lamp from everywhere at once, which is the point of it.
                 #[cfg(feature = "devtools")]
                 let both_sides = debug_mode() == MODE_ALL_LAMPS;
                 #[cfg(not(feature = "devtools"))]
                 let both_sides = false;
-                if !both_sides && lamp.forward != (facing > 0.0) {
+                let seen = if both_sides {
+                    1.0
+                } else {
+                    lights::seen_from(lamp.forward, facing)
+                };
+                if seen <= 0.0 {
                     continue;
                 }
                 STATS.lamps = STATS.lamps.saturating_add(1);
@@ -2108,7 +2116,7 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
                     (right_x, right_z),
                     lamp.radius,
                     lamp.radius * LAMP_ASPECT,
-                    lamp.color,
+                    lights::dim(lamp.color, seen),
                 );
             }
         }
@@ -2177,11 +2185,19 @@ pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
 
         for (car, st) in lit_cars(vehicle) {
             let metres = eye_distance(&st);
+            // How far the road rises or falls between the car and each station, rather than how
+            // high it is. The two are the same on the road itself and are not in the pull-off,
+            // where the car stands on paving laid over the centreline's own shelf — a beam taking
+            // absolute heights there would be laid a foot underground. A relative one starts at
+            // whatever the car is standing on and follows the slope from there, which is all a
+            // beam ever needed to know.
+            let under_car = track.nodes[where_on_the_road.nearest(track, st.x, st.z).index].p.y;
             for def in car.lights() {
                 if let Some(beam) = lights::beam(&def, &st, &signals, metres) {
                     STATS.beams = STATS.beams.saturating_add(1);
                     lights::push_beam(out, &mut w, &beam, |x, z| {
-                        track.nodes[where_on_the_road.nearest(track, x, z).index].p.y
+                        let road = track.nodes[where_on_the_road.nearest(track, x, z).index].p.y;
+                        st.y + (road - under_car)
                     });
                 }
             }

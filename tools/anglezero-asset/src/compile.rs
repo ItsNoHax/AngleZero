@@ -48,6 +48,9 @@ const AMBIENT: f32 = 0.45;
 const DIFFUSE: f32 = 0.55;
 /// Lights read as lit rather than shaded: a lamp lens with a shadow on it looks broken.
 const LIGHT_FLOOR: f32 = 0.92;
+/// How bright a lamp lens's brightest channel is made, so the glass looks lit rather than merely
+/// pale. Not 1.0: the additive glow the renderer puts over the lens has to have somewhere to go.
+const LENS_LIT: f32 = 0.88;
 
 /// How far away each level takes over, in metres.
 ///
@@ -645,13 +648,38 @@ pub(crate) fn rotate_y(p: [f32; 3], yaw: f32) -> [f32; 3] {
 /// pure black on screen — legible as a hole rather than as bodywork — so there is a floor.
 fn base_colour(material: &crate::model::Material, category: Category) -> [f32; 4] {
     let floor = match category {
-        Category::Light => 0.35,
+        // A lens is lifted rather than floored — see below — so all it needs of its own is to stay
+        // out of the framebuffer's basement.
+        Category::Light => 0.05,
         Category::Window => 0.04,
         _ => 0.06,
     };
     let mut out = [0.0f32; 4];
     for i in 0..3 {
         out[i] = srgb(material.base_color[i]).max(floor);
+    }
+    // A lamp lens is lit, and a lit lens is its own colour at full brightness.
+    //
+    // Flooring each channel at 0.35, which is what this used to do, is the one thing that must not
+    // be done to a coloured lens: a tail lamp's dark red encodes to (0.54, 0.16, 0.16), and lifting
+    // every channel to 0.35 leaves (0.54, 0.35, 0.35) — a grey-pink. Every rear lamp on every car
+    // was being painted the colour of a lamp that is switched off and dusty.
+    //
+    // Scaling the whole colour until its brightest channel is lit keeps the ratios between them, so
+    // red stays red and simply gets brighter. This is the emissive material the lighting wants, and
+    // there is nowhere else to put one: the renderer's entire material system is two flags and a
+    // vertex colour, and the vertex colour is this.
+    if category == Category::Light {
+        let brightest = out[0].max(out[1]).max(out[2]);
+        if brightest > 0.02 {
+            let lift = (LENS_LIT / brightest).max(1.0);
+            for c in out.iter_mut().take(3) {
+                *c = (*c * lift).min(1.0);
+            }
+        } else {
+            // A lens modelled as pure black has no colour left to keep.
+            out[..3].fill(LENS_LIT * 0.7);
+        }
     }
     out[3] = match category {
         // Glass has to be see-through, but not so thin that the roofline disappears with it.
