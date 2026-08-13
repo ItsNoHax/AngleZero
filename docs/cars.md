@@ -212,14 +212,35 @@ outright), or where the light should look different (`color`, `intensity`, `radi
 
 ### What it costs
 
-Two draw calls a frame, whatever the number of cars, because both passes build world-space
-triangles into one buffer. A lamp glow is eight triangles and a beam is twelve, and a beam is only
-resolved within 70 m — beyond that a car keeps its lamps and loses its beam, and past the fog at
-330 m it has neither. The trace has a column for each, so a field of cars can be priced:
+Two draw calls a frame, whatever the number of cars, because both passes build world-space triangles
+into one buffer. A lamp glow is eight triangles and a beam is twelve, and a beam is only resolved
+within 70 m — past that a car keeps its lamps and loses its beam, and past the fog at 330 m it has
+neither. The trace has a column for each, so a field of cars can be priced:
 
 ```
-# frame road terrain lines rails dashes props cars lamps beams verts ...
+      field   us/frame     verts  car draws  lamps  beams
+      1 car      64,601    85,615       13      2      2
+     4 cars     124,735   119,194       52      8      8
+     8 cars     203,015   160,374      103     16     16
 ```
+
+Geometry is not where lighting shows up: 8 cars carry 960 vertices of lamps and beams against
+160,374 for the frame, six tenths of a per cent. What it costs is fill, and there the measurement
+contradicts the assumption it was made under. Turning each pass off for one car:
+
+```
+  1 car, everything    64,601 us
+  1 car, no beams      58,619 us      the beams cost 6.0 ms
+  1 car, no glows      51,313 us      the glows cost 13.3 ms
+```
+
+The glows are twice the beams, not a rounding error beside them. Both are additive passes with the
+depth test on, and a camera-facing disc centred a few centimetres off a lens rasterises a great many
+fragments that the bodywork behind it then discards — a beam lies on open road where most of what it
+rasterises survives. Treat the ratio as indicative rather than as the console's: this is PPSSPP's
+software rasteriser, which pays per fragment on a CPU, and the GE does not. The levers if hardware
+disagrees are `lights::BEAM_FAR` and `LAMP_FAR`, which decide how far away each effect stops
+existing, and the glow radius the compiler measures off each lens.
 
 ## Levels of detail
 
