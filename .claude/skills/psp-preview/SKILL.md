@@ -39,15 +39,47 @@ Each emit overwrites the file, so the saved image is whatever state the *last* e
 ## The car is a file, and it is not in the build
 
 The car is a compiled asset. The guest loads every `.azcar` in `ms0:/PSP/GAME/AngleZero/CARS/`,
-which under headless is `~/.ppsspp/PSP/GAME/AngleZero/CARS/` — `PPSSPP_MEMSTICK` moves the root,
-the same variable `scripts/psp_glitch.py` honours. Install them before capturing, and **again after
-every `anglezero-asset convert`**: rebuilding the game does not update them, and the emulator goes
-on showing the car you compiled an hour ago.
+which under headless is **always** `~/.ppsspp/PSP/GAME/AngleZero/CARS/`. Install them before
+capturing, and **again after every `anglezero-asset convert`**: rebuilding the game does not update
+them, and the emulator goes on showing the car you compiled an hour ago.
 
 ```bash
-CARS="${PPSSPP_MEMSTICK:-$HOME/.ppsspp}/PSP/GAME/AngleZero/CARS"
+CARS="$HOME/.ppsspp/PSP/GAME/AngleZero/CARS"
 mkdir -p "$CARS" && cp assets/compiled/*.azcar "$CARS/"
 ```
+
+**There is no `PPSSPP_MEMSTICK` as far as the emulator is concerned**, whatever this file used to
+say. `PPSSPPHeadless` hardcodes the location — `g_Config.memStickDirectory = getenv("HOME") /
+".ppsspp"` in `headless/Headless.cpp` — with no flag and no variable to move it. `--root` mounts a
+UMD and stops the run booting if it is pointed at a memory stick. Setting `PPSSPP_MEMSTICK` on the
+emulator does nothing at all: the run silently reads the default stick, which looks exactly like a
+capture of the wrong car, and cost a wasted round here before it was noticed.
+
+To capture one car in isolation — which is the reliable way to tell which car is which, since
+counting button presses to cycle the title screen drifts — swap the directory's contents around a
+serial run:
+
+```bash
+CARS="$HOME/.ppsspp/PSP/GAME/AngleZero/CARS"
+rm -f "$CARS"/*.azcar && cp assets/compiled/nissan_s15.azcar "$CARS/"
+# ...capture...
+cp assets/compiled/*.azcar "$CARS/"          # put the rest back
+```
+
+If runs must go in parallel, give each one its own `HOME`, which is the only lever there is:
+
+```bash
+FAKE=/tmp/stick-a
+mkdir -p "$FAKE/.ppsspp/PSP/GAME/AngleZero/CARS"
+cp assets/compiled/nissan_s15.azcar "$FAKE/.ppsspp/PSP/GAME/AngleZero/CARS/"
+HOME="$FAKE" "$HEADLESS" --graphics=software --screenshot-save=out.bmp --timeout=22 \
+    "$PWD/target/mipsel-sony-psp/debug/angle-zero.prx"
+```
+
+Pass the `.prx` as an absolute path when doing that, since `HOME` is no longer where the shell
+thinks. `scripts/psp_glitch.py` does honour `PPSSPP_MEMSTICK` properly, by building exactly this
+kind of `HOME` around whatever directory it is given — see `memstick_home` there. It also
+reinstalls every car in `assets/compiled/` on each run, so it will overwrite a staged subset.
 
 With nothing there the game still runs. The title screen says `car asset not found on the memory
 stick` and the road is simply empty where the car should be — which looks exactly like a renderer

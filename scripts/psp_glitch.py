@@ -18,14 +18,22 @@ Pillow for the image comparison.
     scripts/psp_glitch.py --burst 400 --frames 40 --label hairpin
 
 Environment: `PPSSPP_HEADLESS` for the emulator binary, `PPSSPP_MEMSTICK` for the directory
-headless maps `ms0:` onto (both have sensible defaults).
+headless maps `ms0:` onto (both have sensible defaults). The emulator itself has no setting for
+the latter -- it always reads `$HOME/.ppsspp` -- so this runs it under a `HOME` built for the
+purpose. See `memstick_home`.
+
+Note that every run reinstalls every `.azcar` in `assets/compiled/` onto the stick, so a run cannot
+silently test last week's model. If you have deliberately staged a subset of cars, this will
+overwrite it.
 """
 
 import argparse
+import contextlib
 import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -118,21 +126,58 @@ def clear_stale(anglezero):
             path.unlink()
 
 
-def run_headless(headless, timeout, graphics):
+@contextlib.contextmanager
+def memstick_home(memstick):
+    """A `HOME` for the emulator whose `.ppsspp` is `memstick`.
+
+    PPSSPPHeadless has no option for where `ms0:` comes from. On anything but Windows it does
+
+        g_Config.memStickDirectory = Path(getenv("HOME")) / ".ppsspp";
+
+    and there is no environment variable and no flag to move it -- `--root` mounts a UMD and stops
+    the run booting at all if it is pointed at a memory stick. So the only lever is `HOME`, and the
+    only way to honour an arbitrary `PPSSPP_MEMSTICK` is to build a home directory around it.
+
+    A symlink rather than a copy, so the caller still sees the captures the guest wrote, and a
+    temporary directory rather than a fixed one, so two runs cannot collide. When the memstick is
+    already `~/.ppsspp` this yields the real `HOME` and changes nothing.
+
+    This mattered: before it, `PPSSPP_MEMSTICK` moved where this script installed cars and looked
+    for captures but not where the emulator read and wrote them, so pointing it anywhere silently
+    ran the previous stick's cars and then harvested nothing.
+    """
+    memstick = memstick.resolve()
+    if memstick == (Path.home() / ".ppsspp").resolve():
+        yield os.environ.get("HOME")
+        return
+    tmp = tempfile.mkdtemp(prefix="anglezero-memstick-")
+    try:
+        os.symlink(memstick, Path(tmp) / ".ppsspp", target_is_directory=True)
+        yield tmp
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_headless(headless, timeout, graphics, memstick):
     """Runs the burst. The guest exits itself once its script is done, so `--timeout` is only a
     backstop against a hang -- it is not how long this is expected to take."""
     log(f">> running headless ({graphics}, backstop timeout {timeout}s)")
     start = time.monotonic()
-    proc = subprocess.run(
-        [
-            str(headless),
-            f"--graphics={graphics}",
-            f"--timeout={timeout}",
-            str(PRX),
-        ],
-        capture_output=True,
-        text=True,
-    )
+    with memstick_home(memstick) as home:
+        env = dict(os.environ)
+        if home:
+            env["HOME"] = home
+        proc = subprocess.run(
+            [
+                str(headless),
+                f"--graphics={graphics}",
+                f"--timeout={timeout}",
+                str(PRX),
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
     elapsed = time.monotonic() - start
     tail = (proc.stdout or "").strip().splitlines()[-3:]
     log(f">> emulator returned after {elapsed:.0f}s {tail}")
@@ -440,7 +485,7 @@ def main():
             anglezero, args.burst, args.frames, args.hold, args.node, args.kph, args.mode
         )
         clear_stale(anglezero)
-        run_headless(headless, args.timeout, args.graphics)
+        run_headless(headless, args.timeout, args.graphics, memstick)
         frames = harvest(anglezero, out)
         # So a later --scan-only can still say which run frame a capture was, and so the run is
         # reproducible from the directory alone.
