@@ -1571,6 +1571,26 @@ static mut BENCH_SLOT: usize = 0;
 /// The level of detail is chosen from how far the car is from the camera, which is the only thing
 /// here that depends on where it is rather than on what it is. A car with one level always picks
 /// that one.
+///
+/// The body transform is rebuilt before every mesh rather than pushed and popped around the
+/// wheels, because `sceGumPushMatrix` and `sceGumPopMatrix` do not refer to the same stack slot in
+/// rust-psp 0.3.13. Push advances `CURRENT_MATRIX` and *then* stores the VFPU matrix, so it saves
+/// to slot n+1; pop retreats `CURRENT_MATRIX` and *then* loads, so it restores from slot n-1
+/// relative to the push. What push saved is never what pop reads back — pop returns whatever the
+/// slot below happened to hold, which is only the right matrix if a draw has already synced it
+/// there.
+///
+/// That is why this was invisible until a seventh car arrived. Every earlier asset happens to
+/// order its body meshes before its wheels, so the first `draw_car_mesh` syncs the correct model
+/// matrix into the slot and the wheels' push/pop pairs coincidentally restore it. The S15 is the
+/// first car the compiler emitted wheels-first, so its very first push/pop ran before any draw and
+/// popped a stale matrix — after which the whole body, all five meshes of it, was transformed by
+/// leftovers and drew as a few pixels near the origin. The car looked missing, the asset was
+/// perfect, and the difference between it and a car that worked was the order of thirteen records.
+///
+/// Rebuilding costs a `LoadIdentity`, a translate and three rotates per mesh — thirteen of those a
+/// car instead of one — against a stack that cannot be relied on. It is also the third rust-psp
+/// matrix bug this file works around; see `set_camera` on `sceGumLookAt`.
 unsafe fn draw_one_car(
     car: &azcar::Car<'static>,
     st: &CarState,
@@ -1586,16 +1606,20 @@ unsafe fn draw_one_car(
         let meshes = lod.first_mesh as usize..lod.first_mesh as usize + lod.mesh_count as usize;
 
         sys::sceGumMatrixMode(MatrixMode::Model);
-        sys::sceGumLoadIdentity();
-        sys::sceGumTranslate(&ScePspFVector3 {
-            x: at[0],
-            y: at[1],
-            z: at[2],
-        });
-        sys::sceGumRotateY(yaw);
-        // Follow the road's slope, but only insofar as the car points along it.
-        sys::sceGumRotateX(pitch);
-        sys::sceGumRotateZ(roll);
+        // The car's own transform, from scratch. Called before every mesh — see the note above on
+        // why this is not a push and a pop.
+        let load_body_matrix = || {
+            sys::sceGumLoadIdentity();
+            sys::sceGumTranslate(&ScePspFVector3 {
+                x: at[0],
+                y: at[1],
+                z: at[2],
+            });
+            sys::sceGumRotateY(yaw);
+            // Follow the road's slope, but only insofar as the car points along it.
+            sys::sceGumRotateX(pitch);
+            sys::sceGumRotateZ(roll);
+        };
 
         for blended in [false, true] {
             if blended {
@@ -1628,6 +1652,7 @@ unsafe fn draw_one_car(
                     culling = want_culling;
                 }
 
+                load_body_matrix();
                 if mesh.wheel == azcar::NO_WHEEL {
                     draw_car_mesh(car, &mesh);
                     continue;
@@ -1636,7 +1661,6 @@ unsafe fn draw_one_car(
                 // A wheel's geometry is stored about its own hub, so it can be put where it
                 // belongs and then turned, rather than being turned about the car's origin.
                 let wheel = car.wheel(mesh.wheel as usize);
-                sys::sceGumPushMatrix();
                 sys::sceGumTranslate(&ScePspFVector3 {
                     x: wheel.hub[0],
                     y: wheel.hub[1],
@@ -1647,7 +1671,6 @@ unsafe fn draw_one_car(
                 }
                 sys::sceGumRotateX(st.wheel_spin);
                 draw_car_mesh(car, &mesh);
-                sys::sceGumPopMatrix();
             }
 
             if !culling {
