@@ -9,20 +9,20 @@
 
 name = "BMW E36"
 
-# Lands at 9,540 triangles, not 15,000, and that gap is the interesting part.
+# Lands at 13,847, and where the last 1,150 do not go is the interesting part.
 #
-# The bodywork saturates at about 4,100 triangles. Sweeping the budget from 5,000 to 40,000 moves
+# The bodywork saturates at about 3,600 triangles. Sweeping the budget from 5,000 to 40,000 moves
 # it from 2,616 to 4,876 and no further, because past that point the converter can already draw
 # every panel within five millimetres of the original and refuses to spend more on something it
 # cannot improve. Five millimetres is well under a pixel at any distance the car is seen from.
 #
-# The wheels are the opposite: surfaces of revolution have no such ceiling, and they take every
-# triangle offered — 91 a tyre at a 5,000 budget, 276 at 15,000. They are also, with the lights,
-# most of what says which car this is, and a wheel decimated to a wedge is the single most obvious
-# tell of a cheap model. So the extra budget above the body's ceiling goes to them, deliberately.
+# The wheels and the glass are the opposite: surfaces of revolution and flat sheets take every
+# triangle offered. The converter shares the budget out twice for exactly this reason — the second
+# pass hands what the body could not use to whatever can — so the weights below are about which of
+# those gets it, not about squeezing the body.
 #
-# 15,000 is where that stops paying: 20,000 buys another 100 triangles of body and 200 of wheel,
-# which does not show at 480x272.
+# 15,000 is where it stops paying: the remainder is spread across categories that have all reached
+# the point where more does not show at 480x272.
 triangles = 15000
 
 # No `[handling]` table on purpose. The descent was tuned around a 1420 kg saloon and this is that

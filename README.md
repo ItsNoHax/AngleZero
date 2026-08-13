@@ -69,7 +69,7 @@ Toolchain, emulator setup and controls are in [Building and running](docs/buildi
 src/            game core — no PSP dependency, runs and is tested on the host
 src/psp/        the shell: GU setup, rendering, audio, save data, diagnostics
 tools/          the car asset compiler — host-only, never built for the console
-tests/          237 tests, all host-side
+tests/          243 tests, all host-side
 scripts/        music encoding, the glitch hunt, pulling captures off a PSP
 assets/         XMB icon, background, music, and the car models in three stages
 docs/           everything above

@@ -64,6 +64,7 @@ centring, which of 57 materials is glass — the converter works out.
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
 | `[materials]` | The category guesser does not speak this model's language. |
 | `[reduce]` | A category deserves more or less of the budget than its screen area suggests. |
+| `[reduce.parts]` | One *part* deserves more or less than the others in its category. |
 | `[reduce] drop` | Parts to leave out entirely — detail the sweep can see but that is not worth a triangle. |
 | `[handling]` | The car should not drive like the one the game was tuned around. |
 
@@ -78,25 +79,44 @@ decimator handed the `body` category as one lump takes a third of the paint's de
 report prints where every triangle went, what each category cost in error, and warns when a
 category is losing its shape.
 
+### It shares out twice
+
+A bucket cannot always use its share. The E36's bodywork is within five millimetres of the original
+at about 3,600 triangles, and past that the simplifier refuses to spend more on something it cannot
+improve — five millimetres is under a pixel at any distance the car is seen from. Sweeping the
+budget from 5,000 to 40,000 moves the bodywork from 2,616 to 4,876 and no further.
+
+That shortfall does not exist until the simplifier has run, which is after the sharing is done, so
+a 15,000-triangle budget quietly produced an 11,375-triangle car. The allocator therefore runs
+twice: the second pass pins every bucket that came in under its share at what it actually used, and
+shares the difference among the ones that were stopped by their target rather than by their own
+geometry. Wheels and glass take it, because a surface of revolution accepts every triangle offered.
+
+Two things had to be true for that to be safe. The four corners are averaged before the split — the
+sweep sees the near side of a car far more than the off side, and following that literally gave one
+tyre 2,648 triangles and the one across from it 647. And "filled its share" has a five per cent
+tolerance, because mirrored geometry collapses in slightly different orders and an exact test
+called two of four identical tyres full and handed the surplus to the other two.
+
 ### What the sweep does not answer
 
 It measures whether a part is on screen, not whether it is worth drawing, and those come apart in
-one specific place: detail behind an opening. Each of the E36's alloys has 4,762 triangles of brake
-disc and caliper behind it, visible through the gaps between the spokes — so the sweep gives it a
-share of the corner's budget, and the alloy in front is left with about 150 triangles. At 150 a
-five-spoke wheel is a disc, because the spoke windows are the first thing an edge collapse closes.
+one place: detail behind an opening. Each of the E36's alloys has 4,762 triangles of brake disc and
+caliper behind it, visible through the gaps between the spokes — so the sweep gives the hardware a
+share of the corner, and the alloy in front is left with about 150 triangles. At 150 a five-spoke
+wheel is a disc, because the spoke windows are the first thing an edge collapse closes.
 
-`[reduce] drop` is the answer: name the part and it is left out. The wheel then gets the whole
-corner, the gaps read as gaps, and the report says how many triangles were dropped by name so it
-cannot happen quietly. Worth checking on any car whose wheels look like blobs — rendering the
-compiled wheel side-on next to the source is how this one was found.
+`[reduce.parts]` is the answer, and `[reduce] drop` is the blunt version of it. Weighting the alloy
+at 6.0 against the hardware's 0.4 keeps both — the hardware is what makes the gaps read as gaps,
+and the caliper is the only colour in the wheel — where dropping it outright throws it away. Use
+`drop` when a part is worth nothing at all, and `[reduce.parts]` when it is worth something but not
+what its pixel count claims.
 
-The body saturates. Sweeping the E36's budget from 5,000 to 40,000 moves the bodywork from 2,616
-to 4,876 triangles and no further — past that the converter can already draw every panel within
-five millimetres of the original, which is under a pixel at any distance the car is seen from.
-Wheels are the opposite: surfaces of revolution take every triangle offered, and a wheel decimated
-to a wedge is the most obvious tell of a cheap model. So the budget above the body's ceiling goes
-to the wheels deliberately, and 15,000 is where that stops paying.
+Category weights and part weights are not interchangeable, and one pair pulls against the other:
+the alloys and the bumper trim are both bright metal and share the `chrome` category, so raising it
+feeds the wheels and starves the trim. Moving `chrome` up and `wheel` down separates them — on the
+E36 that takes the trim from 42 triangles at 18.2% error to 221 at 5.3% while the wheels keep
+theirs. Past `chrome = 12` the tyres collapse to 69 triangles each.
 
 ## Levels of detail
 
@@ -105,8 +125,9 @@ A car carries three copies of itself: LOD0 for the one being driven, LOD1 beyond
 carries one decimation's error and not three.
 
 With eight cars on screen this halves the vertex load — 260,223 to 138,225 a frame — for 0.05% of
-pixels differing at all. It costs file size: of the E36's 479 KB, 346 KB is geometry across three
-levels against 208 KB for LOD0 alone, and 129 KB is the texture.
+pixels differing at all. It costs file size: the E36 is 580 KB, of which 129 KB is the texture and
+the rest is geometry across three levels. Both cars together are 1.1 MB of the runtime's 1.5 MB
+arena, so a third car needs either a bigger arena or a smaller budget.
 
 ## Measuring
 
@@ -121,6 +142,19 @@ The vertex and draw-call counts in the trace are exact. The microseconds are PPS
 rasteriser and are only good for comparing one run against another — it is fill-bound where the
 console is not, so it under-reports what vertices cost. Real numbers come off the hardware, from
 the `CAR` and `US` fields in the on-device overlay.
+
+## When a part looks wrong
+
+A wheel is about twenty pixels on a 480-wide screen, which is too few to tell a bad mesh from a
+small one. Render the part out of the compiled asset instead — on its own, large — next to the same
+part read out of the source `.glb`. One is what the converter produced and the other is what it was
+given, and the difference is the answer. That is how the alloys were sorted out: the source was a
+clean five-spoke wheel with a caliper behind it and the compiled one was not.
+
+**Cull backfaces when you do.** A throwaway rasteriser that draws every triangle shows the far side
+of the tyre through the hole in the near side, which covers the alloy completely and makes every
+wheel look like a featureless blob however good it is. The GE culls; a debugging tool that does not
+will lie to you, and it cost a wrong diagnosis here before it was noticed.
 
 ## The texture
 
