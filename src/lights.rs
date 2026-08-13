@@ -61,6 +61,43 @@ pub const BEAM_FAR: f32 = 70.0;
 /// and fighting the tarmac for the depth buffer.
 pub const BEAM_LIFT: f32 = 0.08;
 
+/// Where the car's body is and how it is sitting.
+///
+/// Not just its heading. A lamp is bolted to the bodywork, so it goes where the bodywork goes, and
+/// the bodywork pitches with the road and rolls with the cornering load — `draw_one_car` turns
+/// every vertex of the car by all three angles before drawing it.
+///
+/// Placing lamps by yaw alone is out by the length of the car times the slope, in opposite
+/// directions at each end. On this pass, which falls 7.4 cm a metre, that is a headlight drawn 14 cm
+/// above the one on the model and a tail lamp drawn 15 cm below it — which is exactly how it looked:
+/// the brake lights too low and the headlights too high, on every car, all the way down the hill.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pose {
+    pub at: [f32; 3],
+    pub yaw: f32,
+    /// Nose down the hill, as the renderer's `RotateX` takes it.
+    pub pitch: f32,
+    /// Body roll from cornering load, as the renderer's `RotateZ` takes it.
+    pub roll: f32,
+    /// Road-wheel angle, for the lamps configured to steer with it.
+    pub steer: f32,
+}
+
+impl Pose {
+    /// The pose of a car the simulation is driving. `pitch` and `roll` are the renderer's own —
+    /// `Vehicle::body_pitch` and `Vehicle::roll` — because the point is to agree with the car that
+    /// is drawn rather than to have a second opinion about it.
+    pub fn of(st: &CarState, pitch: f32, roll: f32) -> Pose {
+        Pose {
+            at: [st.x, st.y, st.z],
+            yaw: st.yaw,
+            pitch,
+            roll,
+            steer: st.steer,
+        }
+    }
+}
+
 /// What the car is doing, as its lamps see it.
 ///
 /// Read off the vehicle rather than off the controller: the point is that the lamps work whatever
@@ -218,12 +255,11 @@ pub fn seen_from(forward: bool, facing: f32) -> f32 {
 /// Puts a lamp where the car has carried it, or `None` if it is dark or too far away to matter.
 ///
 /// `metres` is how far the car is from the eye.
-pub fn lamp(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Option<Lamp> {
+pub fn lamp(def: &LightDef, pose: &Pose, signals: &Signals, metres: f32) -> Option<Lamp> {
     let scale = intensity(def.kind, signals) * fade(metres);
     if scale <= 0.0 {
         return None;
     }
-    let (x, y, z) = place(st, def.at);
     // Braking blooms the lens as well as brightening it.
     let bloom = if def.kind == LightKind::Tail && signals.braking {
         BRAKE_BLOOM
@@ -239,11 +275,13 @@ pub fn lamp(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
     // between them. Standing the glow proud of the glass is also what a real lamp looks like: the
     // light is in the air in front of the lens, not painted on it.
     let forward = def.at[2] >= 0.0;
+    // Along the car's own axis, which the body's attitude has turned as well: the standoff has to
+    // leave the bodywork the lens is set into, and on a slope that is not the horizontal.
     let out = radius * GLOW_PROUD * if forward { 1.0 } else { -1.0 };
-    let (s, c) = (sin(st.yaw), cos(st.yaw));
+    let (x, y, z) = place(pose, [def.at[0], def.at[1], def.at[2] + out]);
     Some(Lamp {
         kind: def.kind,
-        at: [x + out * s, y, z + out * c],
+        at: [x, y, z],
         color: dim(def.color, scale),
         radius,
         forward,
@@ -254,7 +292,7 @@ pub fn lamp(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
 ///
 /// Only a lamp with a range has one, which in practice means the headlights: a tail lamp lights the
 /// road behind it in life, and at the brightness it does so it is not worth a triangle.
-pub fn beam(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Option<Beam> {
+pub fn beam(def: &LightDef, pose: &Pose, signals: &Signals, metres: f32) -> Option<Beam> {
     if def.range <= 0.0 || metres > BEAM_FAR {
         return None;
     }
@@ -262,10 +300,10 @@ pub fn beam(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
     if scale <= 0.0 {
         return None;
     }
-    let (x, _, z) = place(st, def.at);
+    let (x, _, z) = place(pose, def.at);
     // A lamp that steers swings with the road wheels; one that does not is a fixed unit behind a
     // fixed grille, and points where the car's nose points however the car is sliding.
-    let yaw = st.yaw + if def.steers() { st.steer } else { 0.0 };
+    let yaw = pose.yaw + if def.steers() { pose.steer } else { 0.0 };
     let far_half = max(def.spread, max(def.radius, 0.2));
     // How wide the light already is by the time it reaches the road.
     //
@@ -276,7 +314,7 @@ pub fn beam(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
     // them in the sliver of road visible over the roof.
     let near_half = max(def.radius, far_half * 0.3);
     Some(Beam {
-        at: [x, st.y + BEAM_LIFT, z],
+        at: [x, pose.at[1] + BEAM_LIFT, z],
         yaw,
         // The light lands a little ahead of the lens rather than under it. A patch that starts at
         // the bumper puts a bright pool beneath the car, where no headlight has ever put one.
@@ -289,12 +327,22 @@ pub fn beam(def: &LightDef, st: &CarState, signals: &Signals, metres: f32) -> Op
 }
 
 /// A point in car space, put where the car has carried it.
-fn place(st: &CarState, at: [f32; 3]) -> (f32, f32, f32) {
-    let (s, c) = (sin(st.yaw), cos(st.yaw));
+///
+/// Roll, then pitch, then yaw, then the car's position — the same order and the same conventions
+/// `draw_one_car` hands to the hardware, because a lamp that disagrees with the bodywork it is set
+/// into is a lamp floating beside the car.
+fn place(pose: &Pose, at: [f32; 3]) -> (f32, f32, f32) {
+    let (sr, cr) = (sin(pose.roll), cos(pose.roll));
+    let (x, y) = (at[0] * cr - at[1] * sr, at[0] * sr + at[1] * cr);
+
+    let (sp, cp) = (sin(pose.pitch), cos(pose.pitch));
+    let (y, z) = (y * cp - at[2] * sp, y * sp + at[2] * cp);
+
+    let (sy, cy) = (sin(pose.yaw), cos(pose.yaw));
     (
-        st.x + at[0] * c + at[2] * s,
-        st.y + at[1],
-        st.z - at[0] * s + at[2] * c,
+        pose.at[0] + x * cy + z * sy,
+        pose.at[1] + y,
+        pose.at[2] - x * sy + z * cy,
     )
 }
 

@@ -7,7 +7,7 @@
 
 use angle_zero::azcar::{LightDef, LightKind, LIGHT_STEERS};
 use angle_zero::lights::{
-    beam, dim, fade, intensity, lamp, push_beam, seen_from, Signals, BEAM_FAR, BEAM_VERTS,
+    beam, dim, fade, intensity, lamp, push_beam, seen_from, Pose, Signals, BEAM_FAR, BEAM_VERTS,
     LAMP_FAR, TAIL_IDLE,
 };
 use angle_zero::mesh::Vertex;
@@ -38,6 +38,16 @@ fn headlight(at: [f32; 3]) -> LightDef {
 
 fn parked() -> CarState {
     CarState::default()
+}
+
+/// A car standing on level ground, facing +Z. Pitch and roll are the renderer's, so a test that is
+/// not about the car's attitude says so by passing zero for both.
+fn level() -> Pose {
+    Pose::of(&parked(), 0.0, 0.0)
+}
+
+fn poised(st: &CarState) -> Pose {
+    Pose::of(st, 0.0, 0.0)
 }
 
 const LIT: Signals = Signals {
@@ -135,7 +145,7 @@ fn lights_off_parks_every_lamp_on_the_car() {
     ] {
         assert_eq!(intensity(kind, &dark), 0.0, "{}", kind.name());
     }
-    assert!(lamp(&light(LightKind::Head, [0.6, 0.7, 2.0]), &parked(), &dark, 5.0).is_none());
+    assert!(lamp(&light(LightKind::Head, [0.6, 0.7, 2.0]), &level(), &dark, 5.0).is_none());
 }
 
 // --- where the lamps end up -----------------------------------------------------------
@@ -148,7 +158,7 @@ fn a_lamp_is_carried_by_the_car_that_owns_it() {
     st.z = -12.0;
     st.y = 4.0;
 
-    let l = lamp(&def, &st, &LIT, 5.0).expect("a lit tail lamp");
+    let l = lamp(&def, &poised(&st), &LIT, 5.0).expect("a lit tail lamp");
     assert!((l.at[0] - 30.64).abs() < 1e-4, "{:?}", l.at);
     assert!((l.at[1] - 5.0).abs() < 1e-4, "the lamp rides at the car's height plus its own");
     // The car's z, the lens's own z, and the standoff that keeps the glow out of the bodywork.
@@ -164,7 +174,7 @@ fn turning_the_car_swings_its_lamps_around_it() {
     let mut st = parked();
     st.yaw = core::f32::consts::FRAC_PI_2;
 
-    let l = lamp(&def, &st, &LIT, 5.0).unwrap();
+    let l = lamp(&def, &poised(&st), &LIT, 5.0).unwrap();
     // Yawed a quarter turn, a lamp a metre out on the car's left is a metre along the world's z.
     // The only x it keeps is the standoff that holds the glow off its own lens.
     let standoff = def.radius * angle_zero::lights::GLOW_PROUD;
@@ -172,10 +182,65 @@ fn turning_the_car_swings_its_lamps_around_it() {
     assert!(l.at[0].abs() <= standoff + 1e-4, "{:?}", l.at);
 }
 
+/// The fault that made the brake lights sit too low and the headlights too high on every car, all
+/// the way down the hill: lamps were placed by the car's heading alone, while the car itself is
+/// drawn pitched onto the slope. The two ends of a car move in opposite directions when it pitches,
+/// which is why it read as two separate problems.
+#[test]
+fn a_pitched_car_carries_its_lamps_with_its_body() {
+    let head = headlight([0.6, 0.7, 1.9]);
+    let tail = light(LightKind::Tail, [0.6, 0.9, -2.0]);
+    // Nose down, as the car is for the whole descent: about 4 degrees on this pass.
+    let downhill = Pose {
+        pitch: 0.074,
+        ..level()
+    };
+
+    let flat_head = lamp(&head, &level(), &LIT, 5.0).unwrap();
+    let flat_tail = lamp(&tail, &level(), &LIT, 5.0).unwrap();
+    let down_head = lamp(&head, &downhill, &LIT, 5.0).unwrap();
+    let down_tail = lamp(&tail, &downhill, &LIT, 5.0).unwrap();
+
+    assert!(
+        down_head.at[1] < flat_head.at[1] - 0.1,
+        "a nose-down car's headlight has to drop with its nose: {} against {}",
+        down_head.at[1],
+        flat_head.at[1]
+    );
+    assert!(
+        down_tail.at[1] > flat_tail.at[1] + 0.1,
+        "and its tail lamp has to rise with its tail: {} against {}",
+        down_tail.at[1],
+        flat_tail.at[1]
+    );
+}
+
+/// Roll does the same thing across the car rather than along it.
+#[test]
+fn a_rolling_car_carries_its_lamps_with_its_body() {
+    let left = light(LightKind::Tail, [0.64, 0.9, -2.0]);
+    let right = light(LightKind::Tail, [-0.64, 0.9, -2.0]);
+    let leaning = Pose {
+        roll: 0.09,
+        ..level()
+    };
+
+    let l = lamp(&left, &leaning, &LIT, 5.0).unwrap();
+    let r = lamp(&right, &leaning, &LIT, 5.0).unwrap();
+    assert!(
+        l.at[1] > r.at[1] + 0.05,
+        "one side of a rolling car is higher than the other: {} against {}",
+        l.at[1],
+        r.at[1]
+    );
+    // And the pair still straddles the car rather than sliding off one side of it.
+    assert!(l.at[0] > 0.0 && r.at[0] < 0.0, "{:?} {:?}", l.at, r.at);
+}
+
 #[test]
 fn a_headlight_is_seen_from_in_front_and_a_tail_lamp_from_behind() {
-    let head = lamp(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
-    let tail = lamp(&light(LightKind::Tail, [0.6, 1.0, -2.0]), &parked(), &LIT, 5.0).unwrap();
+    let head = lamp(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).unwrap();
+    let tail = lamp(&light(LightKind::Tail, [0.6, 1.0, -2.0]), &level(), &LIT, 5.0).unwrap();
     assert!(head.forward);
     assert!(!tail.forward);
 }
@@ -211,10 +276,10 @@ fn a_lamp_fades_with_the_angle_it_is_seen_from() {
 #[test]
 fn braking_blooms_the_lens_as_well_as_brightening_it() {
     let def = light(LightKind::Tail, [0.6, 1.0, -2.0]);
-    let idle = lamp(&def, &parked(), &LIT, 5.0).unwrap();
+    let idle = lamp(&def, &level(), &LIT, 5.0).unwrap();
     let hard = lamp(
         &def,
-        &parked(),
+        &level(),
         &Signals {
             braking: true,
             ..LIT
@@ -231,13 +296,13 @@ fn braking_blooms_the_lens_as_well_as_brightening_it() {
 
 #[test]
 fn only_a_lamp_with_a_range_throws_a_beam() {
-    assert!(beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).is_some());
-    assert!(beam(&light(LightKind::Tail, [0.6, 1.0, -2.0]), &parked(), &LIT, 5.0).is_none());
+    assert!(beam(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).is_some());
+    assert!(beam(&light(LightKind::Tail, [0.6, 1.0, -2.0]), &level(), &LIT, 5.0).is_none());
 }
 
 #[test]
 fn a_beam_widens_with_distance_and_lies_on_the_road() {
-    let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
+    let b = beam(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).unwrap();
     assert!(b.far_half > b.near_half * 2.0, "narrow at the lamp, wide where it lands");
     assert!(b.far > b.near);
     assert!(
@@ -254,12 +319,12 @@ fn steering_swings_only_the_lamps_configured_to_follow_it() {
     let mut st = parked();
     st.steer = 0.4;
 
-    let fixed = beam(&headlight([0.6, 0.7, 2.0]), &st, &LIT, 5.0).unwrap();
+    let fixed = beam(&headlight([0.6, 0.7, 2.0]), &poised(&st), &LIT, 5.0).unwrap();
     assert_eq!(fixed.yaw, st.yaw, "a fixed lamp is bolted to the body");
 
     let mut def = headlight([0.6, 0.7, 2.0]);
     def.flags |= LIGHT_STEERS;
-    let steered = beam(&def, &st, &LIT, 5.0).unwrap();
+    let steered = beam(&def, &poised(&st), &LIT, 5.0).unwrap();
     assert!(
         (steered.yaw - (st.yaw + st.steer)).abs() < 1e-6,
         "a steering lamp follows the road wheels"
@@ -273,7 +338,7 @@ fn flat(_x: f32, _z: f32) -> f32 {
 
 #[test]
 fn a_beam_is_the_handful_of_triangles_it_was_budgeted() {
-    let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
+    let b = beam(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).unwrap();
     // Twice the room it should need, so that what this measures is how much a beam costs rather
     // than how much it was given — which is the mistake this test made when it was first written.
     let mut out = [Vertex::ZERO; BEAM_VERTS * 2];
@@ -297,7 +362,7 @@ fn a_beam_is_the_handful_of_triangles_it_was_budgeted() {
 /// patch that stays at one height is under the tarmac as soon as the road climbs relative to it.
 #[test]
 fn a_beam_takes_its_height_from_the_road_it_lands_on() {
-    let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
+    let b = beam(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).unwrap();
     let mut out = [Vertex::ZERO; BEAM_VERTS];
     let mut w = 0;
 
@@ -321,7 +386,7 @@ fn a_beam_takes_its_height_from_the_road_it_lands_on() {
 /// arena is finite and a field of cars is what fills it.
 #[test]
 fn a_beam_written_into_a_full_buffer_stops_short() {
-    let b = beam(&headlight([0.6, 0.7, 2.0]), &parked(), &LIT, 5.0).unwrap();
+    let b = beam(&headlight([0.6, 0.7, 2.0]), &level(), &LIT, 5.0).unwrap();
     let mut out = [Vertex::ZERO; 8];
     let mut w = 0;
     assert_eq!(push_beam(&mut out, &mut w, &b, flat), 8);
@@ -334,8 +399,8 @@ fn a_beam_written_into_a_full_buffer_stops_short() {
 fn a_lamp_glow_stands_off_the_lens_it_comes_from() {
     let tail = light(LightKind::Tail, [0.64, 1.0, -2.0]);
     let head = headlight([0.62, 0.7, 2.0]);
-    let l = lamp(&tail, &parked(), &LIT, 5.0).unwrap();
-    let h = lamp(&head, &parked(), &LIT, 5.0).unwrap();
+    let l = lamp(&tail, &level(), &LIT, 5.0).unwrap();
+    let h = lamp(&head, &level(), &LIT, 5.0).unwrap();
 
     assert!(l.at[2] < tail.at[2], "a tail lamp's glow is behind its lens");
     assert!(h.at[2] > head.at[2], "a headlamp's glow is in front of its lens");
@@ -360,10 +425,10 @@ fn lamps_fade_into_the_same_fog_the_world_does() {
 fn a_distant_car_keeps_its_lamps_and_loses_its_beams() {
     let def = headlight([0.6, 0.7, 2.0]);
     let far = BEAM_FAR + 10.0;
-    assert!(beam(&def, &parked(), &LIT, far).is_none());
-    assert!(lamp(&def, &parked(), &LIT, far).is_some());
+    assert!(beam(&def, &level(), &LIT, far).is_none());
+    assert!(lamp(&def, &level(), &LIT, far).is_some());
     // And past the fog, nothing at all.
-    assert!(lamp(&def, &parked(), &LIT, LAMP_FAR + 1.0).is_none());
+    assert!(lamp(&def, &level(), &LIT, LAMP_FAR + 1.0).is_none());
 }
 
 #[test]

@@ -2001,23 +2001,25 @@ const LAMP_ASPECT: f32 = 0.68;
 /// The player's car, and whatever the benchmark modes have put in front of it. This exists so that
 /// the lighting passes and `draw_car` cannot disagree about which car is where — a field of lit
 /// cars whose lamps are one model behind the bodies would be a very confusing thing to look at.
-fn lit_cars(vehicle: &Vehicle) -> impl Iterator<Item = (&'static azcar::Car<'static>, CarState)> + '_ {
+///
+/// The pose carries the body's pitch and roll and not only its heading, and it takes them from the
+/// same two calls `draw_car` does. Agreeing with the car that is drawn is the whole job: a lamp is
+/// a point on the bodywork, and bodywork that is pitched 4 degrees down the hill has moved its nose
+/// 14 cm relative to a lamp placed by heading alone.
+fn lit_cars<'a>(
+    vehicle: &'a Vehicle,
+    track: &Track,
+) -> impl Iterator<Item = (&'static azcar::Car<'static>, lights::Pose)> + 'a {
     let st = vehicle.state;
-    let player = super::car::get(vehicle.model).map(|car| (car, st));
+    let pose = lights::Pose::of(&st, vehicle.body_pitch(track), vehicle.roll());
+    let player = super::car::get(vehicle.model).map(|car| (car, pose));
 
     #[cfg(feature = "devtools")]
     let others = bench_field(st).filter_map(move |(slot, at, yaw)| {
         let car = super::car::get(slot)?;
-        Some((
-            car,
-            CarState {
-                x: at[0],
-                y: at[1],
-                z: at[2],
-                yaw,
-                ..st
-            },
-        ))
+        // The benchmark field is copies of the player's car, drawn at its pitch and roll — see
+        // `draw_car`, which hands them the same two numbers.
+        Some((car, lights::Pose { at, yaw, ..pose }))
     });
     #[cfg(not(feature = "devtools"))]
     let others = core::iter::empty();
@@ -2044,9 +2046,9 @@ fn signals(vehicle: &Vehicle, braking: bool) -> lights::Signals {
 }
 
 /// How far a car is from the eye, which is what every quality decision here is made on.
-fn eye_distance(st: &CarState) -> f32 {
+fn eye_distance(pose: &lights::Pose) -> f32 {
     let eye = camera_eye();
-    let d = [st.x - eye[0], st.y - eye[1], st.z - eye[2]];
+    let d = [pose.at[0] - eye[0], pose.at[1] - eye[1], pose.at[2] - eye[2]];
     sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2])
 }
 
@@ -2056,7 +2058,7 @@ fn eye_distance(st: &CarState) -> f32 {
 /// Where the lamps are is the asset's business — see `azcar::LightDef` — and whether each one is
 /// burning is `lights::intensity`'s. What is left here is the part that genuinely is the renderer's:
 /// one buffer, one draw call, whatever the number of cars.
-pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
+pub fn draw_lamp_glows(vehicle: &Vehicle, track: &Track, camera: &Camera, braking: bool) {
     // Mode 10 drops them.
     #[cfg(feature = "devtools")]
     if debug_mode() == 10 {
@@ -2065,7 +2067,7 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
     let signals = signals(vehicle, braking);
     // An upper bound rather than a second pass over the lamps: reading a count out of each car's
     // header is free, and resolving every lamp twice is not.
-    let budget: usize = lit_cars(vehicle).map(|(car, _)| car.light_count()).sum();
+    let budget: usize = lit_cars(vehicle, track).map(|(car, _)| car.light_count()).sum();
     if budget == 0 {
         return;
     }
@@ -2077,20 +2079,20 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
         let mut w = 0usize;
         let (right_x, right_z) = (cos(camera.yaw), -sin(camera.yaw));
 
-        for (car, st) in lit_cars(vehicle) {
-            let metres = eye_distance(&st);
+        for (car, pose) in lit_cars(vehicle, track) {
+            let metres = eye_distance(&pose);
             // A glow is a billboard with no depth of its own, so a lamp the car has its back to
             // would otherwise shine straight through the bodywork — which, with a chase camera, is
             // almost always. How much of each lamp reaches the eye is decided by the angle rather
             // than by which half of the car it is on, so a lamp fades in as the camera comes round
             // the nose instead of appearing whole the moment it crosses the wing mirror.
-            let (s, c) = (sin(st.yaw), cos(st.yaw));
-            let (dx, dz) = (camera.pos.x - st.x, camera.pos.z - st.z);
+            let (s, c) = (sin(pose.yaw), cos(pose.yaw));
+            let (dx, dz) = (camera.pos.x - pose.at[0], camera.pos.z - pose.at[2]);
             let away = sqrt(dx * dx + dz * dz).max(0.001);
             let facing = (dx * s + dz * c) / away;
 
             for def in car.lights() {
-                let Some(lamp) = lights::lamp(&def, &st, &signals, metres) else {
+                let Some(lamp) = lights::lamp(&def, &pose, &signals, metres) else {
                     continue;
                 };
                 // Mode 15 shows every lamp from everywhere at once, which is the point of it.
@@ -2166,7 +2168,7 @@ pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
         return;
     }
     let signals = signals(vehicle, braking);
-    let budget: usize = lit_cars(vehicle).map(|(car, _)| car.light_count()).sum();
+    let budget: usize = lit_cars(vehicle, track).map(|(car, _)| car.light_count()).sum();
     if budget == 0 {
         return;
     }
@@ -2183,21 +2185,22 @@ pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
         let mut where_on_the_road = Locator::new();
         where_on_the_road.reset_to(vehicle.locator.last_idx);
 
-        for (car, st) in lit_cars(vehicle) {
-            let metres = eye_distance(&st);
+        for (car, pose) in lit_cars(vehicle, track) {
+            let metres = eye_distance(&pose);
             // How far the road rises or falls between the car and each station, rather than how
             // high it is. The two are the same on the road itself and are not in the pull-off,
             // where the car stands on paving laid over the centreline's own shelf — a beam taking
             // absolute heights there would be laid a foot underground. A relative one starts at
             // whatever the car is standing on and follows the slope from there, which is all a
             // beam ever needed to know.
-            let under_car = track.nodes[where_on_the_road.nearest(track, st.x, st.z).index].p.y;
+            let under_car =
+                track.nodes[where_on_the_road.nearest(track, pose.at[0], pose.at[2]).index].p.y;
             for def in car.lights() {
-                if let Some(beam) = lights::beam(&def, &st, &signals, metres) {
+                if let Some(beam) = lights::beam(&def, &pose, &signals, metres) {
                     STATS.beams = STATS.beams.saturating_add(1);
                     lights::push_beam(out, &mut w, &beam, |x, z| {
                         let road = track.nodes[where_on_the_road.nearest(track, x, z).index].p.y;
-                        st.y + (road - under_car)
+                        pose.at[1] + (road - under_car)
                     });
                 }
             }

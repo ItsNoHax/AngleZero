@@ -358,7 +358,7 @@ pub fn psp_main() {
             if game.phase != Phase::Title {
                 render::draw_effects(&game.effects, &game.camera);
             }
-            render::draw_lamp_glows(&game.vehicle, &game.camera, game.braking_hint());
+            render::draw_lamp_glows(&game.vehicle, track, &game.camera, game.braking_hint());
 
             hud::begin();
             // Both of these draw over the frame, so a harness build leaves them out: the detector
