@@ -173,8 +173,9 @@ pub struct Lamp {
 /// headlight actually shows you is the tarmac.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Beam {
-    /// Where the light starts, on the road under the lens rather than at the lens itself. The
-    /// patch lies on the tarmac, so this is the only height any of it has.
+    /// Where the light starts: on the road under the lens rather than at the lens itself, since the
+    /// patch lies on the tarmac. Its height is the road under the *car*, which is the one station's
+    /// height that needs no looking up — see [`push_beam`].
     pub at: [f32; 3],
     /// Heading the beam runs along, world radians.
     pub yaw: f32,
@@ -301,8 +302,8 @@ pub const BEAM_VERTS: usize = (BEAM_STATIONS.len() - 1) * 3 * 6;
 
 /// Writes one beam's triangles, in world space, lying on the road.
 ///
-/// `ground` gives the height of the road at a world (x, z), and the beam takes its own height from
-/// that at every station rather than lying flat. That is not a refinement: the pass falls seven
+/// `ground` gives the height of the road at a world (x, z), and the beam takes its height from that
+/// at every station past the first rather than lying flat. That is not a refinement: the pass falls seven
 /// centimetres a metre, so a horizontal patch 24 m long is a metre out by its far end — floating in
 /// the air where the road drops away, and buried under the tarmac where it climbs. Buried is what it
 /// actually did, and a beam that reached two metres in front of the bumper and stopped dead was the
@@ -329,7 +330,15 @@ pub fn push_beam(
             d,
             beam.near_half + (beam.far_half - beam.near_half) * along,
             *intensity,
-            ground(cx, cz) + BEAM_LIFT,
+            // The nearest station is a metre in front of the bumper, and the height of the road
+            // there is one the caller already knows exactly: it is the car's own, which the
+            // simulation settles onto the surface every substep. Asking the track for it would be
+            // a third of this pass's cost spent re-deriving a number that arrived with the beam.
+            if i == 0 {
+                beam.at[1]
+            } else {
+                ground(cx, cz) + BEAM_LIFT
+            },
         );
     }
 
