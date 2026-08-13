@@ -122,3 +122,25 @@ top_speed = 55.0
 brake = 9500.0
 steer_lock = 0.62
 grip = 0.96
+
+[lights]
+# The one car here whose lamps the converter refuses to guess at, and the reason the slots below
+# exist at all.
+#
+# Its lenses are `HL_Glass_*` and `TL_Glass_*`, and every one of them is transparent — so the
+# material sorter calls them glass, which is a perfectly good answer that leaves the car with no
+# lights. What the detector then found in the front-left quadrant was the largest lens it could
+# see, a repeater on the wing at z = 0.30, against a right-hand one at z = 1.35. It reported that
+# the pair was not a mirror image and left both off, which is the behaviour asked for: a car with
+# one headlight on its wing is worse than a car with none.
+#
+# Naming the node is enough. Where the lamp is, how big it is and which half belongs to which side
+# are still measured off the model — a fragment says *which* lens, not where it is.
+[lights.headlight_left]
+node = "HL_Glass_ONM"
+[lights.headlight_right]
+node = "HL_Glass_ONM"
+[lights.tail_left]
+node = "TL_Glass_ONM"
+[lights.tail_right]
+node = "TL_Glass_ONM"

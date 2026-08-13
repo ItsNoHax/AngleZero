@@ -80,3 +80,13 @@ amdb11_brakedisc = 0.4
 #
 # The trailing dot on `Object_4.` matters: without it this also matches Object_35.001, a seat.
 match = ["wheel_bmw_aplg", "Object_4.", "amdb11_brakedisc"]
+
+# No `[lights]` table either, and for the same reason there is no `[handling]` one: this car does
+# not need to be told. Its lenses are named `fara`, `brakelight` and `E36_lights`, which the
+# material sorter has always recognised, and the converter measures where each one is and how big
+# it is off the model. `mercedes_190e.toml` is the car that does need telling, and its table is
+# what one looks like.
+#
+# Two things it does say, in warnings rather than in silence: the rear bumper strip and the
+# high-level lamp in the back window are single lenses on the car's centreline, and a lamp there
+# belongs to no side, so neither is fitted. The pair in the rear cluster does the braking.

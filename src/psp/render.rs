@@ -170,8 +170,16 @@ const CAR_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 pub const MODE_FOUR_CARS: u32 = 13;
 #[cfg(feature = "devtools")]
 pub const MODE_EIGHT_CARS: u32 = 14;
+/// Every lamp on every car burning at once, from both sides, whatever the driver is doing.
+///
+/// The one thing neither the converter's report nor a screenshot can settle on its own: the report
+/// says where a lamp is in car space, and a screenshot says what a lit car looks like, but a lamp
+/// that came out on the wrong panel is only obvious when it is lit and the car is in front of you.
+/// Worth having for the next model that arrives with its lenses somewhere new.
 #[cfg(feature = "devtools")]
-pub const DEBUG_MODES: u32 = 15;
+pub const MODE_ALL_LAMPS: u32 = 15;
+#[cfg(feature = "devtools")]
+pub const DEBUG_MODES: u32 = 16;
 #[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
@@ -2019,6 +2027,16 @@ fn lit_cars(vehicle: &Vehicle) -> impl Iterator<Item = (&'static azcar::Car<'sta
 
 /// What the lamps on every car are being asked to do this frame.
 fn signals(vehicle: &Vehicle, braking: bool) -> lights::Signals {
+    // Mode 15 asks for all of them, so that a lamp in the wrong place can be seen rather than
+    // waited for.
+    #[cfg(feature = "devtools")]
+    if debug_mode() == MODE_ALL_LAMPS {
+        return lights::Signals {
+            braking: true,
+            reversing: true,
+            lit: true,
+        };
+    }
     // Every car on screen is doing what the player's car is doing, because every car on screen *is*
     // the player's car — the benchmark field is copies of it. When these are other drivers they
     // will carry their own state, and nothing here changes: the signals travel with the pose.
@@ -2071,7 +2089,13 @@ pub fn draw_lamp_glows(vehicle: &Vehicle, camera: &Camera, braking: bool) {
                 let Some(lamp) = lights::lamp(&def, &st, &signals, metres) else {
                     continue;
                 };
-                if lamp.forward != (facing > 0.0) {
+                // Mode 15 shows both ends of the car at once; otherwise a lamp is drawn only from
+                // the side it faces, or the headlamps shine through the car at a chase camera.
+                #[cfg(feature = "devtools")]
+                let both_sides = debug_mode() == MODE_ALL_LAMPS;
+                #[cfg(not(feature = "devtools"))]
+                let both_sides = false;
+                if !both_sides && lamp.forward != (facing > 0.0) {
                     continue;
                 }
                 STATS.lamps = STATS.lamps.saturating_add(1);

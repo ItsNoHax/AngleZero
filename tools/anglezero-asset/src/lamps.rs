@@ -90,7 +90,7 @@ struct Candidate {
     radius: f32,
     /// What its name says it is for, if anything.
     named: Option<LightKind>,
-    /// Whether the lens this came from sits *on* the car's centreline rather than at a corner.
+    /// Whether this half of the lens sits *on* the car's centreline rather than at a corner.
     ///
     /// This is not a detail. A car's rear cluster is a pair, but the strip across the boot lid and
     /// the high-level lamp in the back window are single lamps in the middle — and a rule that
@@ -98,9 +98,12 @@ struct Candidate {
     /// centring left it a millimetre on. That is exactly the "random mesh as a brake light" this
     /// module exists to refuse.
     ///
-    /// Decided on the whole part, before it is cut, because cutting is what destroys the evidence:
-    /// half of a centre lamp has its middle half a lamp's width off the axis, which is far enough
-    /// out to pass for a corner lamp on a narrow car.
+    /// Asked of the half rather than of the whole part it came from, which sounds like the weaker
+    /// test and is the right one. A centre lamp is narrow, so both of its halves are still within a
+    /// few centimetres of the axis — the E36's boot-lid strip cuts into halves centred at +0.10 and
+    /// -0.09. Asking the *part* whether it has any glass near the axis catches that too, and also
+    /// catches every merged mesh that happens to contain a lamp near the middle: the R34 models
+    /// every lamp it has as one object, so that test threw away all four of them.
     centred: bool,
 }
 
@@ -135,7 +138,13 @@ pub fn identify(
     }
 
     let bounds = car_bounds(model);
-    let candidates = candidates(model, assignment, wheels, &bounds);
+    let named: Vec<&str> = config
+        .lights
+        .slots()
+        .iter()
+        .filter_map(|(_, a)| a.as_ref().and_then(|a| a.node.as_deref()))
+        .collect();
+    let candidates = candidates(model, assignment, wheels, &bounds, &named);
     // A car whose lenses are all one part — one rear cluster mesh spanning the whole tail — cannot
     // be split into a left and a right lamp by looking at parts. Saying so is worth more than
     // silently fitting one lamp down the middle of the car.
@@ -209,31 +218,29 @@ fn candidates(
     assignment: &Assignment,
     wheels: &Wheels,
     bounds: &Bounds,
+    named: &[&str],
 ) -> Vec<Candidate> {
     let band = centre_band(bounds);
     let mut out = Vec::new();
     for (i, part) in model.parts.iter().enumerate() {
-        if assignment.categories[i] != Category::Light {
-            continue;
-        }
         // A lens bolted to a wheel is a reflector on a hubcap, not a lamp. It also spins.
         if wheels.corner_of(i).is_some() {
             continue;
         }
         let material = &model.materials[part.material].name;
         let names = format!("{} {} {}", part.node, part.parent, material).to_ascii_lowercase();
+        // Sorted as a lens, or named in the config as one. The second is the escape hatch that
+        // makes the first overrulable, and it has to reach parts of any category to be worth
+        // anything: the 190E's headlights are `HL_Glass_*`, which are transparent, which makes them
+        // glass — a perfectly reasonable answer that leaves the car with no headlights.
+        let is_lens = assignment.categories[i] == Category::Light
+            || named
+                .iter()
+                .any(|f| !f.is_empty() && names.contains(&f.to_ascii_lowercase()));
+        if !is_lens {
+            continue;
+        }
         let named = named_kind(&part.node, &part.parent, material);
-
-        // Whether the lens has any glass on the axis itself. A pair modelled as one mesh has a
-        // car's width of bodywork between its two halves and none in the middle; a single centre
-        // lamp is nothing but middle. That gap is the only thing that tells the two apart, and it
-        // is gone as soon as the part is cut.
-        let nearest_to_axis = part
-            .positions
-            .iter()
-            .map(|p| p[0].abs())
-            .fold(f32::MAX, f32::min);
-        let centred = nearest_to_axis < band;
 
         for side in [Side::Left, Side::Right] {
             for front in [true, false] {
@@ -249,18 +256,19 @@ fn candidates(
                 if size == [0.0; 3] {
                     continue;
                 }
+                let at = [
+                    (half.min[0] + half.max[0]) * 0.5,
+                    (half.min[1] + half.max[1]) * 0.5,
+                    (half.min[2] + half.max[2]) * 0.5,
+                ];
                 out.push(Candidate {
                     names: names.clone(),
-                    at: [
-                        (half.min[0] + half.max[0]) * 0.5,
-                        (half.min[1] + half.max[1]) * 0.5,
-                        (half.min[2] + half.max[2]) * 0.5,
-                    ],
+                    at,
                     // The glow stands in for the lens, so it is the size of the lens as seen from
                     // in front: its width or its height, whichever is larger, halved.
                     radius: size[0].max(size[1]) * 0.5,
                     named,
-                    centred,
+                    centred: at[0].abs() < band,
                 });
             }
         }
@@ -336,7 +344,9 @@ fn resolve(
         .iter()
         .filter(|c| {
             if let Some(fragment) = anchor.and_then(|a| a.node.as_deref()) {
-                return matches_fragment(c, fragment);
+                // Still this side of the car: a fragment names which lens, and the quadrant cut
+                // has already said which half of it belongs to which lamp.
+                return matches_fragment(c, fragment) && Side::of(c.at[0]) == side;
             }
             !c.centred
                 && Side::of(c.at[0]) == side
@@ -370,7 +380,9 @@ fn resolve(
         .copied()
         .filter(|c| c.named == Some(kind))
         .collect();
-    let how = if !named.is_empty() {
+    let how = if anchor.and_then(|a| a.node.as_deref()).is_some() {
+        "named in the config"
+    } else if !named.is_empty() {
         matched = named;
         "named in the model"
     } else {

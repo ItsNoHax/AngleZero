@@ -26,6 +26,11 @@ pub struct Frame {
     pub rails: u16,
     pub dashes: u16,
     pub props: u16,
+    /// Car draw calls, lamp glows and beam patches. The three columns that say what a field of
+    /// cars costs, and which half of vehicle lighting is the expensive one.
+    pub cars: u16,
+    pub lamps: u16,
+    pub beams: u16,
     pub verts: u32,
     pub node: u16,
     pub speed_kph: u16,
@@ -44,6 +49,9 @@ static mut RING: [Frame; FRAMES] = [Frame {
     rails: 0,
     dashes: 0,
     props: 0,
+    cars: 0,
+    lamps: 0,
+    beams: 0,
     verts: 0,
     node: 0,
     speed_kph: 0,
@@ -68,6 +76,9 @@ pub fn record(index: u32, stats: &DrawStats, game: &Game, frame_us: u32) {
             rails: stats.rails,
             dashes: stats.dashes,
             props: stats.props,
+            cars: stats.cars,
+            lamps: stats.lamps,
+            beams: stats.beams,
             verts: stats.verts,
             node: game.vehicle.locator.last_idx as u16,
             speed_kph: (game.vehicle.speed_kph() + 0.5) as u16,
@@ -151,7 +162,7 @@ pub fn dump(index: u32) -> bool {
         push_str(
             &mut buf,
             &mut w,
-            b"# frame road terrain lines rails dashes props verts node kph us roadmask terrainmask propmask glowmask\n",
+            b"# frame road terrain lines rails dashes props cars lamps beams verts node kph us roadmask terrainmask propmask glowmask\n",
         );
         sys::sceIoWrite(fd, buf.as_ptr() as *const _, w);
 
@@ -159,7 +170,7 @@ pub fn dump(index: u32) -> bool {
         let start = if FILLED < FRAMES { 0 } else { WRITE % FRAMES };
         for i in 0..FILLED {
             let f = RING[(start + i) % FRAMES];
-            // Fifteen columns, four of them 10-digit masks. `push_num` truncates rather than
+            // Eighteen columns, four of them 10-digit masks. `push_num` truncates rather than
             // overflowing, so a buffer that is merely close would silently corrupt the trace.
             let mut line = [0u8; 192];
             let mut w = 0usize;
@@ -171,6 +182,9 @@ pub fn dump(index: u32) -> bool {
                 f.rails as u32,
                 f.dashes as u32,
                 f.props as u32,
+                f.cars as u32,
+                f.lamps as u32,
+                f.beams as u32,
                 f.verts,
                 f.node as u32,
                 f.speed_kph as u32,

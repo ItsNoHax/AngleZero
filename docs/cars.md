@@ -80,6 +80,7 @@ centring, which of 57 materials is glass — the converter works out.
 | `[reduce.parts]` | One *part* deserves more or less than the others in its category. |
 | `[reduce] drop` | Parts to leave out entirely — detail the sweep can see but that is not worth a triangle. |
 | `[handling]` | The car should not drive like the one the game was tuned around. |
+| `[lights]` | The lamp detector refused, or the car's beams should be a different length. |
 
 ## Where the budget goes
 
@@ -141,6 +142,84 @@ the alloys and the bumper trim are both bright metal and share the `chrome` cate
 feeds the wheels and starves the trim. Moving `chrome` up and `wheel` down separates them — on the
 E36 that takes the trim from 42 triangles at 18.2% error to 221 at 5.3% while the wheels keep
 theirs. Past `chrome = 12` the tyres collapse to 69 triangles each.
+
+## Lights
+
+A car's lamps come out of its asset, the same way its wheels do. The renderer has no idea which car
+it is lighting: it reads the lamp records, asks what each one should be burning at, and draws two
+additive passes for every car on screen.
+
+```
+Lights:
+  Headlights:      2
+  Tail lights:     2
+  Brake lights:    0
+  Reverse:         2
+  headlight       left at ( 0.50, 0.61,  2.04), 0.44 m across, 40 m beam   named in the model
+  tail light      left at ( 0.38, 0.91, -2.09), 1.10 m across              named in the model
+  reverse light   left at ( 0.57, 0.75, -2.34), 0.36 m across              named in the model
+```
+
+Almost none of that is configured. The material sorter has always put lenses in the `light`
+category, so the parts are already known; where a lamp is and how big it is are measured off the
+lens itself. What a lens is *for* is the part a model does not answer — nothing about a red lens
+says whether it comes on under braking — so the kind comes from the part's name where the name is
+clear, from which end of the car it is on where it is not, and from the config where neither will
+do.
+
+Six of the seven cars here need no `[lights]` table at all.
+
+### What it refuses, and why
+
+Detection is conservative in the same way wheel identification is: **no lamp rather than the wrong
+lamp.** Three rules do the refusing, and each of them fires on a real car in this repo.
+
+* **A lens on the centreline belongs to no side.** The E36 has two — the strip across the boot lid
+  and the high-level lamp in the back window — and handing one of them to whichever side the
+  wheelbase centring left it a millimetre on is exactly the "random mesh as a brake light" this is
+  meant to avoid. Both are named in a warning and left off; the pair in the rear cluster does the
+  braking.
+* **Lamps come in pairs.** One of a pair is nearly always a lens the sorter missed on the other
+  side, not a car with one headlight.
+* **A pair has to be a mirror image.** The 190E's largest front-left lens is a repeater on the wing
+  at z = 0.30, against a right-hand headlight at z = 1.35. Which of the two was right cannot be
+  known here, so neither is used and the report prints both positions.
+
+A brake or reverse lens is never inferred from position at all. It has to be named — in the model or
+in the config — because nothing about where a lens sits says what switches it on.
+
+### When a car comes out with no headlights
+
+Name the lens. The fragment picks *which* part; where the lamp is and how big it is are still
+measured off the model.
+
+```toml
+[lights.headlight_left]
+node = "HL_Glass_ONM"
+[lights.headlight_right]
+node = "HL_Glass_ONM"
+```
+
+The same fragment for both sides is normal: parts are cut at the centreline first — most models put
+a whole pair, or every lamp on the car, in one mesh — so a fragment plus a side is enough to name
+one lamp. `node` reaches parts of any category, which is what makes it an override rather than a
+filter: the 190E's lenses are transparent, so the sorter calls them glass, which is a perfectly good
+answer that leaves the car with no headlights.
+
+The other keys are for the cases where a model has nothing to point at (`at` places a lamp
+outright), or where the light should look different (`color`, `intensity`, `radius`, `range`,
+`spread`, `steer`). `enabled = false` gives a car no lamps at all.
+
+### What it costs
+
+Two draw calls a frame, whatever the number of cars, because both passes build world-space
+triangles into one buffer. A lamp glow is eight triangles and a beam is twelve, and a beam is only
+resolved within 70 m — beyond that a car keeps its lamps and loses its beam, and past the fog at
+330 m it has neither. The trace has a column for each, so a field of cars can be priced:
+
+```
+# frame road terrain lines rails dashes props cars lamps beams verts ...
+```
 
 ## Levels of detail
 
