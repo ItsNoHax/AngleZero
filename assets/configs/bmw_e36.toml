@@ -36,24 +36,39 @@ triangles = 15000
 lods = [4500, 1800]
 
 [reduce]
-# The brake hardware behind the alloys, which is not even this car's: the parts are named
-# `amdb11_*` because they were lifted from an Aston Martin DB11. There are 4,762 triangles of disc
-# and caliper per corner, and the visibility sweep sees them through the gaps between the spokes,
-# so they were being allocated most of the wheel's budget — leaving the alloy 150 triangles, at
-# which a five-spoke wheel decimates into a solid disc with no spokes at all. Dropped, the gaps
-# read as gaps and the alloy keeps its shape.
-drop = ["amdb11_brakedisc"]
+# Wheels and brightwork pull against each other, because the alloys and the bumper trim are both
+# bright metal and share a category. `chrome` lifts both; `wheel` lifts only what is bolted to a
+# corner. Moving them in opposite directions is what separates them: the trim goes from 50
+# triangles at 15.1% error to 221 at 5.3%, and the wheels keep theirs.
+#
+# Past this the tyres fall off a cliff — chrome 20 with wheel 1.2 leaves them 69 triangles each,
+# which is a hexagon.
+wheel = 1.5
 
-# Wheels are worth far more than their pixel count says. They are small on screen, four of them
-# share one allocation, and a wheel that reads as a grey blob is the single most obvious tell of a
-# cheap model — while the bodywork saturates at about 4,200 triangles and cannot use more.
-wheel = 16.0
-
-# Headlights and tail lamps are the other thing that says which car this is, and holding the
-# wheels up takes their share unless they are held up too: raising `wheel` on its own took the
-# lamps from 279 triangles to 74, which the converter warned about. Together they land at 560 for
-# an alloy and 1,097 for the lamps.
+# Headlights and tail lamps are the other thing that says which car this is, and everything else
+# here takes their share unless they are held up too: raising `wheel` on its own once took the
+# lamps from 279 triangles to 74, which the converter warned about.
 light = 10.0
+
+# Bumper trim, window surrounds, exhaust tips, badge surrounds. Thin strips, so the visibility
+# sweep measures very few pixels of them and the budget follows — see `wheel` above for why this
+# number is as high as it is.
+chrome = 12.0
+
+# Within a corner, which of its parts the budget is for.
+#
+# The alloy and the brake hardware behind it are both bright metal, so they land in the same
+# category and then compete on measured pixels — which the hardware wins, through the gaps between
+# the spokes, at the expense of the wheel in front of it. Left to that, the alloy fell to about 150
+# triangles and its spoke windows closed, which is the first thing an edge collapse does.
+#
+# The hardware is not worthless — it is what the gaps show, and the caliper is the only colour in
+# the wheel — but it is worth a few hundred triangles a corner rather than two thousand. The
+# `amdb11_` prefix is not a typo: the discs were lifted from an Aston Martin DB11 and the names
+# came with them.
+[reduce.parts]
+wheel_bmw_aplg = 6.0
+amdb11_brakedisc = 0.4
 
 [wheels]
 # Each corner is three assemblies with three unrelated names, and all of them must turn together:

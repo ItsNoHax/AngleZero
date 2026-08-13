@@ -75,6 +75,9 @@ struct Piece {
     attrs: Vec<Attr>,
     indices: Vec<u32>,
     pixels: u64,
+    /// What the config says this part is worth, over and above its category. Multiplies its
+    /// measured pixels when the bucket's budget is shared out between its parts.
+    weight: f32,
     source_triangles: usize,
 }
 
@@ -255,6 +258,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             attrs: Vec::with_capacity(part.positions.len()),
             indices: part.indices.clone(),
             pixels: seen.pixels[i] as u64,
+            weight: config.reduce.part_weight(&part.node, &part.parent),
             source_triangles: part.triangles(),
         };
         for (j, (v, n)) in part.positions.iter().zip(&part.normals).enumerate() {
@@ -277,6 +281,34 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         bucket.pixels += piece.pixels;
         bucket.source_triangles += piece.source_triangles;
         bucket.pieces.push(piece);
+    }
+
+    // The four corners get the same budget, whatever the sweep happened to see of each.
+    //
+    // A car's wheels are the same wheel four times, but the viewpoints are not symmetric about it
+    // — the near side is seen more than the off side, and the fronts more than the rears — so the
+    // measured pixels differ by a factor of four between corners. Left alone that is what the
+    // budget follows, and the refill pass below produced tyres of 2,648 and 647 triangles on the
+    // same car: one wheel visibly rounder than the one across from it, which reads as a fault
+    // rather than as detail. Averaging says the asymmetry is in the sampling, not in the car.
+    for category in [
+        Category::Tyre,
+        Category::Chrome,
+        Category::Body,
+        Category::Interior,
+        Category::Light,
+        Category::Window,
+    ] {
+        let corners: Vec<usize> = (0..buckets.len())
+            .filter(|&i| buckets[i].wheel.is_some() && buckets[i].category == category)
+            .collect();
+        if corners.len() < 2 {
+            continue;
+        }
+        let mean = corners.iter().map(|&i| buckets[i].pixels).sum::<u64>() / corners.len() as u64;
+        for &i in &corners {
+            buckets[i].pixels = mean;
+        }
     }
 
     if buckets.is_empty() {
@@ -308,13 +340,10 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Kept before anything is decimated, so that each extra level is built from the welded
     // original. Building LOD2 out of LOD1 would carry three decimations' worth of error into the
     // level with the fewest triangles to hide it in.
-    let welded = if config.lods.is_empty() {
-        Vec::new()
-    } else {
-        buckets.clone()
-    };
+    // Kept always now rather than only for the levels: the refill pass re-simplifies from it too.
+    let welded = buckets.clone();
 
-    spend_budget(&mut buckets, budget, Some(&mut report));
+    spend_and_refill(&mut buckets, &welded, budget, Some(&mut report));
     if buckets.is_empty() {
         return Err("the triangle budget left nothing to draw".into());
     }
@@ -989,18 +1018,107 @@ fn put_f32(out: &mut [u8], at: usize, v: f32) {
 ///
 /// The report is only filled in for the level written as LOD0. The others would double every line
 /// in it, and it is the car the player is looking at whose error is worth warning about.
-fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, mut report: Option<&mut Report>) {
-    let bucket_targets = share_budget(
+/// Spends a budget, and then spends what the first attempt handed back.
+///
+/// One pass leaves a lot on the table. The allocator shares the budget out by measured importance,
+/// but a bucket cannot always use its share: the E36's bodywork is within five millimetres of the
+/// original at about 4,000 triangles and the simplifier refuses to spend more on something it
+/// cannot improve, so a 15,000-triangle budget produced an 11,000-triangle car. Nothing was wrong
+/// with the allocation — the shortfall only becomes visible after the simplifier has run, which is
+/// after the sharing is done.
+///
+/// So it runs twice. The second pass pins every bucket that came in under its share at what it
+/// actually used, and shares the difference among the ones that were stopped by their target
+/// rather than by their own geometry — which on a car means the wheels, because a surface of
+/// revolution takes every triangle it is offered. It is one extra simplification pass over the
+/// welded geometry, and it is what turns "the body cannot use this" into "so the wheels will".
+fn spend_and_refill(
+    buckets: &mut Vec<Bucket>,
+    welded: &[Bucket],
+    budget: usize,
+    report: Option<&mut Report>,
+) {
+    let first = share_budget(
         &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
         budget,
         MIN_BUCKET_TRIANGLES,
     );
+    spend_budget_with(buckets, &first, None);
 
-    for (b, bucket_target) in buckets.iter_mut().zip(&bucket_targets) {
+    let used: Vec<usize> = buckets.iter().map(|b| b.indices.len() / 3).collect();
+    let spent: usize = used.iter().sum();
+    // Nothing meaningful came back, so the first pass was already the answer.
+    if spent + spent / 20 >= budget {
+        *buckets = welded.to_vec();
+        spend_budget_with(buckets, &first, report);
+        return;
+    }
+
+    // What each bucket gets on the second pass: what it used, if it could not fill its share, and
+    // a share of everything handed back if it could.
+    let surplus: usize = first
+        .iter()
+        .zip(&used)
+        .map(|(t, u)| t.saturating_sub(*u))
+        .sum();
+    // "Filled its share" has to have a tolerance in it. The simplifier lands a few triangles
+    // either side of a target, and the four corners of a car are mirrored geometry that collapses
+    // in slightly different orders — so an exact test called two of the four tyres full and two
+    // hungry, handed the whole surplus to the two, and gave one wheel 2,500 triangles against 724
+    // for the one across from it.
+    let hungry: Vec<usize> = (0..buckets.len())
+        .filter(|&i| used[i] * 20 >= first[i] * 19)
+        .collect();
+    let mut second = first.clone();
+    for (i, u) in used.iter().enumerate() {
+        if !hungry.contains(&i) {
+            second[i] = *u;
+        }
+    }
+    if !hungry.is_empty() {
+        // A bucket can never use more than the welded geometry it started with, which is both the
+        // honest ceiling and small enough to add up — a stand-in "unlimited" here overflowed the
+        // sum inside `share_budget`.
+        let claims: Vec<(f64, usize)> = hungry
+            .iter()
+            .map(|&i| {
+                let ceiling: usize = welded[i].pieces.iter().map(|p| p.indices.len() / 3).sum();
+                (buckets[i].weights().0, ceiling)
+            })
+            .collect();
+        let extra = share_budget(&claims, surplus, 0);
+        for (slot, &i) in hungry.iter().enumerate() {
+            second[i] += extra[slot];
+        }
+    }
+
+    *buckets = welded.to_vec();
+    spend_budget_with(buckets, &second, report);
+}
+
+/// Shares a budget out across welded buckets and decimates each bucket to its share.
+///
+/// Taken out of `compile` so it can be run more than once over the same welded geometry: an LOD is
+/// this again with a smaller number, and the refill pass is this again with corrected targets.
+///
+/// The report is only filled in for the level written as LOD0. The others would double every line
+/// in it, and it is the car the player is looking at whose error is worth warning about.
+fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, report: Option<&mut Report>) {
+    let targets = share_budget(
+        &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
+        budget,
+        MIN_BUCKET_TRIANGLES,
+    );
+    spend_budget_with(buckets, &targets, report);
+}
+
+/// Decimates each bucket to a target that has already been decided.
+fn spend_budget_with(buckets: &mut Vec<Bucket>, targets: &[usize], mut report: Option<&mut Report>) {
+    for (b, bucket_target) in buckets.iter_mut().zip(targets) {
         let piece_targets = share_budget(
             &b.pieces
                 .iter()
-                .map(|p| (p.pixels as f64, p.indices.len() / 3))
+                .map(|p| (p.pixels as f64 * p.weight as f64, p.indices.len() / 3))
                 .collect::<Vec<_>>(),
             *bucket_target,
             MIN_PIECE_TRIANGLES,

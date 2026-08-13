@@ -186,6 +186,21 @@ pub struct Reduction {
     #[serde(default = "yes")]
     pub drop_hidden: bool,
 
+    /// Per-part weights, by node-name fragment: `"amdb11_brakedisc" = 0.3`.
+    ///
+    /// The category weights above decide how the budget is split *between* categories; this one
+    /// splits it *within* one, and the two are not interchangeable. A wheel is the case that needs
+    /// it: the alloy and the brake hardware behind it are both bright metal, so they land in the
+    /// same category and then compete on how many pixels the visibility sweep saw — which the
+    /// hardware wins, through the gaps between the spokes, at the expense of the wheel in front of
+    /// it. Naming the two parts separately is the only way to say which of them the corner is
+    /// actually for.
+    ///
+    /// Fragments are matched against the node and its parent, case-insensitively, and every match
+    /// multiplies. A part nothing matches keeps its measured weight of 1.
+    #[serde(default)]
+    pub parts: std::collections::HashMap<String, f32>,
+
     /// Node-name fragments for parts to leave out of the car entirely.
     ///
     /// For geometry the visibility sweep can see but that is not worth a triangle — the sweep
@@ -213,12 +228,26 @@ impl Default for Reduction {
             chrome: 1.0,
             wheel: default_wheel_weight(),
             drop_hidden: true,
+            parts: std::collections::HashMap::new(),
             drop: Vec::new(),
         }
     }
 }
 
 impl Reduction {
+    /// What a single part is worth, over and above its category.
+    pub fn part_weight(&self, node: &str, parent: &str) -> f32 {
+        let (node, parent) = (node.to_ascii_lowercase(), parent.to_ascii_lowercase());
+        let mut w = 1.0;
+        for (fragment, weight) in &self.parts {
+            let f = fragment.to_ascii_lowercase();
+            if !f.is_empty() && (node.contains(&f) || parent.contains(&f)) {
+                w *= weight.max(0.0);
+            }
+        }
+        w
+    }
+
     pub fn weight(&self, category: angle_zero::azcar::Category) -> f32 {
         use angle_zero::azcar::Category::*;
         match category {

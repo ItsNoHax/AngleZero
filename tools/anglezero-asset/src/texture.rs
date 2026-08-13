@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::{Material, SourceModel};
+use crate::model::SourceModel;
 
 /// The atlas is always this square. 256×256 at two bytes a texel is 128 KB, which sits beside a
 /// 155 KB mesh without changing what the arena has to hold.
@@ -215,6 +215,7 @@ fn fill_white(atlas: &mut [u8], x0: usize, y0: usize, tile: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Material;
 
     fn model_with(materials: Vec<Material>) -> SourceModel {
         SourceModel {
