@@ -10,9 +10,9 @@
 //! than agreed with.
 
 use angle_zero::azcar::{
-    field, Car, Category, Error, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
-    MATERIAL_BYTES, MESH_BYTES, NO_CREDIT, NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_TEX_F32_COLOR_8888_F32,
-    WHEEL_BYTES, WHEEL_FRONT_LEFT,
+    field, Car, Category, Error, LightDef, LightKind, MaterialDef, Mesh, WheelDef, HEADER_BYTES,
+    LIGHT_BYTES, LIGHT_STEERS, MAGIC, MATERIAL_BLEND, MATERIAL_BYTES, MESH_BYTES, NO_CREDIT,
+    NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_TEX_F32_COLOR_8888_F32, WHEEL_BYTES, WHEEL_FRONT_LEFT,
 };
 use angle_zero::azcar::CarVertex;
 use angle_zero::vehicle::CarShape;
@@ -24,6 +24,8 @@ struct Builder {
     meshes: Vec<Mesh>,
     materials: Vec<MaterialDef>,
     wheels: Vec<WheelDef>,
+    /// Empty for a car from before there were lights, which must still load.
+    lights: Vec<LightDef>,
     strings: Vec<u8>,
     version: u16,
     vertex_format: u32,
@@ -98,6 +100,7 @@ impl Builder {
                 radius: 0.29,
                 width: 0.2,
             }],
+            lights: Vec::new(),
             strings,
             version: VERSION,
             vertex_format: VERTEX_TEX_F32_COLOR_8888_F32,
@@ -121,6 +124,17 @@ impl Builder {
         for w in &self.wheels {
             out.extend_from_slice(&w.encode());
         }
+        // Written only when the car has any, exactly as the writer does it: the offset staying zero
+        // is what tells a reader there are none.
+        let lights_at = if self.lights.is_empty() {
+            0
+        } else {
+            let at = align(&mut out);
+            for l in &self.lights {
+                out.extend_from_slice(&l.encode());
+            }
+            at
+        };
         let vertices_at = align(&mut out);
         for v in &self.vertices {
             // Texture, colour, position — the order the GE reads a vertex in, written out by hand
@@ -148,6 +162,8 @@ impl Builder {
         put_u16(&mut out, field::MESH_COUNT, self.meshes.len() as u16);
         put_u16(&mut out, field::MATERIAL_COUNT, self.materials.len() as u16);
         put_u16(&mut out, field::WHEEL_COUNT, self.wheels.len() as u16);
+        put_u32(&mut out, field::LIGHTS_AT, lights_at as u32);
+        put_u16(&mut out, field::LIGHT_COUNT, self.lights.len() as u16);
         for (i, v) in [-0.9f32, 0.0, -2.1, 0.9, 1.3, 2.1].iter().enumerate() {
             put_f32(&mut out, field::BOUNDS + i * 4, *v);
         }
@@ -477,7 +493,119 @@ fn the_header_is_a_whole_number_of_alignment_units() {
     assert_eq!(MESH_BYTES % 16, 0);
     assert_eq!(MATERIAL_BYTES % 16, 0);
     assert_eq!(WHEEL_BYTES % 16, 0);
+    assert_eq!(LIGHT_BYTES % 16, 0);
     // The vertex array is read in place by the GE, so its record has to be a whole number of
     // 4-byte fields with no padding, and the section it starts has to stay 16-byte aligned.
     assert_eq!(core::mem::size_of::<CarVertex>(), 24);
+}
+
+/// The four lamps of a typical car, in the order the writer emits them.
+fn typical_lights() -> Vec<LightDef> {
+    vec![
+        LightDef {
+            kind: LightKind::Head,
+            flags: LIGHT_STEERS,
+            name: 0,
+            at: [0.62, 0.70, 2.05],
+            color: 0x59D2_F3FF,
+            radius: 0.34,
+            range: 24.0,
+            spread: 2.4,
+        },
+        LightDef {
+            kind: LightKind::Tail,
+            flags: 0,
+            name: 0,
+            at: [-0.64, 0.96, -2.02],
+            color: 0xFF44_55FF,
+            radius: 0.30,
+            range: 0.0,
+            spread: 0.0,
+        },
+    ]
+}
+
+#[test]
+fn the_lamps_read_back_exactly_what_was_written() {
+    let mut b = Builder::typical();
+    b.lights = typical_lights();
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).expect("a car with lamps is still a car");
+
+    assert_eq!(car.light_count(), 2);
+    assert_eq!(car.light(0), Some(b.lights[0]));
+    assert_eq!(car.light(1), Some(b.lights[1]));
+    assert_eq!(car.light(2), None, "past the end is nothing, not the next record");
+    assert!(car.light(0).unwrap().steers());
+    assert!(!car.light(1).unwrap().steers());
+    assert_eq!(car.lights().count(), 2);
+}
+
+/// The whole reason lights went into a reserved header field instead of a version bump: every car
+/// already compiled has to keep loading, and keep driving, with no lamps and no complaint.
+#[test]
+fn a_car_from_before_there_were_lights_still_loads() {
+    let bytes = Builder::typical().build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).expect("a car with no lights section is a car");
+
+    assert_eq!(car.light_count(), 0);
+    assert_eq!(car.light(0), None);
+    assert_eq!(car.lights().count(), 0);
+    // And nothing else about it has moved.
+    assert_eq!(car.mesh_count(), 2);
+    assert_eq!(car.wheel_count(), 1);
+}
+
+/// A kind this build has never heard of is one lamp it does not light, not a car it refuses. The
+/// alternative would mean the first car compiled with indicators on it could not be loaded by any
+/// build that predates them — which is the failure the format's reserved space exists to avoid.
+#[test]
+fn a_lamp_of_an_unknown_kind_is_skipped_rather_than_refusing_the_car() {
+    let mut b = Builder::typical();
+    b.lights = typical_lights();
+    let mut bytes = b.build();
+
+    // Reach into the written record and make the first lamp a kind from the future.
+    let at = u32::from_le_bytes(bytes[field::LIGHTS_AT..field::LIGHTS_AT + 4].try_into().unwrap());
+    bytes[at as usize] = 99;
+
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).expect("an unreadable lamp must not cost the whole car");
+
+    assert_eq!(car.light_count(), 2, "the count is what the file says");
+    assert_eq!(car.light(0), None, "but the lamp itself cannot be read");
+    assert_eq!(car.lights().count(), 1, "so only the one that can be is drawn");
+    assert_eq!(car.lights().next().unwrap().kind, LightKind::Tail);
+}
+
+/// A lights section that runs off the end of the file is a refusal like any other. The renderer
+/// reads these without bounds checks, so this is the check.
+#[test]
+fn a_lights_section_that_does_not_fit_is_refused() {
+    let mut b = Builder::typical();
+    b.lights = typical_lights();
+    let mut bytes = b.build();
+    put_u16(&mut bytes, field::LIGHT_COUNT, 4000);
+    assert_eq!(parse_bytes(&bytes), Err(Error::BadSection));
+
+    let mut bytes = b.build();
+    let at = u32::from_le_bytes(bytes[field::LIGHTS_AT..field::LIGHTS_AT + 4].try_into().unwrap());
+    put_u32(&mut bytes, field::LIGHTS_AT, at + 1);
+    assert_eq!(parse_bytes(&bytes), Err(Error::Misaligned));
+}
+
+/// Both halves have to agree. A count with no section behind it would have the reader decoding
+/// whatever sits at offset zero, which is the header.
+#[test]
+fn a_light_count_without_a_section_is_no_lights_at_all() {
+    let mut bytes = Builder::typical().build();
+    put_u16(&mut bytes, field::LIGHT_COUNT, 6);
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    assert_eq!(Car::parse(view).unwrap().light_count(), 0);
 }

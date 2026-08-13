@@ -35,6 +35,7 @@ pub const HEADER_BYTES: usize = 112;
 pub const MESH_BYTES: usize = 32;
 pub const MATERIAL_BYTES: usize = 16;
 pub const WHEEL_BYTES: usize = 32;
+pub const LIGHT_BYTES: usize = 32;
 /// Nine `f32`, padded to the section alignment.
 pub const HANDLING_BYTES: usize = 48;
 /// The level table's own header, before the per-level records.
@@ -295,6 +296,122 @@ impl WheelDef {
     }
 }
 
+/// What a lamp on a car is for.
+///
+/// Four kinds rather than a light system: what a lamp does is decided by which of the driver's
+/// actions switches it on, and these are the four answers. Anything a future car wants — an
+/// indicator, a fog lamp — is another kind here and no change to how one is drawn.
+///
+/// Deliberately *not* validated the way [`Category`] is. A material whose category this build does
+/// not know is a surface it cannot draw at all, so the car is refused; a lamp it does not know is
+/// one lamp it does not light, and refusing the whole car over it would mean that the first car
+/// compiled with indicators could not be loaded by any build that predates them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum LightKind {
+    /// Lights the road ahead. On whenever the car is being driven.
+    Head = 0,
+    /// The rear lamps as they burn normally, and brighter under braking. Most cars use one lens
+    /// for both, which is why this is one kind and not two.
+    Tail = 1,
+    /// A lens that is dark until the brake is applied — a separate high-level lamp, where the car
+    /// has one.
+    Brake = 2,
+    /// White, and only while the car is actually going backwards.
+    Reverse = 3,
+}
+
+impl LightKind {
+    pub fn from_u8(v: u8) -> Option<LightKind> {
+        Some(match v {
+            0 => LightKind::Head,
+            1 => LightKind::Tail,
+            2 => LightKind::Brake,
+            3 => LightKind::Reverse,
+            _ => return None,
+        })
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            LightKind::Head => "headlight",
+            LightKind::Tail => "tail light",
+            LightKind::Brake => "brake light",
+            LightKind::Reverse => "reverse light",
+        }
+    }
+}
+
+/// Light flags.
+/// The lamp swings with the road wheels rather than staying bolted to the body.
+pub const LIGHT_STEERS: u8 = 1 << 0;
+
+/// A lamp on a car: where it is, what colour it burns, and how far it throws.
+///
+/// This is the whole of the lighting data an asset carries, and it is deliberately not a light
+/// source. The console has no per-pixel lighting and is not getting one; what a lamp costs here is
+/// a handful of additive triangles, so what the record has to say is where to put them, how big,
+/// and how bright — not a photometric description of a bulb.
+///
+/// `range` and `spread` are the beam's, and are zero for a lamp that only glows. They stand in for
+/// the cone angles a real spot light would have: a beam is drawn as a widening patch of light lying
+/// on the road, so what it needs is how far up the road it reaches and how wide it is when it gets
+/// there, which is that cone intersected with the tarmac and nothing else.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LightDef {
+    pub kind: LightKind,
+    pub flags: u8,
+    pub name: u16,
+    /// Where the lens sits in car space, with the wheels on the ground at y = 0.
+    pub at: [f32; 3],
+    /// Colour and full brightness together, `GU_COLOR_8888`. The alpha is the lamp's intensity
+    /// when it is fully on, which is what the runtime scales rather than a separate field: every
+    /// use of it multiplies into a vertex colour anyway.
+    pub color: u32,
+    /// Half-size of the lamp's glow, metres.
+    pub radius: f32,
+    /// How far up the road the beam reaches, metres. Zero for a lamp with no beam.
+    pub range: f32,
+    /// Half-width of the beam where it lands, metres.
+    pub spread: f32,
+}
+
+impl LightDef {
+    /// Decodes a light, or `None` for a kind this build does not know.
+    fn decode(b: &[u8]) -> Option<LightDef> {
+        Some(LightDef {
+            kind: LightKind::from_u8(b[0])?,
+            flags: b[1],
+            name: le_u16(b, 2),
+            at: [le_f32(b, 4), le_f32(b, 8), le_f32(b, 12)],
+            color: le_u32(b, 16),
+            radius: le_f32(b, 20),
+            range: le_f32(b, 24),
+            spread: le_f32(b, 28),
+        })
+    }
+
+    pub fn encode(&self) -> [u8; LIGHT_BYTES] {
+        let mut o = [0u8; LIGHT_BYTES];
+        o[0] = self.kind as u8;
+        o[1] = self.flags;
+        o[2..4].copy_from_slice(&self.name.to_le_bytes());
+        for (i, c) in self.at.iter().enumerate() {
+            o[4 + i * 4..8 + i * 4].copy_from_slice(&c.to_le_bytes());
+        }
+        o[16..20].copy_from_slice(&self.color.to_le_bytes());
+        o[20..24].copy_from_slice(&self.radius.to_le_bytes());
+        o[24..28].copy_from_slice(&self.range.to_le_bytes());
+        o[28..32].copy_from_slice(&self.spread.to_le_bytes());
+        o
+    }
+
+    /// Whether this lamp turns with the front wheels.
+    pub fn steers(&self) -> bool {
+        self.flags & LIGHT_STEERS != 0
+    }
+}
+
 /// Byte offsets of the header's fields, shared with the writer so the two cannot drift.
 pub mod field {
     pub const MAGIC: usize = 0;
@@ -330,6 +447,16 @@ pub mod field {
     /// what that space was for: a build that predates it reads zero and drives the car with the
     /// default numbers, which is what it did anyway.
     pub const HANDLING_AT: usize = 100;
+    /// Where the car's lamps are, or zero for a car that does not say where its lights are.
+    ///
+    /// Added the same way `HANDLING_AT` was, and for the same reason it was not a version bump:
+    /// `parse` refuses any version but its own, so incrementing it would make every car already on
+    /// a memory stick unreadable — to add a section that a build which has never heard of it skips
+    /// perfectly well. A car with no lights section is a car with no lamps, which is what every car
+    /// was until this.
+    pub const LIGHTS_AT: usize = 104;
+    /// How many lamps that section holds. In the header, where every other array's count is.
+    pub const LIGHT_COUNT: usize = 108;
 }
 
 /// The car carries no attribution line.
@@ -346,9 +473,11 @@ pub struct Car<'a> {
     mesh_count: usize,
     material_count: usize,
     wheel_count: usize,
+    light_count: usize,
     meshes_at: usize,
     materials_at: usize,
     wheels_at: usize,
+    lights_at: usize,
     vertices_at: usize,
     indices_at: usize,
     strings: (usize, usize),
@@ -410,6 +539,14 @@ impl<'a> Car<'a> {
         let mesh_count = le_u16(bytes, field::MESH_COUNT) as usize;
         let material_count = le_u16(bytes, field::MATERIAL_COUNT) as usize;
         let wheel_count = le_u16(bytes, field::WHEEL_COUNT) as usize;
+        let lights_at = le_u32(bytes, field::LIGHTS_AT) as usize;
+        // Both halves have to agree before a lamp is read: a car that says where its lights are but
+        // not how many has none, and so does one that says how many but not where.
+        let light_count = if lights_at == 0 {
+            0
+        } else {
+            le_u16(bytes, field::LIGHT_COUNT) as usize
+        };
 
         let meshes_at = le_u32(bytes, field::MESHES_AT) as usize;
         let materials_at = le_u32(bytes, field::MATERIALS_AT) as usize;
@@ -450,9 +587,11 @@ impl<'a> Car<'a> {
             mesh_count,
             material_count,
             wheel_count,
+            light_count,
             meshes_at,
             materials_at,
             wheels_at,
+            lights_at,
             vertices_at,
             indices_at,
             strings: (strings_at, strings_bytes),
@@ -474,6 +613,7 @@ impl<'a> Car<'a> {
             (meshes_at, mesh_count * MESH_BYTES, true),
             (materials_at, material_count * MATERIAL_BYTES, true),
             (wheels_at, wheel_count * WHEEL_BYTES, true),
+            (lights_at, light_count * LIGHT_BYTES, true),
             (
                 vertices_at,
                 vertex_count * core::mem::size_of::<CarVertex>(),
@@ -594,6 +734,28 @@ impl<'a> Car<'a> {
 
     pub fn wheel_count(&self) -> usize {
         self.wheel_count
+    }
+
+    /// How many lamps the car carries, including any this build cannot read.
+    pub fn light_count(&self) -> usize {
+        self.light_count
+    }
+
+    /// One lamp, or `None` for a kind this build does not know how to light.
+    pub fn light(&self, i: usize) -> Option<LightDef> {
+        if i >= self.light_count {
+            return None;
+        }
+        LightDef::decode(&self.bytes[self.lights_at + i * LIGHT_BYTES..])
+    }
+
+    /// Every lamp this build can light, in the order the compiler wrote them.
+    ///
+    /// The order is not arbitrary and the renderer relies on it being stable: lamps are drawn in
+    /// one additive pass, and two lenses at the same place blended in either order come out the
+    /// same, which is the property that lets this be an iterator rather than a sort.
+    pub fn lights(&self) -> impl Iterator<Item = LightDef> + '_ {
+        (0..self.light_count).filter_map(|i| self.light(i))
     }
 
     /// min xyz, max xyz, in car space with the wheels on the ground at y = 0.

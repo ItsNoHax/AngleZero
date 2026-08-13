@@ -15,6 +15,7 @@ pub mod camera;
 pub mod effects;
 pub mod game;
 pub mod hud;
+pub mod lights;
 pub mod math;
 pub mod mesh;
 pub mod save;
