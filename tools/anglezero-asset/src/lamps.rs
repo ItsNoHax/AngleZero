@@ -84,6 +84,14 @@ const BRAKE_WORDS: &[&str] = &["brake", "brakelight", "stop", "stoplight"];
 const TAIL_WORDS: &[&str] = &["tail", "taillight", "rear", "rearlight", "rueck"];
 const HEAD_WORDS: &[&str] = &["head", "headlight", "headlamp", "fara", "front"];
 
+/// Words that make a part a candidate lens whatever bin the material sorter put it in.
+///
+/// The sorter asks about glass before it asks about lamps, on purpose — most transparent things on
+/// a car are windows — so a lens named for both comes out a window. That is the right answer for
+/// the budget, which wants it drawn blended, and the wrong one here: the VW's rear lamp material is
+/// `light_glass`, and a car whose lenses are all windows has no lights at all.
+const LENS_WORDS: &[&str] = &["light", "lamp", "lens", "fara", "leuchte"];
+
 /// One lens, as the model has it.
 struct Candidate {
     /// Node, parent and material names, lowercased and run together — everything a config fragment
@@ -238,7 +246,11 @@ fn candidates(
         // makes the first overrulable, and it has to reach parts of any category to be worth
         // anything: the 190E's headlights are `HL_Glass_*`, which are transparent, which makes them
         // glass — a perfectly reasonable answer that leaves the car with no headlights.
-        let is_lens = assignment.categories[i] == Category::Light
+        let is_lens = (assignment.categories[i] == Category::Light
+            || any_word(&names, LENS_WORDS))
+            // A lightmap is a baked texture on the bodywork. The material sorter knows that now;
+            // this path goes behind its back, so it has to know it too.
+            && !crate::categorise::is_lightmap(&names)
             || named
                 .iter()
                 .any(|f| !f.is_empty() && names.contains(&f.to_ascii_lowercase()));
@@ -249,29 +261,15 @@ fn candidates(
 
         for side in [Side::Left, Side::Right] {
             for front in [true, false] {
-                let mut half = Bounds::EMPTY;
-                for p in part
-                    .positions
-                    .iter()
-                    .filter(|p| Side::of(p[0]) == side && (p[2] > 0.0) == front)
-                {
-                    half.add(*p);
-                }
-                let size = half.size();
-                if size == [0.0; 3] {
+                let Some((at, spread)) = measure(part, side, front) else {
                     continue;
-                }
-                let at = [
-                    (half.min[0] + half.max[0]) * 0.5,
-                    (half.min[1] + half.max[1]) * 0.5,
-                    (half.min[2] + half.max[2]) * 0.5,
-                ];
+                };
                 out.push(Candidate {
                     names: names.clone(),
                     at,
                     // The glow stands in for the lens, so it is the size of the lens as seen from
-                    // in front: its width or its height, whichever is larger, halved.
-                    radius: size[0].max(size[1]) * 0.5,
+                    // in front — its width or its height, whichever is larger.
+                    radius: LENS_HALF_WIDTH * spread[0].max(spread[1]),
                     named,
                     centred: at[0].abs() < band,
                 });
@@ -445,6 +443,56 @@ static NO_ANCHOR: Anchor = Anchor {
     intensity: None,
 };
 
+/// Where one quadrant of a lens is, and how far its geometry is spread about that point.
+///
+/// Both answers are taken from where the vertices *are* rather than from the box that contains them,
+/// and that is the difference between a lamp on the cluster and a lamp up on the boot lid. A bounding
+/// box is decided entirely by its two extreme vertices, so one stray strip of trim modelled into the
+/// same mesh moves it the whole way: the E39's rear lens mesh runs from 0.78 up to 1.29, and the box
+/// put its tail lamps at 1.03 — a quarter of a metre above the lamps, on the bodywork above them,
+/// which is exactly where they looked. The mean of the vertices puts them at 0.86, because that is
+/// where the lens actually is and the strip is a handful of vertices against five hundred.
+///
+/// The spread is the standard deviation about that mean, which is a size in the same sense: robust
+/// to the outlier, and proportional to the lens rather than to the extremes of the mesh. Five of the
+/// seven cars were pinned at the maximum radius the compiler allows, drawing a glow a metre across
+/// for a lamp a fifth of that.
+///
+/// Returns `None` for a quadrant with no geometry in it, which is three quadrants out of four for a
+/// lens that was modelled as its own part.
+fn measure(part: &crate::model::Part, side: Side, front: bool) -> Option<([f32; 3], [f32; 2])> {
+    let mut n = 0.0f32;
+    let mut sum = [0.0f32; 3];
+    let mut squares = [0.0f32; 2];
+    for p in part
+        .positions
+        .iter()
+        .filter(|p| Side::of(p[0]) == side && (p[2] > 0.0) == front)
+    {
+        n += 1.0;
+        for k in 0..3 {
+            sum[k] += p[k];
+        }
+        squares[0] += p[0] * p[0];
+        squares[1] += p[1] * p[1];
+    }
+    if n == 0.0 {
+        return None;
+    }
+    let at = [sum[0] / n, sum[1] / n, sum[2] / n];
+    // Guarded against the rounding that can leave this fractionally negative when every vertex is at
+    // the same place, which is what a lens modelled as a flat decal looks like from one axis.
+    let deviation = |k: usize| (squares[k] / n - at[k] * at[k]).max(0.0).sqrt();
+    Some((at, [deviation(0), deviation(1)]))
+}
+
+/// Half-width of a lens, as a multiple of the standard deviation of its vertices.
+///
+/// A flat rectangular lens with its vertices spread evenly across it has a standard deviation of
+/// its half-width over the square root of three, so this is that constant — it recovers the true
+/// half-width for the shape a lens usually is, and something sensible for the shapes it sometimes is.
+const LENS_HALF_WIDTH: f32 = 1.732;
+
 /// Case-insensitive substring match against the part's names, which is what a config author means
 /// by a node fragment — the same rule `[wheels] match` follows.
 fn matches_fragment(c: &Candidate, fragment: &str) -> bool {
@@ -465,11 +513,13 @@ fn build(
     let intensity = anchor.intensity.unwrap_or(default_intensity(kind));
     // What is drawn is the bloom around the lens rather than the lens itself, so it is larger than
     // the glass — a lamp glowing exactly to the edge of its own lens and no further reads as a
-    // sticker. And a measured size can be silly in both directions: a rear cluster modelled as one
-    // strip across the boot is half a metre wide, and a lens modelled as a decal has no size at all.
+    // sticker. And a measured size can be silly in both directions: a lens modelled as a decal has
+    // no size at all, and a quadrant that holds a cluster, an indicator and a reflector measures the
+    // spread of all three. A real lamp is about 30 cm across, so the ceiling is a little over that:
+    // past it the glow stops being a lamp and becomes a patch of the car that is glowing.
     let radius = anchor
         .radius
-        .unwrap_or_else(|| (radius * GLOW_OVER_LENS).clamp(0.18, 0.55));
+        .unwrap_or_else(|| (radius * GLOW_OVER_LENS).clamp(0.15, 0.35));
     let beam = matches!(kind, LightKind::Head);
 
     LightDef {

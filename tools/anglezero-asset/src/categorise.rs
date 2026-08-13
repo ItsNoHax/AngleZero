@@ -89,6 +89,15 @@ fn decide(
         return (Category::Light, "the material is emissive");
     }
 
+    // A lightmap is a baked texture, not a lamp, and the name is one of the commonest in any asset
+    // that came out of a game engine. The VW's `Light_Map` is on its boot lid, its spoiler, its rear
+    // bumper and both mirrors — 23,476 triangles of bodywork that were being given a lamp's share of
+    // the triangle budget, and that later put the car's tail lights at bumper height, because a lamp
+    // is placed where its lens is and this "lens" was the whole back of the car.
+    if is_lightmap(&material.name) || is_lightmap(node) {
+        return (Category::Body, "a lightmap texture, not a lamp");
+    }
+
     for (words, category, why) in [
         (WINDOW_WORDS, Category::Window, "named like glass"),
         (LIGHT_WORDS, Category::Light, "named like a lamp"),
@@ -150,6 +159,22 @@ fn any_word(name: &str, words: &[&str]) -> bool {
             .iter()
             .any(|t| t == w || (w.len() >= 5 && t.contains(w)))
     })
+}
+
+/// Whether a name is a lightmap rather than a light.
+///
+/// Matched on the joined tokens so that `Light_Map`, `lightMap` and `light map` all read the same,
+/// which is the point: these are three spellings of one convention, and every one of them is a
+/// texture that has nothing to do with lamps.
+pub fn is_lightmap(name: &str) -> bool {
+    let joined: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    ["lightmap", "lightmask", "lightbake", "bakedlight"]
+        .iter()
+        .any(|w| joined.contains(w))
 }
 
 fn luma(c: &[f32; 4]) -> f32 {
@@ -214,6 +239,22 @@ mod tests {
         assert_eq!(category(&material("BMWE36_paint"), ""), Category::Body);
         assert_eq!(category(&material("paint.004"), ""), Category::Body);
         assert_eq!(category(&material("BMWE36_int"), ""), Category::Interior);
+    }
+
+    /// `Light_Map` is a baked texture and one of the commonest material names there is. Reading it
+    /// as a lamp gave the VW's boot lid a lamp's share of the triangle budget, and then put its tail
+    /// lights at bumper height, because a lamp goes where its lens is.
+    #[test]
+    fn a_lightmap_is_not_a_lamp() {
+        for name in ["Light_Map", "lightMap", "Golf_LightMap_01", "light map", "Baked_Light"] {
+            assert_eq!(category(&material(name), ""), Category::Body, "material `{name}`");
+        }
+        // And the lamps themselves still are. `light_glass` is not among them: glass is asked
+        // about first, deliberately, so a lens named for both is a window here — `lamps.rs` is
+        // where that one is picked up.
+        for name in ["BMWE36_fara", "taillight", "rear_light", "TL_Lamp"] {
+            assert_eq!(category(&material(name), ""), Category::Light, "material `{name}`");
+        }
     }
 
     #[test]
