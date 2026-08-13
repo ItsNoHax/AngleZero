@@ -30,11 +30,28 @@ pub const DIR: &str = "ms0:/PSP/GAME/AngleZero/CARS/";
 ///
 /// Raised from 768 KB when cars started carrying their coarse levels: the E36 went from 156 KB to
 /// 257 KB for LOD1 and LOD2, which is the trade those levels are — a third again of the file, to
-/// draw a distant car for a sixth of the triangles. Four cars at that size need a megabyte, and
-/// this is 1.5 to leave room for the textures that are not in the format yet. Still under 7% of
-/// the machine's memory.
-const ARENA_BYTES: usize = 1536 * 1024;
-const MAX_CARS: usize = 4;
+/// draw a distant car for a sixth of the triangles.
+///
+/// Then raised from 1.5 MB, which is the size at which this stopped being a slot count and started
+/// being the thing that actually ran out. Two cars filled 1.1 MB of it, so a third at the same
+/// budget did not fit, and the four slots below were never reachable — the arena refused the third
+/// car before the fourth slot was ever asked for. Seven cars at the sizes this repo compiles them
+/// (450 KB for the 190E up to 627 KB for the R34, 3.73 MB in total) need this much, and 6 MB
+/// leaves room for about four more before anything has to be reconsidered.
+///
+/// This is 6 MB of `.bss` on a machine whose user partition is 24 MB, taking the binary's static
+/// footprint to about 10.8 MB. It is by far the largest thing this program reserves and it is
+/// reserved whether or not there is a single car on the stick — which is the price of a fixed
+/// arena, and worth paying while the alternative is a limit nobody can see coming.
+const ARENA_BYTES: usize = 6 * 1024 * 1024;
+
+/// How many cars can be resident, and deliberately more than the arena can hold.
+///
+/// Twelve slots against an arena that fits nine or ten cars of average size, so that the limit
+/// anybody actually hits is `NoRoom` — which names a real, measurable resource — rather than
+/// `TooMany`, which names a number somebody picked. A slot is one `Option<Car>`, so the count
+/// costs almost nothing; the bytes are the scarce thing and they are counted above.
+const MAX_CARS: usize = 12;
 /// Longest path this will assemble, including the NUL.
 const PATH_MAX: usize = 96;
 
@@ -43,7 +60,7 @@ struct Arena([u8; ARENA_BYTES]);
 
 static mut ARENA: Arena = Arena([0; ARENA_BYTES]);
 static mut USED: usize = 0;
-static mut CARS: [Option<Car<'static>>; MAX_CARS] = [None, None, None, None];
+static mut CARS: [Option<Car<'static>>; MAX_CARS] = [const { None }; MAX_CARS];
 static mut COUNT: usize = 0;
 
 /// Why a car could not be loaded. All of these end with no car rather than a wrong one.
@@ -68,7 +85,11 @@ impl LoadError {
     pub fn message(self) -> &'static str {
         match self {
             LoadError::Missing => "car asset not found on the memory stick",
-            LoadError::NoRoom => "car asset is too large to load",
+            // Covers both halves of `NoRoom`, because from the title screen they are the same
+            // problem and the fix is the same: there are more cars on the stick than fit, so take
+            // one off or compile them to a smaller budget. This is the limit that is actually
+            // reachable now that there are twelve slots and six megabytes behind them.
+            LoadError::NoRoom => "not enough room for every car on the stick",
             LoadError::Short => "car asset could not be read in full",
             LoadError::TooMany => "too many cars loaded",
             LoadError::NameTooLong => "car asset name is too long",
