@@ -152,8 +152,22 @@ When the two disagree, the tally wins. Identical masks and vertex counts across 
 side of a blink is what tells you nothing was dropped and the fault is downstream of submission.
 
 `--node` drops the car anywhere on the centreline, so a corner two thirds of the way down can be
-looked at without driving there and surviving every corner in between. `--mode N` runs under a
+looked at without driving there and surviving every corner in between. It *replaces* the input
+script rather than adding to it, so `--hold` is ignored whenever it is given — a run that has to be
+braking when the burst starts needs its `SCRIPT.TXT` written by hand. `--mode N` runs under a
 `render::DEBUG_MODES` override, which is how a cause gets narrowed down: run the same frames with one
 suspect removed and see whether the artifact survives. Modes 9 to 12 exist for exactly that — they
 drop the headlight beams, the car's lamp glows, the effects, and the roadside light pools, which all
 land on the road on top of each other.
+
+Removing a pass is also how to find out what it *paints*, which is a different question from whether
+it was submitted, and the more useful one. Both halves of the vehicle lighting were being submitted
+every frame — `LMP` and `BM` in the overlay, `lamps` and `beams` in the trace, all non-zero — while
+between them they lit under eight hundred pixels of a 480x272 screen: the beams were buried under
+the road they lay on, and the glows were inside the bodywork they belonged to. Diffing one
+deterministic frame at `--mode 9` and `--mode 10` against `--mode 0` said so exactly, one run each,
+after a good deal of staring at screenshots had not.
+
+Mode 15 is the odd one out: it adds rather than removes. Every lamp on every car burns at once and
+from both sides, whatever the driver is doing, which is how to check that a newly imported car's
+lamps came out on the panels they belong to.
