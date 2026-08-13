@@ -59,6 +59,8 @@ pub struct Report {
     pub textured_materials: usize,
     /// Source images that had to be resized into their tile, as (name, from, to).
     pub resized: Vec<(String, (u32, u32), (u32, u32))>,
+    /// Every lamp the car carries, and how each one was arrived at.
+    pub lights: Vec<(angle_zero::azcar::LightDef, &'static str, &'static str)>,
     /// What the car will drive like, after the config's defaults have been filled in.
     pub handling: angle_zero::vehicle::CarHandling,
     pub bounds: Bounds,
@@ -93,6 +95,7 @@ impl Report {
             dropped_by_name: (0, 0),
             textured_materials: 0,
             resized: Vec::new(),
+            lights: Vec::new(),
             handling: angle_zero::vehicle::CarHandling::DEFAULT,
             bounds: Bounds::EMPTY,
             bytes: 0,
@@ -116,6 +119,16 @@ impl Report {
     }
 
     /// Triangles dropped because nothing could simplify them and nothing much could see them.
+    /// What the lamp detector found, in the order the lamps are written.
+    pub fn note_lights(&mut self, found: &crate::lamps::Found) {
+        self.lights = found
+            .lights
+            .iter()
+            .zip(&found.filled)
+            .map(|(l, (_, side, how))| (*l, side.name(), *how))
+            .collect();
+    }
+
     pub fn note_stuck(&mut self, category: Category, triangles: usize) {
         self.stuck.push((category, triangles));
     }
@@ -334,6 +347,36 @@ impl Report {
         );
         println!();
 
+        // Always printed, including the zero: a car whose brake lights did not come out is the
+        // case this exists for, and a section that disappears when it is empty is a section nobody
+        // notices is missing.
+        println!("Lights:");
+        for kind in [
+            angle_zero::azcar::LightKind::Head,
+            angle_zero::azcar::LightKind::Tail,
+            angle_zero::azcar::LightKind::Brake,
+            angle_zero::azcar::LightKind::Reverse,
+        ] {
+            let n = self.lights.iter().filter(|(l, _, _)| l.kind == kind).count();
+            println!("  {:<14} {n:>3}", plural(kind));
+        }
+        for (light, side, how) in &self.lights {
+            println!(
+                "  {:<14} {side:>5} at ({:>5.2}, {:>4.2}, {:>5.2}), {:.2} m across{}   {how}",
+                light.kind.name(),
+                light.at[0],
+                light.at[1],
+                light.at[2],
+                light.radius * 2.0,
+                if light.range > 0.0 {
+                    format!(", {:.0} m beam", light.range)
+                } else {
+                    String::new()
+                },
+            );
+        }
+        println!();
+
         if self.dropped_by_name.0 > 0 {
             println!(
                 "Left out by name: {} triangles, matching {} pattern(s) in [reduce] drop",
@@ -438,6 +481,17 @@ fn describe(line: &Line) -> String {
             line.category.name()
         ),
         None => line.category.name().to_string(),
+    }
+}
+
+/// How the tally line names a kind of lamp, which is the plural because it is counting them.
+fn plural(kind: angle_zero::azcar::LightKind) -> &'static str {
+    use angle_zero::azcar::LightKind::*;
+    match kind {
+        Head => "Headlights:",
+        Tail => "Tail lights:",
+        Brake => "Brake lights:",
+        Reverse => "Reverse:",
     }
 }
 

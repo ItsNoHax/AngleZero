@@ -20,7 +20,7 @@
 use std::collections::HashMap;
 
 use angle_zero::azcar::{
-    self, Category, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
+    self, Category, LightDef, MaterialDef, Mesh, WheelDef, HEADER_BYTES, MAGIC, MATERIAL_BLEND,
     MATERIAL_TWO_SIDED, NO_TEXTURE, NO_WHEEL, TEXTURE_5650, TEXTURE_HEADER_BYTES, VERSION,
     VERTEX_TEX_F32_COLOR_8888_F32,
 };
@@ -28,6 +28,7 @@ use angle_zero::mesh::Vertex;
 
 use crate::categorise;
 use crate::config::CarConfig;
+use crate::lamps;
 use crate::mat::Bounds;
 use crate::model::SourceModel;
 use crate::report::Report;
@@ -189,6 +190,15 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             "the source model records no author or licence, so the car carries no credit".into(),
         );
     }
+
+    // The lamps, before the parts are walked and long before anything is decimated: a lamp is
+    // measured off the lens the model arrived with, not off whatever the budget left of it. A car
+    // whose headlights fall to eight triangles still has its headlights exactly where they were.
+    let lamps = lamps::identify(model, config, &assignment, &found, &mut strings);
+    for w in &lamps.warnings {
+        report.warn(w.clone());
+    }
+    report.note_lights(&lamps);
 
     // One texture for the whole car, with every source material packed into a tile of it. Built
     // before the parts are walked because each part's UVs have to be rewritten into its material's
@@ -519,6 +529,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         &meshes,
         &materials,
         &wheel_defs,
+        &lamps.lights,
         &strings.bytes,
         credit_at,
         name_at,
@@ -842,13 +853,13 @@ fn strip_url(s: &str) -> &str {
 
 /// The string table, and the offsets into it.
 #[derive(Default)]
-struct Strings {
-    bytes: Vec<u8>,
+pub struct Strings {
+    pub bytes: Vec<u8>,
     seen: HashMap<String, u16>,
 }
 
 impl Strings {
-    fn push(&mut self, s: &str) -> u16 {
+    pub fn push(&mut self, s: &str) -> u16 {
         if let Some(at) = self.seen.get(s) {
             return *at;
         }
@@ -869,6 +880,7 @@ fn write(
     meshes: &[Mesh],
     materials: &[MaterialDef],
     wheels: &[WheelDef],
+    lights: &[LightDef],
     strings: &[u8],
     credit: u32,
     name: u32,
@@ -890,6 +902,17 @@ fn write(
     for w in wheels {
         out.extend_from_slice(&w.encode());
     }
+    // Zero when the car has none, which is what tells a reader there are no lamps rather than a
+    // section of length zero to walk.
+    let lights_at = if lights.is_empty() {
+        0
+    } else {
+        let at = pad(&mut out);
+        for l in lights {
+            out.extend_from_slice(&l.encode());
+        }
+        at
+    };
     let vertices_at = pad(&mut out);
     for (i, v) in vertices.iter().enumerate() {
         // Texture, then colour, then position: the order the GE reads a vertex in, not a choice.
@@ -964,6 +987,8 @@ fn write(
     put_u16(&mut out, f::MATERIAL_COUNT, materials.len() as u16);
     put_u16(&mut out, f::TEXTURE_COUNT, 1);
     put_u16(&mut out, f::WHEEL_COUNT, wheels.len() as u16);
+    put_u32(&mut out, f::LIGHTS_AT, lights_at as u32);
+    put_u16(&mut out, f::LIGHT_COUNT, lights.len() as u16);
     for (i, v) in [
         bounds.min[0],
         bounds.min[1],
@@ -1265,6 +1290,45 @@ mod tests {
         let config = config_matching(&["tyre_", "rim_"]);
         let compiled = compile(&mut model, &config, budget).expect("the test car must compile");
         (compiled.bytes, compiled.report)
+    }
+
+    /// A car whose lamps are placed by its config, compiled and read back by the console's own
+    /// reader. The four-wheeled test model has no lens geometry at all, which is the case the
+    /// config path exists for.
+    #[test]
+    fn a_cars_lamps_survive_the_round_trip_into_the_file() {
+        use angle_zero::azcar::LightKind;
+        use crate::config::Anchor;
+
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        config.lights.headlight_left = Some(Anchor {
+            at: Some([0.7, 0.68, 2.0]),
+            ..Anchor::default()
+        });
+        config.lights.headlight_right = Some(Anchor {
+            at: Some([-0.7, 0.68, 2.0]),
+            ..Anchor::default()
+        });
+        let compiled = compile(&mut model, &config, 10_000).expect("must compile");
+
+        let car = angle_zero::azcar::Car::parse(&compiled.bytes).expect("must parse");
+        assert_eq!(car.light_count(), 2);
+        let lights: Vec<_> = car.lights().collect();
+        assert!(lights.iter().all(|l| l.kind == LightKind::Head));
+        assert_eq!(lights[0].at, [0.7, 0.68, 2.0]);
+        assert!(lights[0].range > 0.0, "a headlight throws a beam");
+        // And the lamps are named in the string table, for the diagnostics that read them back.
+        assert_eq!(car.name(lights[0].name), b"headlight_left");
+    }
+
+    /// A car with nothing said about lamps and no lenses in it carries none — and is still a car.
+    #[test]
+    fn a_car_with_no_lamps_is_written_without_a_lights_section() {
+        let (bytes, _) = compile_test_car(10_000);
+        let car = angle_zero::azcar::Car::parse(&bytes).expect("must parse");
+        assert_eq!(car.light_count(), 0);
+        assert_eq!(car.lights().count(), 0);
     }
 
     #[test]

@@ -43,6 +43,9 @@ pub struct CarConfig {
     #[serde(default)]
     pub handling: Handling,
 
+    #[serde(default)]
+    pub lights: Lights,
+
     /// Triangle budgets for the coarser levels, nearest first. Empty means a car with one level,
     /// which is what every car was until there was something on screen to spend a second one on.
     ///
@@ -150,6 +153,124 @@ impl Handling {
             grip: self.grip,
         }
     }
+}
+
+/// The car's lamps.
+///
+/// Most of this is measurable and therefore absent from most configs: which parts are lenses is
+/// what the material categoriser already worked out, and where a lamp sits and how big it is are
+/// read off that part's own geometry. What cannot be measured is what a lamp is *for* — a lens says
+/// nothing about whether it comes on under braking — and how far a headlight is supposed to throw,
+/// which is a decision about the game rather than a fact about the model.
+///
+/// The four named slots exist for the same reason the wheel corners do: detection is conservative
+/// and refuses rather than guesses, so there has to be a way to say what it would not.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Lights {
+    /// Turn the whole thing off for a car that should have none.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Whether the headlights swing with the road wheels. Off by default: they are fixed units
+    /// behind a fixed grille, and a car that is sliding should light where its nose points.
+    #[serde(default)]
+    pub steer: bool,
+    /// How far a headlight throws, metres.
+    #[serde(default = "default_range")]
+    pub range: f32,
+    /// Half-width of the beam where it lands, metres.
+    #[serde(default = "default_spread")]
+    pub spread: f32,
+
+    #[serde(default)]
+    pub headlight_left: Option<Anchor>,
+    #[serde(default)]
+    pub headlight_right: Option<Anchor>,
+    #[serde(default)]
+    pub tail_left: Option<Anchor>,
+    #[serde(default)]
+    pub tail_right: Option<Anchor>,
+    #[serde(default)]
+    pub brake_left: Option<Anchor>,
+    #[serde(default)]
+    pub brake_right: Option<Anchor>,
+    #[serde(default)]
+    pub reverse_left: Option<Anchor>,
+    #[serde(default)]
+    pub reverse_right: Option<Anchor>,
+}
+
+impl Default for Lights {
+    fn default() -> Self {
+        Lights {
+            enabled: true,
+            steer: false,
+            range: default_range(),
+            spread: default_spread(),
+            headlight_left: None,
+            headlight_right: None,
+            tail_left: None,
+            tail_right: None,
+            brake_left: None,
+            brake_right: None,
+            reverse_left: None,
+            reverse_right: None,
+        }
+    }
+}
+
+/// One lamp, said outright.
+///
+/// Every field is optional and overrides only itself, so a config can name the part a lamp belongs
+/// to and still let its size be measured, or move a lamp two centimetres without describing it
+/// again. An anchor with nothing in it means "there is a lamp in this slot" and nothing more, which
+/// is enough to overrule a detection that refused.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Anchor {
+    /// Node-name fragment for the lens, when the categoriser cannot tell which part it is.
+    #[serde(default)]
+    pub node: Option<String>,
+    /// Where the lens is, in car space, with the wheels on the ground at y = 0. For a model with
+    /// no lens geometry at all.
+    #[serde(default)]
+    pub at: Option<[f32; 3]>,
+    /// Half-size of the lamp's glow, metres. Measured off the lens if left out.
+    #[serde(default)]
+    pub radius: Option<f32>,
+    /// Linear RGB, 0 to 1.
+    #[serde(default)]
+    pub color: Option<[f32; 3]>,
+    /// How bright the lamp is when it is fully on, 0 to 1.
+    #[serde(default)]
+    pub intensity: Option<f32>,
+}
+
+impl Lights {
+    /// The eight slots, named as the config names them, in the order lamps are written.
+    ///
+    /// One list, so that the checker, the detector and the report cannot disagree about which slots
+    /// exist — adding an indicator later is a line here and nothing else.
+    pub fn slots(&self) -> [(&'static str, &Option<Anchor>); 8] {
+        [
+            ("headlight_left", &self.headlight_left),
+            ("headlight_right", &self.headlight_right),
+            ("tail_left", &self.tail_left),
+            ("tail_right", &self.tail_right),
+            ("brake_left", &self.brake_left),
+            ("brake_right", &self.brake_right),
+            ("reverse_left", &self.reverse_left),
+            ("reverse_right", &self.reverse_right),
+        ]
+    }
+}
+
+fn default_range() -> f32 {
+    24.0
+}
+
+fn default_spread() -> f32 {
+    2.6
 }
 
 /// How the triangle budget is shared out.
@@ -382,6 +503,7 @@ impl CarConfig {
             spawn: Spawn::default(),
             reduce: Reduction::default(),
             handling: Handling::default(),
+            lights: Lights::default(),
             lods: Vec::new(),
         }
     }
@@ -401,6 +523,33 @@ impl CarConfig {
                 "invalid car configuration: a budget of {} triangles is not a car",
                 self.triangles
             ));
+        }
+        // A beam with no length is a beam that is drawn and cannot be seen, which looks exactly
+        // like one that was never written.
+        if self.lights.enabled && !(self.lights.range > 0.0 && self.lights.spread > 0.0) {
+            return Err(format!(
+                "invalid light configuration: a beam {} m long and {} m wide is not a beam",
+                self.lights.range, self.lights.spread
+            ));
+        }
+        for (slot, anchor) in self.lights.slots() {
+            let Some(a) = anchor else { continue };
+            if let Some(i) = a.intensity {
+                if !(0.0..=1.0).contains(&i) {
+                    return Err(format!(
+                        "invalid light configuration: {slot} intensity is {i}, which is not \
+                         between 0 and 1"
+                    ));
+                }
+            }
+            if let Some(r) = a.radius {
+                if !(r > 0.0) {
+                    return Err(format!(
+                        "invalid light configuration: {slot} radius is {r}, which is not a \
+                         positive number"
+                    ));
+                }
+            }
         }
         // Corners are all-or-nothing: three named corners and a fourth left to be guessed would
         // put a wheel somewhere no one asked for.
@@ -487,6 +636,64 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("name all four or none"), "{err}");
+    }
+
+    /// A minimal config still turns the lights on, because a car with lamps is the normal case and
+    /// the numbers that cannot be measured have defaults that suit any car.
+    #[test]
+    fn lights_are_on_by_default_and_need_no_configuration() {
+        let c = parse(r#"name = "BMW E36""#).unwrap();
+        assert!(c.lights.enabled);
+        assert!(!c.lights.steer, "headlights are bolted to the body unless asked");
+        assert!(c.lights.range > 0.0 && c.lights.spread > 0.0);
+        assert!(c.lights.slots().iter().all(|(_, a)| a.is_none()));
+    }
+
+    #[test]
+    fn a_lamp_can_be_placed_and_coloured_outright() {
+        let c = parse(
+            r#"
+            name = "Test"
+            [lights]
+            steer = true
+            range = 30.0
+            [lights.brake_left]
+            at = [0.7, 1.0, -2.1]
+            color = [1.0, 0.2, 0.15]
+            intensity = 0.9
+            radius = 0.3
+            [lights.brake_right]
+            node = "brake_r"
+            "#,
+        )
+        .unwrap();
+        assert!(c.lights.steer);
+        assert_eq!(c.lights.range, 30.0);
+        let left = c.lights.brake_left.as_ref().unwrap();
+        assert_eq!(left.at, Some([0.7, 1.0, -2.1]));
+        assert_eq!(left.intensity, Some(0.9));
+        assert_eq!(c.lights.brake_right.as_ref().unwrap().node.as_deref(), Some("brake_r"));
+    }
+
+    /// Numbers that would produce a lamp nobody can see are refused here, where the message can say
+    /// which slot, rather than on a handheld with no debugger.
+    #[test]
+    fn nonsense_lamp_numbers_are_refused() {
+        let err = parse("name = \"T\"\n[lights]\nrange = 0.0").unwrap_err();
+        assert!(err.contains("is not a beam"), "{err}");
+
+        let err = parse(
+            "name = \"T\"\n[lights.tail_left]\nintensity = 4.0",
+        )
+        .unwrap_err();
+        assert!(err.contains("tail_left") && err.contains("between 0 and 1"), "{err}");
+
+        let err = parse("name = \"T\"\n[lights.tail_left]\nradius = -1.0").unwrap_err();
+        assert!(err.contains("radius"), "{err}");
+
+        // And a beam that is not asked for is not checked: a car with its lights off is allowed to
+        // leave nonsense in the table it is not using.
+        assert!(parse("name = \"T\"\n[lights]\nenabled = false\nrange = 0.0").is_ok());
     }
 
     #[test]

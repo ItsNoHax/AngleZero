@@ -19,6 +19,7 @@ mod config;
 mod convert;
 mod extract;
 mod inspect;
+mod lamps;
 mod mat;
 mod model;
 mod report;
