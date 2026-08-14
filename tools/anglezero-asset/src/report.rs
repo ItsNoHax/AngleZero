@@ -458,8 +458,8 @@ impl Report {
             // how many materials brought an image, not by how many materials there are, and only
             // the packer knows which images decoded.
             println!(
-                "         largest was `{}` at {}x{}, into a {}px tile",
-                name, from.0, from.1, to.0,
+                "         largest was `{}` at {}x{}, into {}x{} texels of its tile",
+                name, from.0, from.1, to.0, to.1,
             );
         }
         println!();

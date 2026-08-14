@@ -485,17 +485,60 @@ pub struct ColourRule {
     pub match_: Vec<String>,
     /// sRGB, 0–255.
     pub rgb: [u8; 3],
+    /// Ignore whatever image the material brought, and let `rgb` be the whole answer.
+    ///
+    /// For a material whose texture is not a picture of the surface. The Golf's `material` — its
+    /// grille bars, the strakes in the lower bumper and the ring round the badge — carries a
+    /// matcap: three vertical strips of sky, horizon and sunset that a renderer is supposed to
+    /// index by the surface normal to fake a reflection. Sampled as a flat texture it is a
+    /// gradient, those panels sit a texel from where the horizon turns orange, and any change at
+    /// all to how the image is resampled moves them across it. That is what turned the Golf's
+    /// front end olive-yellow whenever the tile size moved, and it is why the gutter looked
+    /// unaffordable for two sessions: the fault was never the gutter's 6%, it was that a matcap
+    /// has no stable answer to sample.
+    ///
+    /// So the config says the model is wrong about the *texture* as well, in the same breath as
+    /// the colour, because it is the same judgement: a person looking at the car can see that the
+    /// image is not a picture of the thing it is on.
+    #[serde(default)]
+    pub flat: bool,
+}
+
+/// sRGB to linear, the inverse of `compile::srgb`, so a colour a config names survives the round
+/// trip back out to the vertex it is baked into.
+fn linear(v: f32) -> f32 {
+    if v <= 0.040_45 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 impl MaterialRules {
-    /// The replacement colour for a material, if the config named one.
+    /// The replacement colour for a material, if the config named one, in the linear space a
+    /// glTF base colour is in.
+    ///
+    /// Decoded from sRGB, because that is what the field says it is and what a person reading a
+    /// colour off a picker will type. It was going in raw, which meant the number in a config was
+    /// linear whatever the comment claimed, and the E36's black plastic trim at `[28, 28, 30]` was
+    /// compiling to a mid grey around 96 — dark enough to fix the pale band it was written for,
+    /// which is why nobody noticed, and about three times the colour that was asked for.
     pub fn colour_for(&self, name: &str) -> Option<[f32; 3]> {
+        self.rule_for(name)
+            .map(|r| r.rgb.map(|c| linear(c as f32 / 255.0)))
+    }
+
+    /// Whether the config says to throw this material's image away. See `ColourRule::flat`.
+    pub fn is_flat(&self, name: &str) -> bool {
+        self.rule_for(name).is_some_and(|r| r.flat)
+    }
+
+    fn rule_for(&self, name: &str) -> Option<&ColourRule> {
         let name = name.to_ascii_lowercase();
-        self.colour.iter().find_map(|rule| {
+        self.colour.iter().find(|rule| {
             rule.match_
                 .iter()
                 .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
-                .then(|| rule.rgb.map(|c| c as f32 / 255.0))
         })
     }
 }

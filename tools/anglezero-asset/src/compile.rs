@@ -231,7 +231,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // One texture for the whole car, with every source material packed into a tile of it. Built
     // before the parts are walked because each part's UVs have to be rewritten into its material's
     // tile on the way in — after that, nothing downstream has to know an atlas was involved.
-    let atlas = texture::Atlas::build(model);
+    let atlas = texture::Atlas::build(model, &config.materials);
     for w in &atlas.warnings {
         report.warn(w.clone());
     }
@@ -1546,7 +1546,7 @@ mod tests {
 
         // Rebuilt from the same materials, so the same tiles: `compile` moves geometry about but
         // never touches the material list.
-        let atlas = crate::texture::Atlas::build(&model);
+        let atlas = crate::texture::Atlas::build(&model, &config.materials);
         assert!(atlas.tiles.len() >= 2, "the test car needs several materials");
 
         let mut used = std::collections::HashSet::new();

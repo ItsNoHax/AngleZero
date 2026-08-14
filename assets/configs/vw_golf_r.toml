@@ -81,6 +81,18 @@ body = ["CarPaint"]
 # one thing. They are not one thing: a tyre is a black torus that survives being cut to a few
 # hundred triangles, and an alloy is the detail on the corner that does not.
 
+# `material` is the grille bars, the strakes in the lower bumper and the ring round the badge, and
+# the image it brings is a matcap: three vertical strips of sky, horizon and sunset, meant to be
+# indexed by the surface normal to fake a reflection. Sampled as a flat texture it is a gradient
+# that those panels sit a texel away from the orange end of, so every change to how the atlas
+# resamples — a tile size, a gutter, a filter — moved them across it and the whole front of the car
+# came out olive-yellow. There is no tile size that settles it, because a matcap has no stable
+# answer to sample; the only fix is to stop believing the image, which is what `flat` says.
+[[materials.colour]]
+match = ["material"]
+rgb = [70, 70, 74]
+flat = true
+
 [handling]
 # 1500 kg, 2.63 m between the axles, and the mass over the front wheels that a transverse engine
 # puts there. Four-wheel drive and modern rubber, so it has more grip than anything else in the

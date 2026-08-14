@@ -519,6 +519,40 @@ for. That is not hypothetical — a throwaway rasteriser that drew every triangl
 of a tyre through the hole in the near side, made every wheel look like a featureless blob, and cost
 a wrong diagnosis before it was noticed.
 
+### When the model is wrong about a material
+
+Some faults are not a budget, a category or a UV — the model simply says the wrong thing, and no
+amount of triangles will fix it. `[[materials.colour]]` says otherwise, keyed by the same name
+fragments the category rules use, and applied before the category touches the material so a lens
+named there is still lit and a window still gets its alpha.
+
+```toml
+[[materials.colour]]
+match = ["BMWE36_paint.004"]   # 3,860 triangles the model calls rgba(0.41, 0.41, 0.41)
+rgb = [28, 28, 30]             # sRGB, 0-255, which is what a colour picker gives you
+```
+
+`flat = true` on the same rule throws the material's *image* away as well, which is for a texture
+that is not a picture of the surface. The Golf's `material` carries a matcap — three strips of sky,
+horizon and sunset, meant to be indexed by the surface normal — and sampled as a flat texture it is
+a gradient that the grille bars and bumper strakes sit a texel from the orange end of. Every change
+to how the atlas resamples moved them across it, and the whole front of the car came out
+olive-yellow. There is no tile size that settles that, because a matcap has no stable answer to
+sample.
+
+**The way to find which material owns a surface is the rule itself.** Paint a candidate a colour
+nothing else on the car wears, compile, and look at where it lands:
+
+```toml
+[[materials.colour]]
+match = ["material"]
+rgb = [255, 0, 255]
+```
+
+That is how all of these were settled, and it is much faster than reasoning about names. Two guesses
+about the E36's white lower trim — `etki_modparts.001` and `BMWE36_chrom` — were both wrong, and
+`BMWE36_chrom` turned out to be the headlight surrounds.
+
 ## When the car is the right way round and steers with the wrong wheels
 
 `[spawn] yaw` turns the geometry, and until the E39 needed it, it turned nothing else. Corners are
@@ -596,6 +630,26 @@ resampled. Point-sampled at 32 px it read grey; at 64 it reads yellow in places.
 samples of the same source and the finer one is closer to it, but it is a visible change with no
 fault behind it, and it is the kind of thing to recognise rather than chase.
 
+### The gutter, and why it needed the tiles first
+
+Each tile carries a one-texel ring of its own edge colour, and the UVs address the content inside
+it. That is what lets the car be sampled `Linear` — bilinear filtering near a tile's edge reaches a
+texel outside it, and in an atlas that texel belongs to a different material, so without a ring the
+only safe filter is `Nearest`. Nearest is what made the S15's tread a handful of blocks: it is a
+fine pattern crushed into a tile, and point-sampling gives one texel per pixel with nothing in
+between.
+
+The gutter was built and reverted twice before the tiles were resized, and the reason is
+arithmetic. The ring costs two texels of the tile in each axis — 6% at 32 px, 3% at 64 — and the
+Golf's grille samples a band about a texel tall in `Light_Map`, whose image holds the dark
+headlight photo directly above the orange tail-light strip. Rescaling the content by 6% moved that
+band across the boundary and the grille came out olive-yellow, twice, and the second time with
+sampling still on `Nearest` — which is what proved the fault was in the atlas rather than in the
+filter. Nothing about the ring was wrong. There was no room for it.
+
+`azview` samples bilinear too, and has to keep matching. A gutter judged against a point-sampling
+viewer is judged by a renderer that cannot show either what the ring smooths or what it prevents.
+
 ```bash
 anglezero-asset convert ... --atlas /tmp/atlas.png    # look at what was packed
 ```
@@ -611,7 +665,10 @@ collapse it likes best on a flat panel is the one that drags a decal across it �
 change and the texture slides.
 
 UVs outside the unit square are clamped. In an atlas a repeated texture would sample the material
-packed next door, so a tiling pattern shows its edge rather than somebody else's paint.
+packed next door, so a tiling pattern shows its edge rather than somebody else's paint. What is
+inside the square is mapped onto the tile's content, gutter excluded, so UV 0 and 1 are the outer
+edges of the first and last content texel: the image is addressable end to end, and what a filter
+reaches for past either end is the ring, which is a copy of the texel it is already standing on.
 
 ## Licences
 

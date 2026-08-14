@@ -388,13 +388,7 @@ fn raster(
             if let Some(t) = texture {
                 let u = v[0].u * p[0] + v[1].u * p[1] + v[2].u * p[2];
                 let vv = v[0].v * p[0] + v[1].v * p[1] + v[2].v * p[2];
-                let tx = ((u.clamp(0.0, 1.0) * t.width as f32) as usize).min(t.width - 1);
-                let ty = ((vv.clamp(0.0, 1.0) * t.height as f32) as usize).min(t.height - 1);
-                let at = (ty * t.width + tx) * 2;
-                let texel = t.pixels[at] as u16 | ((t.pixels[at + 1] as u16) << 8);
-                let tr = ((texel & 0x1F) << 3) as f32;
-                let tg = (((texel >> 5) & 0x3F) << 2) as f32;
-                let tb = (((texel >> 11) & 0x1F) << 3) as f32;
+                let [tr, tg, tb] = bilinear(t, u, vv);
                 rgb[0] = rgb[0] * tr / 255.0;
                 rgb[1] = rgb[1] * tg / 255.0;
                 rgb[2] = rgb[2] * tb / 255.0;
@@ -419,6 +413,43 @@ fn raster(
             depth[at] = z;
         }
     }
+}
+
+/// Samples the atlas the way `bind_car_texture` asks the GE to: bilinear, with the texel grid
+/// offset half a texel from the coordinate grid.
+///
+/// This viewer point-sampled for as long as the console did, and it has to keep matching. A gutter
+/// judged against nearest sampling is a gutter judged by a renderer that cannot show what it is
+/// for — the tread it smooths, or the neighbour it would have bled in if it were not there.
+///
+/// Clamped rather than wrapped at the atlas edge, which is what `GU_CLAMP` does and is also moot:
+/// every tile is a gutter's width inside it.
+fn bilinear(t: &azcar::Texture, u: f32, v: f32) -> [f32; 3] {
+    let at = |x: usize, y: usize| {
+        let i = (y * t.width + x) * 2;
+        let texel = t.pixels[i] as u16 | ((t.pixels[i + 1] as u16) << 8);
+        [
+            ((texel & 0x1F) << 3) as f32,
+            (((texel >> 5) & 0x3F) << 2) as f32,
+            ((texel >> 11) << 3) as f32,
+        ]
+    };
+    let x = u.clamp(0.0, 1.0) * t.width as f32 - 0.5;
+    let y = v.clamp(0.0, 1.0) * t.height as f32 - 0.5;
+    let (fx, fy) = (x.floor(), y.floor());
+    let (sx, sy) = (x - fx, y - fy);
+    let x0 = (fx.max(0.0) as usize).min(t.width - 1);
+    let y0 = (fy.max(0.0) as usize).min(t.height - 1);
+    let x1 = (x0 + 1).min(t.width - 1);
+    let y1 = (y0 + 1).min(t.height - 1);
+    let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+    let mut out = [0.0f32; 3];
+    for k in 0..3 {
+        let top = a[k] + (b[k] - a[k]) * sx;
+        let bottom = c[k] + (d[k] - c[k]) * sx;
+        out[k] = top + (bottom - top) * sy;
+    }
+    out
 }
 
 fn name<'a>(car: &Car<'a>, at: u16) -> String {

@@ -1529,9 +1529,14 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 /// the texture multiplies into it, so a material with no image has a white tile and comes out
 /// exactly as it did before there were textures at all.
 ///
-/// Nearest filtering, deliberately. Neighbouring tiles in an atlas are unrelated materials, and
-/// bilinear sampling at a tile edge would fetch one of them; nearest cannot. It also suits a car
-/// whose texels are already larger than the pixels they cover.
+/// Linear filtering, which the atlas had to earn. Bilinear sampling near a tile's edge reaches a
+/// texel outside it, and in an atlas that texel is a different material, so this was `Nearest` for
+/// as long as the tiles had no border. They have a one-texel gutter now, holding a copy of the
+/// edge underneath it, so what the filter reaches for is the colour it is already standing on.
+///
+/// Worth having, because the claim that a car's texels are larger than the pixels they cover was
+/// only ever true of the big flat panels. The tyre tread and the grille plastics are fine patterns
+/// crushed into a tile, and nearest drew them as a handful of blocks with nothing in between.
 unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
     let Some(tex) = car.texture() else {
         sys::sceGuDisable(GuState::Texture2D);
@@ -1547,7 +1552,7 @@ unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
         tex.pixels.as_ptr() as *const c_void,
     );
     sys::sceGuTexFunc(TextureEffect::Modulate, TextureColorComponent::Rgba);
-    sys::sceGuTexFilter(TextureFilter::Nearest, TextureFilter::Nearest);
+    sys::sceGuTexFilter(TextureFilter::Linear, TextureFilter::Linear);
 }
 
 /// The extra cars a benchmark mode puts on screen, as (which car, position, heading).
