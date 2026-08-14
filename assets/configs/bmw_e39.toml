@@ -10,8 +10,22 @@ name = "BMW E39"
 
 # 4.77 m across the box against a real E39's 4.775 m. Life size in metres.
 
-triangles = 15000
-lods = [4500, 1800]
+# 32,000 where every other car here gets 24,000, and the only car that needs asking for more.
+#
+# Its bodywork is 131,424 source triangles against the Golf's 91,872 and the 190E's 73,031, because
+# this model has the doors, sills and arches as separate shells and puts the black moulding down
+# each door in a recess in the door skin. Decimate the shell far enough and the recess walls
+# collapse before the strip does, and what is left is a slot straight through the car — you could
+# see the cabin, and then the far side of the road, through both doors. It is not a hole any weight
+# could close from inside 24,000: the moulding lives in `Object_33`, the 39,638-triangle shell that
+# is the largest part on the car, so a part weight has nothing to take it from, and buying it out of
+# the category instead put the alloys at 362 triangles apiece.
+#
+# `Object_33` needs about 11,000 triangles before the recess survives. 24,000 gave it 5,170 and
+# 32,000 with the body weight below gives it 11,293. The file goes 736 KB to 861 KB, which the arena
+# has room for and which `docs/cars.md` records.
+triangles = 32000
+lods = [3000, 1200]
 
 [spawn]
 # The one car in the set that was modelled facing the other way, and the only thing here that
@@ -48,7 +62,13 @@ chrome = 10.0
 # modelled with the doors, sills and arches as separate shells — and at 2,644 they were still at
 # 4.5% error, which is four times what every other car in the set manages and the only body figure
 # that showed up as a number rather than as a shrug.
-body = 1.4
+#
+# 4.5 rather than 1.4, for the door mouldings described where the budget is set. It takes the body
+# to 22,210 of the 32,000 and the alloys down from 1,613 triangles to 1,074 at 1.0% error, which is
+# a wheel that still reads as a multi-spoke; the face is unchanged side by side, grille slats and
+# all. Past about 6 the trade turns: at 12 the body reaches 20,178 out of a 24,000 budget and the
+# lamps get 42 triangles between them.
+body = 4.5
 
 [materials]
 # `Scene_-_Root` is the exporter's name for a material that never had one, and on this model it is
@@ -58,7 +78,16 @@ body = 1.4
 chrome = ["Scene_-_Root", "chrome", "black_chrome", "metal", "bumper_frame", "emblem"]
 tyre = ["tire_protector", "tire_left_L"]
 window = ["glass", "window", "black_glass"]
-light = ["head_light", "tail_light", "lights_glass", "reflector", "detail_glass"]
+# The lenses, and nothing that merely sits behind one. `reflector` used to be on this line and was
+# the single worst entry in the file: it matches `reflector` and `textured_reflector`, which are the
+# silvered bowls inside the lamp housings — 10,634 triangles against 1,878 for both rear lenses. A
+# category weighted at 8.0 therefore went mostly on bowls, and what was left drew both rear clusters
+# as white blobs. The bowls are still drawn; they come out as `chrome`, which is what they are.
+#
+# `lights_glass` and `detail_glass` are gone with it because they never did anything: `window` is
+# asked before `light` and both names contain `glass`, so the lenses this line meant to name were
+# already being sorted as windows.
+light = ["head_light", "tail_light"]
 interior = ["bump_leather", "cloth", "mottled", "gauge", "bump_plastic"]
 
 # `rubber_trim` is not a tyre. It is 5,652 triangles of window seal and roof channel sitting at

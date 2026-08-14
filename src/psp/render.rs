@@ -1670,8 +1670,11 @@ unsafe fn draw_one_car(
                     continue;
                 }
                 // Glass, seats and door cards are modelled as single sheets with nothing behind
-                // them, and culled they show as holes into the cabin.
-                let want_culling = !material.two_sided();
+                // them, and culled they show as holes into the cabin. So are the parts the
+                // compiler measured as reading back-face-first — grille meshes, bumper inner
+                // skins, black trim panels — which is a per-mesh answer rather than a per-material
+                // one because a category holds both a closed shell and the sheets set into it.
+                let want_culling = !material.two_sided() && !mesh.two_sided();
                 if want_culling != culling {
                     if want_culling {
                         sys::sceGuEnable(GuState::CullFace);

@@ -38,6 +38,8 @@ pub struct Report {
     pub views: usize,
     pub hidden_parts: usize,
     pub hidden_triangles: usize,
+    /// Triangles the sweep only ever saw the back of, and which are drawn with culling off.
+    pub two_sided_triangles: usize,
     pub stuck: Vec<(Category, usize)>,
     pub lines: Vec<Line>,
     pub categories: Vec<(Category, usize, usize)>,
@@ -81,6 +83,7 @@ impl Report {
             views: 0,
             hidden_parts: 0,
             hidden_triangles: 0,
+            two_sided_triangles: 0,
             stuck: Vec::new(),
             lines: Vec::new(),
             categories: Vec::new(),
@@ -116,6 +119,11 @@ impl Report {
         self.views = seen.views;
         self.hidden_parts = seen.hidden_parts();
         self.hidden_triangles = triangles;
+    }
+
+    /// Triangles the sweep only ever saw the back of, which the console would otherwise cull away.
+    pub fn note_two_sided(&mut self, triangles: usize) {
+        self.two_sided_triangles = triangles;
     }
 
     /// Triangles dropped because nothing could simplify them and nothing much could see them.
@@ -397,6 +405,13 @@ impl Report {
                 "            {:.1}% of the source model, dropped before the budget was shared out",
                 100.0 * self.hidden_triangles as f32 / self.source_triangles.max(1) as f32
             );
+            if self.two_sided_triangles > 0 {
+                println!(
+                    "            {} triangles are only ever seen from behind and are drawn \
+                     two-sided",
+                    commas(self.two_sided_triangles),
+                );
+            }
             println!();
         }
 

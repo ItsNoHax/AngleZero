@@ -29,6 +29,20 @@ use crate::model::{Part, SourceModel};
 /// a badge screw is exactly what this is meant to find and delete.
 const RESOLUTION: usize = 128;
 
+/// Resolution of the second sweep, the one that decides what culling would cost.
+///
+/// Four times finer, and for a different job: the first sweep asks how much of the car a part is,
+/// which a coarse buffer answers well, and this one asks whether a *particular triangle* is the
+/// only thing standing between the camera and a hole. A grille is a lattice of slats a few
+/// millimetres across, and at 3.3 cm a pixel it owns almost nothing — the Golf's came back with 209
+/// triangles flagged out of a grille of some thousands, which drew as a hole with a few slats left
+/// in it. At 8 mm a pixel the slats are resolved and the answer is about the grille rather than
+/// about the sampling.
+///
+/// It costs a second sweep at sixteen times the pixels, which is seconds on a development machine
+/// and nothing on the console, where none of this runs.
+const CULL_RESOLUTION: usize = 512;
+
 /// Views around the car: azimuths at each elevation.
 ///
 /// The elevations are what the game's cameras actually use — the chase camera sits about 2 m up
@@ -43,6 +57,23 @@ pub struct Visibility {
     pub pixels: Vec<u32>,
     /// How many views were taken, for the report.
     pub views: usize,
+    /// Per triangle of the whole model, whether culling it away would open a hole.
+    ///
+    /// This is the question back-face culling asks, asked once with the answer kept. The console
+    /// culls and this sweep does not, so without it the two disagree about the same car: a grille
+    /// mesh, a bumper's inner skin or a black trim panel wound away from the camera is measured
+    /// here as perfectly visible and then thrown away by the hardware, and what the player sees is
+    /// a hole through the car.
+    ///
+    /// Per triangle rather than per part, because a part is not the unit a model winds
+    /// consistently. The E36 splits every panel out and its whole *right-hand side* is inward — the
+    /// mirrored instances came across with their winding flipped — so a part-wide answer would have
+    /// done there. The Golf merges its entire exterior into one 50,880-triangle primitive with the
+    /// grille inside it, and no part-wide answer can say that the grille is a sheet and the wing
+    /// beside it is not.
+    needed: Vec<bool>,
+    /// Where each part's triangles start in the array above.
+    triangle_at: Vec<usize>,
 }
 
 impl Visibility {
@@ -52,6 +83,23 @@ impl Visibility {
 
     pub fn hidden_parts(&self) -> usize {
         self.pixels.iter().filter(|p| **p == 0).count()
+    }
+
+    /// Which of a part's triangles have to be drawn with culling off to be drawn at all.
+    ///
+    /// The test is not "is this wound inwards", which no amount of winding on its own settles, but
+    /// "does culling this cost the picture anything": the sweep renders each view twice, once as
+    /// the console will and once with everything drawn, and a triangle qualifies where it is the
+    /// nearest surface at a pixel, faces away, and the culled pass leaves that pixel to something
+    /// further off or to nothing. A closed shell never qualifies, because the pixel its inside
+    /// would have won is already owned by its outside at the same distance or nearer.
+    pub fn two_sided_triangles(
+        &self,
+        part: usize,
+        triangles: usize,
+    ) -> impl Iterator<Item = bool> + '_ {
+        let at = self.triangle_at.get(part).copied().unwrap_or(0);
+        (0..triangles).map(move |i| self.needed.get(at + i).copied().unwrap_or(false))
     }
 }
 
@@ -99,12 +147,41 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
     ];
     let radius = radius_of(&bounds).max(1e-3);
 
+    // Where each part's triangles begin in one numbering across the whole model. The depth buffer
+    // records which *triangle* won a pixel rather than which part, so that a sheet inside a part
+    // that is otherwise a solid can still be told apart from it; the part is a lookup away.
+    let mut triangle_at = Vec::with_capacity(model.parts.len() + 1);
+    let mut total = 0;
+    for part in &model.parts {
+        triangle_at.push(total);
+        total += part.triangles();
+    }
+    triangle_at.push(total);
+
     let mut pixels = vec![0u32; model.parts.len()];
     let mut depth = vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION];
     let mut owner = vec![u32::MAX; RESOLUTION * RESOLUTION];
+    let mut facing = vec![false; RESOLUTION * RESOLUTION];
     let mut glass_depth = vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION];
     let mut glass_owner = vec![u32::MAX; RESOLUTION * RESOLUTION];
+    let mut glass_facing = vec![false; RESOLUTION * RESOLUTION];
     let mut views = 0;
+
+    // Which part a triangle belongs to. `triangle_at` is sorted, so this is a search rather than
+    // another array the size of the model.
+    let part_of = |triangle: usize| -> usize {
+        match triangle_at.binary_search(&triangle) {
+            Ok(exact) => {
+                // Empty parts share a boundary, so land on the first one that actually holds it.
+                let mut at = exact;
+                while at + 1 < triangle_at.len() && triangle_at[at + 1] == triangle_at[at] {
+                    at += 1;
+                }
+                at
+            }
+            Err(after) => after - 1,
+        }
+    };
 
     for elevation in ELEVATIONS {
         for i in 0..AZIMUTHS {
@@ -119,11 +196,21 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
                 if transparent.get(index).copied().unwrap_or(false) {
                     continue;
                 }
-                raster(part, index, &view, centre, radius, &mut depth, &mut owner, true);
+                raster(
+                    part,
+                    triangle_at[index],
+                    &view,
+                    centre,
+                    radius,
+                    &mut depth,
+                    &mut owner,
+                    &mut facing,
+                    true,
+                );
             }
-            for slot in &owner {
+            for slot in owner.iter() {
                 if *slot != u32::MAX {
-                    pixels[*slot as usize] += 1;
+                    pixels[part_of(*slot as usize)] += 1;
                 }
             }
 
@@ -138,39 +225,160 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
                 }
                 raster(
                     part,
-                    index,
+                    triangle_at[index],
                     &view,
                     centre,
                     radius,
                     &mut glass_depth,
                     &mut glass_owner,
+                    &mut glass_facing,
                     true,
                 );
             }
-            for slot in &glass_owner {
+            for (slot, back) in glass_owner.iter().zip(&glass_facing) {
                 if *slot != u32::MAX {
-                    pixels[*slot as usize] += 1;
+                    pixels[part_of(*slot as usize)] += 1;
+                    // Glass is drawn two-sided already, so all this can say is that the lens or
+                    // window in question is one nobody would see culled — which is true of every
+                    // one of them and is why the window category carries the flag outright.
+                    let _ = back;
                 }
             }
         }
     }
 
-    Visibility { pixels, views }
+    let needed = what_culling_would_cost(model, transparent, &triangle_at, total, centre, radius);
+    triangle_at.pop();
+    Visibility {
+        pixels,
+        views,
+        needed,
+        triangle_at,
+    }
 }
 
-/// Rasterises one part into the depth buffer.
+/// Which triangles the hardware's back-face culling would take away, leaving a hole behind.
+///
+/// Each view is drawn twice into a buffer of its own: once with everything, as the sweep above
+/// does, and once culled the way the console culls. A pixel whose nearest surface faces away, and
+/// which the culled pass leaves to something further off or to nothing at all, is a pixel where
+/// culling opens a hole — and the triangle that was closing it has to be drawn with culling off.
+///
+/// Drawn at [`CULL_RESOLUTION`] rather than [`RESOLUTION`] because the question is about individual
+/// triangles rather than about whole parts; see the constant.
+fn what_culling_would_cost(
+    model: &SourceModel,
+    transparent: &[bool],
+    triangle_at: &[usize],
+    total: usize,
+    centre: [f32; 3],
+    radius: f32,
+) -> Vec<bool> {
+    const N: usize = CULL_RESOLUTION * CULL_RESOLUTION;
+    let mut needed = vec![false; total];
+    let mut depth = vec![f32::NEG_INFINITY; N];
+    let mut owner = vec![u32::MAX; N];
+    let mut facing = vec![false; N];
+    let mut culled_depth = vec![f32::NEG_INFINITY; N];
+    let mut culled_owner = vec![u32::MAX; N];
+    let mut culled_facing = vec![false; N];
+
+    for elevation in ELEVATIONS {
+        for i in 0..AZIMUTHS {
+            let view = View::new(360.0 * i as f32 / AZIMUTHS as f32, elevation);
+            depth.fill(f32::NEG_INFINITY);
+            owner.fill(u32::MAX);
+            culled_depth.fill(f32::NEG_INFINITY);
+            culled_owner.fill(u32::MAX);
+
+            for (index, part) in model.parts.iter().enumerate() {
+                if transparent.get(index).copied().unwrap_or(false) {
+                    continue;
+                }
+                for (d, o, f, cull) in [
+                    (&mut depth, &mut owner, &mut facing, false),
+                    (
+                        &mut culled_depth,
+                        &mut culled_owner,
+                        &mut culled_facing,
+                        true,
+                    ),
+                ] {
+                    raster_with(
+                        part,
+                        triangle_at[index],
+                        &view,
+                        centre,
+                        radius,
+                        CULL_RESOLUTION,
+                        d,
+                        o,
+                        f,
+                        true,
+                        cull,
+                    );
+                }
+            }
+
+            for at in 0..N {
+                let slot = owner[at];
+                if slot == u32::MAX || !facing[at] {
+                    continue;
+                }
+                if culled_owner[at] == u32::MAX || culled_depth[at] < depth[at] {
+                    needed[slot as usize] = true;
+                }
+            }
+        }
+    }
+    needed
+}
+
+/// Rasterises one part into the depth buffer, owning pixels by triangle.
 #[allow(clippy::too_many_arguments)]
 fn raster(
     part: &Part,
-    index: usize,
+    // Where this part's triangles begin in the model-wide numbering.
+    first_triangle: usize,
     view: &View,
     centre: [f32; 3],
     radius: f32,
     depth: &mut [f32],
     owner: &mut [u32],
+    // Whether the fragment that won each pixel was a back face.
+    facing: &mut [bool],
     write_depth: bool,
 ) {
-    let half = RESOLUTION as f32 * 0.5;
+    raster_with(
+        part,
+        first_triangle,
+        view,
+        centre,
+        radius,
+        RESOLUTION,
+        depth,
+        owner,
+        facing,
+        write_depth,
+        false,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn raster_with(
+    part: &Part,
+    first_triangle: usize,
+    view: &View,
+    centre: [f32; 3],
+    radius: f32,
+    resolution: usize,
+    depth: &mut [f32],
+    owner: &mut [u32],
+    facing: &mut [bool],
+    write_depth: bool,
+    cull_back: bool,
+) {
+    let half = resolution as f32 * 0.5;
     let to_pixel = |p: [f32; 3]| [(p[0] + 1.0) * half, (p[1] + 1.0) * half, p[2]];
 
     let projected: Vec<[f32; 3]> = part
@@ -179,16 +387,16 @@ fn raster(
         .map(|p| to_pixel(view.project(*p, centre, radius)))
         .collect();
 
-    for t in part.indices.chunks_exact(3) {
+    for (triangle, t) in part.indices.chunks_exact(3).enumerate() {
         let a = projected[t[0] as usize];
         let b = projected[t[1] as usize];
         let c = projected[t[2] as usize];
 
         let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as usize;
-        let max_x = (a[0].max(b[0]).max(c[0]).ceil() as isize).clamp(0, RESOLUTION as isize - 1)
+        let max_x = (a[0].max(b[0]).max(c[0]).ceil() as isize).clamp(0, resolution as isize - 1)
             as usize;
         let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0) as usize;
-        let max_y = (a[1].max(b[1]).max(c[1]).ceil() as isize).clamp(0, RESOLUTION as isize - 1)
+        let max_y = (a[1].max(b[1]).max(c[1]).ceil() as isize).clamp(0, resolution as isize - 1)
             as usize;
         if min_x > max_x || min_y > max_y {
             continue;
@@ -201,6 +409,15 @@ fn raster(
         // Both windings are drawn. A visibility test that culled back faces would delete any part
         // the source model happens to have wound inwards, and source models are not reliable about
         // that — the E36 declares every one of its materials two-sided.
+        //
+        // Which winding it was is recorded rather than acted on, because the console *does* cull
+        // and something has to reconcile the two. Screen y is up here and the basis is right-handed,
+        // so a front face — counter-clockwise to the viewer, which is what `sceGuFrontFace` selects
+        // — has positive signed area.
+        let back = area < 0.0;
+        if cull_back && back {
+            continue;
+        }
         let inv = 1.0 / area;
 
         for y in min_y..=max_y {
@@ -213,12 +430,13 @@ fn raster(
                     continue;
                 }
                 let z = w0 * a[2] + w1 * b[2] + w2 * c[2];
-                let at = y * RESOLUTION + x;
+                let at = y * resolution + x;
                 if z > depth[at] {
                     if write_depth {
                         depth[at] = z;
                     }
-                    owner[at] = index as u32;
+                    owner[at] = (first_triangle + triangle) as u32;
+                    facing[at] = back;
                 }
             }
         }
@@ -334,5 +552,81 @@ mod tests {
         let glazed = measure(&model, &[false, true]);
         assert!(glazed.pixels[0] > 0, "the seat is visible through the glass");
         assert!(glazed.pixels[1] > 0, "the glass is visible too");
+    }
+
+    fn two_sided(v: &Visibility, part: usize, model: &SourceModel) -> usize {
+        v.two_sided_triangles(part, model.parts[part].triangles())
+            .filter(|n| *n)
+            .count()
+    }
+
+    /// A solid wound the right way round costs nothing to cull, and must not be made to pay for
+    /// two-sided drawing it does not need. This is the case that keeps the whole car from ending up
+    /// with culling switched off.
+    #[test]
+    fn a_box_wound_outwards_is_culled_like_anything_else() {
+        let model = model_of(vec![box_part("shell", [0.0, 1.0, 0.0], [2.0, 2.0, 4.0], 4)]);
+        let v = measure(&model, &[false]);
+        assert!(v.pixels[0] > 0);
+        assert_eq!(two_sided(&v, 0, &model), 0);
+    }
+
+    /// And the case the measurement exists for: the same box inside out. Every triangle the camera
+    /// can see is one the hardware would throw away, and the box would disappear entirely.
+    ///
+    /// This is not a contrived shape — it is the E36's whole right-hand side, whose mirrored parts
+    /// came out of the exporter wound the other way.
+    #[test]
+    fn a_box_wound_inwards_has_to_be_drawn_two_sided() {
+        let mut model = model_of(vec![box_part("shell", [0.0, 1.0, 0.0], [2.0, 2.0, 4.0], 4)]);
+        for t in model.parts[0].indices.chunks_exact_mut(3) {
+            t.swap(0, 1);
+        }
+        let v = measure(&model, &[false]);
+        let flagged = two_sided(&v, 0, &model);
+        assert!(
+            flagged > 0,
+            "an inside-out box would be culled away to nothing"
+        );
+        // Not every triangle: the underside is never looked at, so nothing about it is known and
+        // nothing about it needs to be. What matters is that the sides somebody sees are covered.
+        assert!(
+            flagged * 4 > model.parts[0].triangles(),
+            "only {flagged} of {} triangles",
+            model.parts[0].triangles()
+        );
+    }
+
+    /// A sheet set into a solid, wound the wrong way, is the grille: a few hundred triangles inside
+    /// a part that is otherwise a perfectly ordinary shell. The answer has to be about the sheet
+    /// and not about the part, or the whole bonnet loses its culling to fix a radiator grille.
+    #[test]
+    fn a_sheet_inside_a_solid_is_told_apart_from_it() {
+        let mut shell = box_part("shell", [0.0, 1.0, 0.0], [2.0, 2.0, 4.0], 6);
+        // A panel standing just clear of the nose, wound away from it.
+        let mut panel = box_part("panel", [0.0, 1.0, 2.2], [1.4, 0.8, 0.02], 4);
+        for t in panel.indices.chunks_exact_mut(3) {
+            t.swap(0, 1);
+        }
+        let first = shell.positions.len() as u32;
+        shell.positions.extend(panel.positions.iter().copied());
+        shell.indices.extend(panel.indices.iter().map(|i| i + first));
+        shell.normals.clear();
+        shell.ensure_normals();
+
+        let solid_triangles = shell.triangles() - panel.triangles();
+        let model = model_of(vec![shell]);
+        let v = measure(&model, &[false]);
+        let flagged: Vec<bool> = v
+            .two_sided_triangles(0, model.parts[0].triangles())
+            .collect();
+        assert!(
+            flagged[..solid_triangles].iter().all(|n| !*n),
+            "the shell around the panel is a solid and must stay culled"
+        );
+        assert!(
+            flagged[solid_triangles..].iter().any(|n| *n),
+            "the panel is only ever seen from behind"
+        );
     }
 }

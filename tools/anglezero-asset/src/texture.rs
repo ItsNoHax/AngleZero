@@ -25,6 +25,8 @@ use crate::model::SourceModel;
 /// 155 KB mesh without changing what the arena has to hold.
 pub const ATLAS: usize = 256;
 
+
+
 /// The smallest power-of-two grid that holds one tile per material. 57 materials need 8×8, which
 /// at 256 across is 32 px a tile.
 pub fn tiles_across(materials: usize) -> usize {
@@ -57,6 +59,52 @@ impl Tile {
             self.v0 + (self.v1 - self.v0) * uv[1].clamp(0.0, 1.0),
         ]
     }
+}
+
+/// The whole-unit shift that brings a part's texture coordinates into the unit square.
+///
+/// Clamping in `map` assumes a coordinate outside the unit square means the source repeated its
+/// texture. Usually it does. But an exporter is also free to write the same square addressed from
+/// the other side — the 190E's every material arrives with V in [-1, 0], which is one flipped axis
+/// and not a repeat at all — and clamping that lands the entire part on one row of texels. Its
+/// alloys came out solid black off the top edge of a tile that has a correctly packed wheel in it,
+/// which is what "190E rims showing weird" was.
+///
+/// So: if the island spans less than a unit on an axis it fits in the square and is moved there
+/// whole, which cannot change how it samples. If it spans more, the source really is tiling,
+/// nothing an atlas can do will show that, and it is left to the clamp. Moving the island whole is
+/// also what keeps a triangle intact — wrapping each coordinate on its own would send any triangle
+/// straddling the seam the long way across the tile.
+///
+/// The tolerance is not decoration. A UV island that runs the full width of its image lands at
+/// [-0.0000006, 0.9999994] as often as at [0, 1], and `floor` puts that first coordinate in the
+/// cell below — so a hair of float noise asked for a whole-unit shift, the island moved to
+/// [1, 2], and `map` clamped every vertex of it onto the tile's last texel. That is what happened
+/// to the AE86's tyres: `pneu` is one image of tread and lettering across the full square, and the
+/// decal vanished into a single flat colour. An island grazing the boundary is already where it
+/// belongs; only one a clear distance outside is worth moving.
+pub fn unit_shift(uvs: &[[f32; 2]]) -> [f32; 2] {
+    /// Nothing this close to the edge counts as outside it. A thousandth is the same resolution
+    /// `weld` quantises texture coordinates to, and far finer than one texel of any tile.
+    const EDGE: f32 = 1.0e-3;
+    let mut shift = [0.0f32; 2];
+    for axis in 0..2 {
+        let mut lo = f32::INFINITY;
+        let mut hi = f32::NEG_INFINITY;
+        for uv in uvs {
+            lo = lo.min(uv[axis]);
+            hi = hi.max(uv[axis]);
+        }
+        if lo.is_finite() && hi - lo < 1.0 {
+            let by = -(lo + EDGE).floor();
+            // Only if it actually lands the island inside. A shift that leaves either end out is a
+            // different wrong answer, not a better one.
+            if lo + by >= -EDGE && hi + by <= 1.0 + EDGE {
+                shift[axis] = by;
+            }
+        }
+    }
+    shift
 }
 
 pub struct Atlas {
@@ -281,6 +329,39 @@ mod tests {
             assert!(m[0] >= t.u0 && m[0] <= t.u1, "{uv:?} mapped to {m:?}");
             assert!(m[1] >= t.v0 && m[1] <= t.v1, "{uv:?} mapped to {m:?}");
         }
+    }
+
+    /// The 190E's case: a whole model exported with V in [-1, 0], which is the unit square
+    /// addressed from the other side and not a repeat. Clamping put every alloy on one row of
+    /// texels and drew them black.
+    #[test]
+    fn an_island_outside_the_unit_square_is_moved_into_it() {
+        let uvs = [[0.011, -0.997], [0.982, -0.024], [0.5, -0.5]];
+        let shift = unit_shift(&uvs);
+        assert_eq!(shift, [0.0, 1.0]);
+        for uv in uvs {
+            let v = uv[1] + shift[1];
+            assert!((0.0..=1.0).contains(&v), "{uv:?} shifted to {v}");
+        }
+    }
+
+    /// An island that fills its image exactly, with float noise either side. `floor` alone read the
+    /// low end as belonging to the cell below and shifted the whole thing off the tile — the AE86's
+    /// tyre decal.
+    #[test]
+    fn an_island_grazing_the_boundary_is_left_alone() {
+        assert_eq!(unit_shift(&[[-6.0e-7, 0.5], [0.9999994, 0.5]]), [0.0, 0.0]);
+        assert_eq!(unit_shift(&[[0.0, 0.01], [1.0, 0.99]]), [0.0, 0.0]);
+    }
+
+    /// A source that genuinely tiles cannot be shown in an atlas at all, so it is left where it is
+    /// for the clamp to deal with — moving it would only pick a different wrong answer.
+    #[test]
+    fn a_tiling_island_is_left_alone() {
+        assert_eq!(unit_shift(&[[0.0, 0.0], [4.0, 3.0]]), [0.0, 0.0]);
+        assert_eq!(unit_shift(&[]), [0.0, 0.0]);
+        // Already inside, and stays: `floor` of a coordinate in [0, 1) is zero.
+        assert_eq!(unit_shift(&[[0.2, 0.3], [0.9, 0.8]]), [0.0, 0.0]);
     }
 
     #[test]

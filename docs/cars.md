@@ -36,8 +36,12 @@ added with a thirty-line TOML and no renderer change at all.
 
 There are twelve slots and a 6 MB arena behind them, so the limit anybody reaches is the arena —
 which is a number of bytes that can be measured, rather than a number of cars somebody picked. Seven
-cars at the budgets in this repo come to 3.7 MB, leaving room for about four more. A car that does
+cars at the budgets in this repo come to 5.05 MB, leaving room for about one more. A car that does
 not fit is refused by name on the title screen and the rest still load.
+
+That margin used to be four cars, and it was spent deliberately — see
+[Where the budget goes](#where-the-budget-goes) for what 15,000 triangles was not enough to draw.
+The arena is the thing to raise when the eighth car arrives, not the budgets to lower.
 
 ## What `inspect` is for
 
@@ -93,6 +97,66 @@ decimator handed the `body` category as one lump takes a third of the paint's de
 report prints where every triangle went, what each category cost in error, and warns when a
 category is losing its shape.
 
+### Why the budget is 24,000 and not 15,000
+
+Because a pixel count is not an importance, and the parts it underrates are the ones a player reads
+the car by. Every car here ran at 15,000 for a long time and three faults came out of it, all
+looking like different bugs and all being this one:
+
+* **The E36's kidney grille** drew as black shards. Two slatted grilles are a few hundred pixels
+  across the sweep, so they were allocated about forty triangles between them, and forty triangles
+  of slats is shrapnel. It survives culling perfectly well — turning culling off does not improve
+  it, which is what says the fault is the allocation and not the winding.
+* **The E36's alloys ate their own tyres.** An alloy's outer lip and a tyre's inner bead are the
+  same circle in the model, decimated separately. At 560 triangles the lip is a coarse polygon whose
+  edges cut across the bead, so the two interpenetrate and the wheel reads as a ragged chrome dish
+  with no sidewall. It is not camber, and the way to tell is to compile the same model at 90,000,
+  where the wheel is clean.
+* **The Golf's grille bar** left a gap between the headlights.
+
+None of these is a rendering bug and none of them has a fix in the renderer. The reason there was
+room to raise the budget is in [Levels of detail](#levels-of-detail) — the coarse levels were 30% of
+every file and are worth far less than that.
+
+### The half of it that was not the budget
+
+Raising the budget to 30,000 fixed all three, and then a fourth fault showed that half the problem
+had never been the budget at all. **The Golf's VW roundel and the trim around it were missing**, and
+raising `chrome` did not put them back — the category sat at 238 triangles at *any* weight.
+
+A part that comes in under its allocation never has the allocation enforced, so no weight in any
+config can rescue a part that the free-error pass has already flattened. And that pass was flattening
+this one: it asks for the cheapest mesh within an error nobody can see, and that error was 5 mm
+absolute — which is the entire relief of a badge. A flat disc is within 5 mm of a VW roundel, so a
+flat disc is what came back.
+
+The limit is now the *smaller* of 5 mm and 0.2% of the part's own extent, which leaves a 4.3 m body
+shell exactly where it was and gives the badge 0.2 mm. Chrome went 238 → 471 and the wheels' own
+brightwork doubled, having been quietly flattened the same way.
+
+That is also why the budget is 24,000 rather than the 30,000 the first three faults needed: with
+small parts no longer flattened, 20,000 is within 0.3% of 30,000's pixels on the E36's wheel and
+0.6% on its nose. The budget was paying for a bug.
+
+### What a category weight is really for
+
+The two changes above moved enough triangles around to expose which categories had been living off
+the slack, and the answer is worth writing down, because all three cases are a category that is
+*seen* far more than its pixel count says.
+
+* **Interiors.** The R34's cabin is 47,234 triangles as a single part and was weighted *down* to
+  0.4, reaching 606 triangles at 20% error — a cabin that is visible through the glass for the whole
+  descent. There is a cliff rather than a curve here: 1.0 is *worse* than 0.4 (21.5% at 1,557
+  triangles, because partial pruning takes components whole), and 2.0 lands at 1.81%. The E36 and the
+  Golf were the same story.
+* **Tyres against brightwork.** These pull harder than any other pair, because an alloy and a bumper
+  trim share `chrome` while the tyre has only `tyre`. The E36 at `chrome = 12.0` with nothing
+  opposing it put its tyres at 170 triangles a corner, which is a ring coarse enough for the alloy
+  inside it to cut across — the same artefact as the original fault, arrived at from the other side.
+* **A warning that stays put is geometry, not budget.** The AE86's tyres sit at 31–45% error at
+  2,300 triangles a corner and do not improve when given more. That is a model problem, and the tell
+  is a high triangle count and a high error at the same time.
+
 ### It shares out twice
 
 A bucket cannot always use its share. The E36's bodywork is within five millimetres of the original
@@ -122,6 +186,61 @@ because it had been declared full at 821 on the first pass and held there while 
 was refilled to nearly three times as much. Judging all four at the best of them fixes it: they now
 land within 7% of each other instead of a factor of nearly three. A corner that still cannot reach
 the levelled target simply returns less, which costs nothing — a target was never a promise.
+
+### Culling, and why the fix is a whole part at a time
+
+The console culls back faces and the visibility sweep does not, so something has to reconcile them.
+A source model is no help: both BMWs declare **every** material `doubleSided`, so the glTF flag
+carries no information at all. What the sweep does instead is render each view twice, once as the
+console will and once with everything drawn, and note each triangle that is the nearest surface,
+faces away, and leaves its pixel to something further off when culled. That is the question culling
+actually asks, asked once with the answer kept.
+
+**The answer is applied to a whole part, and that is a retreat from something better.** A part is not
+the unit a model winds consistently — the E36 mirrors its right-hand side and brings the winding
+across with it, so its off-side wheels read entirely as their own back face, while the Golf merges
+its whole exterior into one 50,880-triangle primitive with the grille inside it. Per part cannot say
+that the grille is a sheet and the wing beside it is not.
+
+So it was per triangle, with each part cut into a culled piece and a two-sided piece. That is the
+better answer in principle and it was a worse one on screen. Cutting a mesh means decimating the two
+halves with nothing relating one to the other, so both drift and the cut opens into a crack through
+the bodywork. Pinning the shared row of vertices — which meshoptimizer supports, and which a test
+confirmed held the seam — was not enough, because pinning fixes the seam and leaves the two interiors
+free. Measured as background pixels enclosed by the car's own silhouette, the split was worse than
+not splitting on four of five cars and worse than the *original* on four of five.
+
+What is left is a fraction: a part whose back-facing share passes `TWO_SIDED_SHARE` is drawn whole
+with culling off. The threshold is 15%, chosen because 35% loses the Golf's grille entirely and 5%
+measures identically to 15% while unculling more. It costs culling across a whole part where a sheet
+inside it was the reason — 16–52% of a car's compiled triangles, the E36 worst — against a class of
+crack that cannot happen if no mesh is ever divided.
+
+### What a decimator will not touch, and what happens next
+
+Two things stop meshoptimizer's topological pass dead, and both of them ended up on screen.
+
+**Geometry that was drawn twice.** The E39's front bumper is 15,784 triangles of which 3,201 are a
+second copy of a triangle already in it, corner for corner and the same way round. Nothing on screen
+says they are there — they rasterise the same pixels the same colour — but every edge they share is
+an edge with four faces on it, and there is no collapse a decimator will make across that. Welded
+without noticing, the bumper had 6,248 non-manifold edges out of 17,770 and the simplifier could not
+reduce it by a single triangle. Welding drops the repeats now, which is what makes the part
+simplifiable at all. Only repeats with the *same* winding: the other way round is a sheet a model
+deliberately made two-sided by backing it with itself.
+
+**A prune that takes everything.** `Prune` removes disconnected components whole, so a part that is
+a hundred small shells and no large one has nothing left once the target is small enough — which is
+every part of every car at LOD2. An empty answer used to be read as "the simplifier could not help"
+and the original was kept, which is the worst available outcome: the original is then far enough over
+the target to trip the sloppy vertex-clustering pass below, and that is how a bumper becomes
+shrapnel. Collapse alone always returns a surface, so when pruning empties a part the simplifier is
+asked again without it.
+
+Between them these two are what the coarse levels were failing on. LOD2 of both BMWs used to have
+the roof and half the greenhouse missing — a car you could see the scenery through from forty-five
+metres — and it was neither a budget nor a renderer fault: it was the sloppy pass being handed the
+whole part because the two passes before it had each been read as a failure.
 
 ### What the sweep does not answer
 
@@ -190,6 +309,37 @@ lamp.** Three rules do the refusing, and each of them fires on a real car in thi
 
 A brake or reverse lens is never inferred from position at all. It has to be named — in the model or
 in the config — because nothing about where a lens sits says what switches it on.
+
+### What a lens is painted
+
+A lit lens is its own colour at full brightness, which means the colour is scaled until its
+brightest channel reads as lit rather than each channel being floored. Flooring is the one thing
+that must not be done to a coloured lens: a tail lamp's dark red encodes to (0.54, 0.16, 0.16), and
+lifting every channel to 0.35 leaves a grey-pink — every rear lamp on every car painted the colour
+of a lamp that is switched off and dusty.
+
+**And only to a lens that has a colour.** A lamp cluster is not all lens: the E39's
+`tail_light_lod0` is 846 triangles of the dark grey backing the red lens is set into, and scaling a
+grey until its brightest channel is lit does not make it a brighter grey, it makes it white. Both of
+that car's rear clusters were coming out as white blobs with some red in them. A neutral surface has
+no ratio between its channels for the scaling to preserve, so it keeps the brightness the model gave
+it — which leaves a white headlight lens white, because it was already there, and a grey backing
+grey.
+
+### What is not a lamp
+
+`reflector` reads as the silvered bowl behind a bulb and was in the keyword list for exactly that
+reason. On the seven cars here it names that on none of them: the E39 wears it on a 4.5 m
+mirror-finish shell running the length of the car and the 190E on `INT_Reflector` in the cabin.
+Between them that was 10,712 of the E39's 12,712 `light` triangles — 84% of a category weighted at
+8.0, spent on parts that are not lamps — which left the four real lenses a couple of hundred
+triangles between them. It is out of the list, and no car lost a lamp.
+
+The general shape of that mistake is worth recognising, because `Light_Map` was the same mistake
+one model earlier: a word that names a lamp on the car it was learned from and something else
+entirely on the next one. The check is the `Lights:` block in the report, which says where every
+lamp landed, and the `light` line in the budget table, which says how much of the category is
+actually lens.
 
 ### When a car comes out with no headlights
 
@@ -272,15 +422,26 @@ A car carries three copies of itself: LOD0 for the one being driven, LOD1 beyond
 45 m. Each is decimated from the welded original rather than from the level above, so the coarsest
 carries one decimation's error and not three.
 
-With eight cars on screen this halves the vertex load — 260,223 to 138,225 a frame — for 0.05% of
-pixels differing at all. It costs file size: the E36 is 580 KB, of which 129 KB is the texture and
-the rest is geometry across three levels.
+With eight cars on screen this halves the vertex load for 0.05% of pixels differing at all. It costs
+file size: the E36 is 820 KB, of which 129 KB is the texture and the rest is geometry across three
+levels.
 
-That is what made the arena the binding limit. Seven cars run from the 190E's 450 KB to the R34's
-627 KB and come to 3.7 MB together — against an arena that was 1.5 MB, which is why the four slots
+The coarse levels are 3,000 and 1,200 against LOD0's 24,000, and they were 4,500 and 1,800 against
+15,000. Cutting them while raising LOD0 is close to free and was what paid for the raise: at 4,500
+and 1,800 the two of them were 30% of every file, spent on a car that is eighteen metres away and a
+hundred pixels wide.
+
+That is what made the arena the binding limit. Seven cars run from the AE86's 702 KB to the R34's
+874 KB and come to 5.54 MB together — against an arena that was 1.5 MB, which is why the four slots
 next to it were never once reached: the third car was refused for want of bytes long before a
 fourth was asked for. The arena is 6 MB now and the slots are twelve, deliberately more than it can
 hold, so that the failure names the resource that actually ran out.
+
+5.54 MB is up from 5.05. Most of the difference is what the free-error fix bought — bodywork that
+was being flattened for nothing now spends the budget it had been allocated all along — and 125 KB
+of it is the E39 alone, which is the one car asking for 32,000 triangles rather than 24,000 and
+says why in its own config. It leaves about 470 KB, which is no longer a spare car. The arena is
+the thing to raise for the eighth.
 
 ## Measuring
 
@@ -296,18 +457,60 @@ rasteriser and are only good for comparing one run against another — it is fil
 console is not, so it under-reports what vertices cost. Real numbers come off the hardware, from
 the `CAR` and `US` fields in the on-device overlay.
 
+## Which way round a surface is
+
+The console culls back faces and a source model cannot be trusted to have wound anything. Every
+material on both BMWs and on the Golf is declared `doubleSided`, which is the exporter's way of
+saying it never checked — so the flag says nothing, and honouring it would mean drawing whole cars
+with culling off.
+
+What can be measured is the thing that actually matters, which is not "is this wound inwards" but
+**"does culling this cost the picture anything"**. The visibility sweep therefore draws each of its
+72 views twice, once with everything and once culled the way the GE culls, and compares them: a pixel
+whose nearest surface faces away, and which the culled pass leaves to something further off or to
+nothing at all, is a pixel where culling opens a hole. The triangle that was closing it is marked.
+
+Three things about that are worth knowing.
+
+* **It is per triangle, not per part.** The E36 could have got away with per part — its mirrored
+  instances came out of the exporter with the whole right-hand side wound inwards, headlight,
+  alloys and all, so the parts are uniform. The Golf merges its entire exterior into one
+  50,880-triangle primitive with the radiator grille inside it, and no part-wide answer can say
+  that the grille is a sheet while the wing beside it is not.
+* **The comparison sweep runs at 512 pixels, not 128.** The coarse buffer is right for asking how
+  much of the car a part is and useless for asking about one slat of a grille: at 3.3 cm a pixel the
+  Golf's grille came back with 209 triangles flagged out of some thousands, and drew as a hole with
+  a few slats left in it.
+* **A part is split rather than flagged.** The triangles that need it become a piece of their own,
+  which welds, is allocated and decimates separately, and is emitted as a second mesh over the same
+  vertices with `MESH_TWO_SIDED` set — one more draw call, no more triangles, and the seam between
+  the two is one the simplifier will not collapse across, which is what stops a grille being smeared
+  into the bumper it sits in.
+
+It comes to 0.5% of the Golf's triangles and 3% of the E36's, and it is the difference between a
+grille and a hole you can see the scenery through. Cars go from 13 draw calls to between 16 and 25.
+
 ## When a part looks wrong
 
 A wheel is about twenty pixels on a 480-wide screen, which is too few to tell a bad mesh from a
-small one. Render the part out of the compiled asset instead — on its own, large — next to the same
-part read out of the source `.glb`. One is what the converter produced and the other is what it was
-given, and the difference is the answer. That is how the alloys were sorted out: the source was a
-clean five-spoke wheel with a caliper behind it and the compiled one was not.
+small one. Render the part out of the compiled asset instead — on its own, large. `azview` does
+exactly that, with the console's own rules: opaque meshes then blended ones, culling except where the
+mesh or material says otherwise, and the same 16-bit depth buffer over the same 0.4 m to 2400 m
+frustum, which is about 2.4 mm at eight metres and is why shells millimetres apart fight.
 
-**Cull backfaces when you do.** A throwaway rasteriser that draws every triangle shows the far side
-of the tyre through the hole in the near side, which covers the alloy completely and makes every
-wheel look like a featureless blob however good it is. The GE culls; a debugging tool that does not
-will lie to you, and it cost a wrong diagnosis here before it was noticed.
+```bash
+cargo run --release -p anglezero-asset --bin azview -- \
+    assets/compiled/bmw_e39.azcar /tmp/nose.png --yaw 30 --pitch 10 --dist 3 --look 0,0.5,2
+```
+
+`--only body`, `--hide interior` and `--lod 2` narrow it down; `--white` puts a pale background
+behind the car, which is how you tell a black part from a hole. **`--no-cull` is the diagnostic**:
+run it with and without, and anything that appears is something culling is throwing away.
+
+Rendering at float depth, or without culling, shows a clean car and hides the fault being looked
+for. That is not hypothetical — a throwaway rasteriser that drew every triangle showed the far side
+of a tyre through the hole in the near side, made every wheel look like a featureless blob, and cost
+a wrong diagnosis before it was noticed.
 
 ## When the car is the right way round and steers with the wrong wheels
 

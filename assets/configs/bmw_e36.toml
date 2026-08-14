@@ -9,8 +9,6 @@
 
 name = "BMW E36"
 
-# Lands at 13,847, and where the last 1,150 do not go is the interesting part.
-#
 # The bodywork saturates at about 3,600 triangles. Sweeping the budget from 5,000 to 40,000 moves
 # it from 2,616 to 4,876 and no further, because past that point the converter can already draw
 # every panel within five millimetres of the original and refuses to spend more on something it
@@ -21,9 +19,15 @@ name = "BMW E36"
 # pass hands what the body could not use to whatever can — so the weights below are about which of
 # those gets it, not about squeezing the body.
 #
-# 15,000 is where it stops paying: the remainder is spread across categories that have all reached
-# the point where more does not show at 480x272.
-triangles = 15000
+# This said 15,000 for a long time, on the grounds that the remainder went to categories where more
+# does not show at 480x272. That was true of the *categories* and false of two parts inside them:
+# at 15,000 the kidney grille had about forty triangles and drew as black shards, and the alloys had
+# 560 and cut into their own tyres.
+#
+# 24,000 rather than the 30,000 those two first needed, because `simplify.rs` no longer lets the
+# free-error pass flatten a small part — which was costing more detail than the budget was. See
+# `docs/cars.md`, "Why the budget is 24,000 and not 15,000".
+triangles = 24000
 
 # No `[handling]` table on purpose. The descent was tuned around a 1420 kg saloon and this is that
 # saloon, so the E36 takes the defaults — and a car that says nothing about how it drives is the
@@ -33,7 +37,10 @@ triangles = 15000
 # LOD0 for the player, LOD1 for a car a few lengths away, LOD2 for anything far enough back that
 # it is a hundred pixels wide. Each is decimated from the welded original rather than from the
 # level above, so LOD2 carries one decimation's error instead of three.
-lods = [4500, 1800]
+#
+# These were 4,500 and 1,800, which between them was 30% of the file — spent on a car eighteen
+# metres away. Trimming them is what paid for LOD0's raise.
+lods = [3000, 1200]
 
 [reduce]
 # Wheels and brightwork pull against each other, because the alloys and the bumper trim are both
@@ -44,6 +51,19 @@ lods = [4500, 1800]
 # Past this the tyres fall off a cliff — chrome 20 with wheel 1.2 leaves them 69 triangles each,
 # which is a hexagon.
 wheel = 1.5
+
+# The tyres, held up against `chrome` above rather than against the budget. These two pull on each
+# other harder than any other pair in this file: `chrome` is what the alloys and the bumper trim
+# share, and left at 12.0 with nothing opposing it the tyres fall to about 170 triangles a corner —
+# a coarse ring that the alloy inside it then cuts across. At 3.0 they are 464 at 2.9% error, which
+# is what the rest of the car manages, and the trim keeps its own.
+tyre = 3.0
+
+# The cabin, which is seen through the glass from the chase camera for the whole descent. Left
+# unweighted it took 433 triangles at 15.5% error — by a distance the worst figure this car
+# produced, and visible as a seat that is no longer seat-shaped. 4.0 brings it to 1.98%, in line
+# with the bodywork, for about 3,000 triangles the body could not have used anyway.
+interior = 4.0
 
 # Headlights and tail lamps are the other thing that says which car this is, and everything else
 # here takes their share unless they are held up too: raising `wheel` on its own once took the
@@ -90,3 +110,17 @@ match = ["wheel_bmw_aplg", "Object_4.", "amdb11_brakedisc"]
 # Two things it does say, in warnings rather than in silence: the rear bumper strip and the
 # high-level lamp in the back window are single lenses on the car's centreline, and a lamp there
 # belongs to no side, so neither is fitted. The pair in the rear cluster does the braking.
+
+# The model says this trim is mid grey. It is black plastic.
+#
+# `BMWE36_paint.004` is 3,860 triangles at rgba(0.41, 0.41, 0.41), untextured — the lip along the
+# bottom of the front bumper, the sills, and the strip under the rear valance. Nothing about that is
+# a budget, a category or a UV: the model simply declares a colour, and it draws as a pale grey band
+# round the bottom of the car where a black splitter belongs. No weight can move it and no sweep can
+# see anything wrong with it.
+#
+# Found by painting candidates and looking, which is what this rule is best at: give a material a
+# colour nothing else on the car has, compile, and the render says which surface wears it.
+[[materials.colour]]
+match = ["BMWE36_paint.004"]
+rgb = [28, 28, 30]

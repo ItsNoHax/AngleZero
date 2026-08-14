@@ -12,8 +12,8 @@ name = "Nissan R34 GT-R"
 # R34's length to the centimetre.
 scale = 100.0
 
-triangles = 15000
-lods = [4500, 1800]
+triangles = 24000
+lods = [3000, 1200]
 
 [wheels]
 # Every wheel part carries its material in its node name, which is what makes 388 of them one
@@ -42,7 +42,7 @@ tyre = 2.5
 
 # Interior is 47,234 triangles under one material, second only to the paint, and none of it is
 # visible at night from behind the car.
-interior = 0.4
+interior = 2.0
 
 # The RB26 under the bonnet, at 39,023 triangles the fourth largest thing on the car and never once
 # on screen. Same argument as the Golf's `SM_Engine`, and the same reason the visibility sweep does

@@ -49,6 +49,7 @@ pub struct Part {
     pub indices: Vec<u32>,
 }
 
+#[derive(Clone)]
 pub struct Material {
     pub name: String,
     pub base_color: [f32; 4],

@@ -25,8 +25,22 @@ use crate::wheels::Found;
 /// everywhere, so the German and Russian for the parts that matter are here too: the E36's rims
 /// are `felgen` and its headlights are `fara`.
 const WINDOW_WORDS: &[&str] = &["glass", "glas", "window", "windshield", "windscreen", "screen"];
+/// `reflector` is deliberately absent, having been tried and taken out again — and not because a
+/// reflector does not matter to how a car looks. It is that the word names the silvered bowl
+/// *behind* a bulb, and a bowl is not a lens.
+///
+/// That distinction is exactly what the category decides. `light` is asked two questions: how much
+/// of the triangle budget a part deserves, and — in `lamps.rs` — where the car's lamps are, which
+/// is measured from the mean of a lens's vertices. A bowl answers the second wrongly by sitting
+/// behind the lens instead of on it, and the first ruinously by being large: the E39's `reflector`
+/// and `textured_reflector` are 10,634 source triangles against 1,878 for both its rear lenses, so
+/// a category weighted at 8.0 went mostly on bowls and drew the tail lights as white blobs.
+///
+/// Nothing stops being drawn by this. The bowls are mirror-finish and near-white, so they fall
+/// through to the metallic test at the end of `decide` and come out as `chrome`, which is what a
+/// chromed bowl is.
 const LIGHT_WORDS: &[&str] = &[
-    "light", "lamp", "lens", "fara", "signal", "blinker", "leuchte", "indicator", "reflector",
+    "light", "lamp", "lens", "fara", "signal", "blinker", "leuchte", "indicator",
 ];
 const TYRE_WORDS: &[&str] = &["tyre", "tire", "rubber", "reifen", "tread"];
 const CHROME_WORDS: &[&str] = &["chrom", "chrome", "felgen", "alloy", "rim", "mirror"];

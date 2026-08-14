@@ -131,6 +131,19 @@ pub const MATERIAL_BLEND: u8 = 1 << 0;
 /// Drawn with back-face culling off, for surfaces modelled as single sheets.
 pub const MATERIAL_TWO_SIDED: u8 = 1 << 1;
 
+/// Mesh flags.
+/// Drawn with back-face culling off, whatever the material says.
+///
+/// Two-sidedness is a property of a *surface* and the six categories are not fine enough to carry
+/// it: a car's bodywork is a closed shell that must be culled and also, in the same category, the
+/// black plastic behind the grille, which is one sheet of triangles wound whichever way the model's
+/// author left them. Culled, that sheet is a hole you can see the scenery through.
+///
+/// So the compiler measures which parts read as their own back face across the visibility sweep and
+/// puts them in a mesh of their own, sharing the category's material and vertices and costing one
+/// more draw call. This is the field the format reserved for a decision like this.
+pub const MESH_TWO_SIDED: u16 = 1 << 0;
+
 /// Why a file was refused. Every one of these is a reason not to draw anything.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -185,6 +198,11 @@ pub struct Mesh {
 }
 
 impl Mesh {
+    /// Whether this run has to be drawn with culling off, over and above what its material says.
+    pub fn two_sided(&self) -> bool {
+        self.flags & MESH_TWO_SIDED != 0
+    }
+
     fn decode(b: &[u8]) -> Mesh {
         Mesh {
             first_index: le_u32(b, 0),

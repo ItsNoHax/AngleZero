@@ -23,14 +23,43 @@ use angle_zero::mesh::Vertex;
 /// transforming the same source vertex through two different node paths.
 const WELD_GRID: f32 = 1.0e-4;
 
-/// Geometric error that counts as free, in metres, and absolute rather than relative on purpose.
+/// Geometric error that counts as free, in metres.
 ///
-/// A fraction of each part's own size would mean two entirely different things: half a per cent of
-/// a wing mirror is a third of a millimetre, and half a per cent of a whole body shell is two
-/// centimetres of panel that has moved. Five millimetres is under a pixel at every distance the
-/// car is ever seen from — it is 4 cm to a pixel from the chase camera and 3 cm on the title
-/// screen — so it is free on the bodywork and still lets flat glass collapse to nothing.
-const FREE_ERROR: f32 = 0.005;
+/// Half a millimetre, which is five times the weld grid and so barely above the noise the welder
+/// has already decided is nothing.
+///
+/// This was 5 mm, on the argument that 5 mm is under a pixel at every distance the car is seen
+/// from — 4 cm to a pixel from the chase camera — and so free on the bodywork. The arithmetic is
+/// right and the conclusion does not follow, because the pass this feeds asks for two triangles and
+/// takes whatever the error limit allows. What that flattens is not the *flat* geometry it was
+/// meant for but the *smooth* geometry, and a car body is smooth: a door skin curves by a few
+/// millimetres across its whole width, so at 5 mm the whole panel collapses, and every crease,
+/// shutline and trim strip standing proud of it goes with it. The E39 is the case that showed it —
+/// 124,949 welded body triangles came out at 3,137 and stayed within a few hundred of that under a
+/// budget twenty-five times its allocation, which is the tell, because a part that comes in under
+/// its allocation never has the allocation enforced and no weight in any config can rescue it. Its
+/// grille slats, headlight surrounds and bumper valance were all inside 5 mm of the paint behind
+/// them. At half a millimetre the same body compiles to 10,283 and they come back.
+///
+/// Nothing was lost by dropping it. Truly flat geometry — glass, floor pans, door cards — collapses
+/// at an error of essentially zero, so it never needed the headroom; the headroom only ever bought
+/// the collapse of things that had a shape.
+const FREE_ERROR: f32 = 0.0005;
+/// …but never more than this much of a part's own size, whichever is smaller.
+///
+/// Absolute alone was wrong in one direction and relative alone is wrong in the other, which is why
+/// this is both. An absolute limit that suits a body shell is the *entire relief* of a badge: a VW
+/// roundel is 11 cm across and stands about 5 mm off the grille, so a flat disc was within the free
+/// error of the real thing and the cheap pass returned one. That is exactly what the Golf did — its
+/// badge and the trim around it went from 3,298 triangles to 238 and the emblem disappeared, and
+/// raising `chrome` did not put it back, because a part that comes in under its allocation never
+/// has the allocation enforced.
+///
+/// A fifth of a per cent scales that down with the part: the roundel is allowed 0.22 mm and has to
+/// keep its shape. Now that `FREE_ERROR` is half a millimetre this only binds below about 25 cm of
+/// extent — the small trim and badges it was written for — and everything larger is held by the
+/// absolute figure.
+const FREE_ERROR_FRACTION: f32 = 0.002;
 /// The smallest thing worth asking for when finding out what a part costs at no visual price.
 const MIN_TRIANGLES: usize = 2;
 /// What a unit of texture slide costs against a metre of geometry, when deciding a collapse. See
@@ -92,6 +121,20 @@ pub fn weld(vertices: &mut Vec<Vertex>, attrs: &mut Vec<Attr>, indices: &mut Vec
 
     // A collapsed triangle is two of its corners becoming one vertex. They draw nothing and they
     // confuse the decimator's topology, so they go.
+    //
+    // So does a triangle that repeats one already kept, corner for corner and the same way round.
+    // Two of those rasterise the same pixels the same colour, so nothing on screen says they are
+    // there — but every edge they share is an edge with four faces on it, and a decimator will not
+    // collapse across that. The E39's front bumper is 15,784 triangles of which 3,201 are a second
+    // copy of a triangle already in it, and welding them without this left 6,248 non-manifold edges
+    // out of 17,770: meshoptimizer's topological pass could not touch it, `Prune` then discarded the
+    // whole part as unreachable components, and what reached the console was the sloppy fallback's
+    // cluster soup. It looked like a shattered bumper and it was a mesh that had been drawn twice.
+    //
+    // Only a repeat with the same winding. The other way round is a sheet a model deliberately made
+    // two-sided by backing it with itself, and dropping half of that leaves a surface that
+    // disappears when you walk round it.
+    let mut seen: HashMap<[u32; 3], ()> = HashMap::with_capacity(indices.len() / 3);
     let mut kept = Vec::with_capacity(indices.len());
     for t in indices.chunks_exact(3) {
         let (a, b, c) = (
@@ -99,7 +142,19 @@ pub fn weld(vertices: &mut Vec<Vertex>, attrs: &mut Vec<Attr>, indices: &mut Vec
             remap[t[1] as usize],
             remap[t[2] as usize],
         );
-        if a != b && b != c && a != c {
+        if a == b || b == c || a == c {
+            continue;
+        }
+        // Rotated so the smallest corner leads, which makes the key the same for the three ways of
+        // writing one triangle and different for the way round it is wound.
+        let key = if a <= b && a <= c {
+            [a, b, c]
+        } else if b <= c {
+            [b, c, a]
+        } else {
+            [c, a, b]
+        };
+        if seen.insert(key, ()).is_none() {
             kept.extend_from_slice(&[a, b, c]);
         }
     }
@@ -116,6 +171,22 @@ pub fn weld(vertices: &mut Vec<Vertex>, attrs: &mut Vec<Attr>, indices: &mut Vec
     *vertices = out;
     *indices = kept;
     before - vertices.len()
+}
+
+/// How big a part is, as the diagonal of its bounding box. Metres, like everything else here.
+fn extent(vertices: &[Vertex]) -> f32 {
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for v in vertices {
+        for (i, c) in [v.x, v.y, v.z].into_iter().enumerate() {
+            lo[i] = lo[i].min(c);
+            hi[i] = hi[i].max(c);
+        }
+    }
+    if vertices.is_empty() {
+        return 0.0;
+    }
+    let d = [hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]];
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
 /// Decimates to a triangle target and compacts what is left.
@@ -177,17 +248,18 @@ pub fn reduce(
     // First, find out what this part costs at no visual price at all.
     //
     // meshoptimizer stops at whichever binds first, the triangle target or the error limit. Asked
-    // for almost nothing within half a per cent of the part's own size, it returns the cheapest
-    // mesh that is still honestly the same shape. Flat glass, floor pans and door cards collapse
-    // to a fraction of their allocation this way, and a budget spent on a windscreen that a
-    // quarter of the triangles would have drawn identically is a budget taken from the wheels.
+    // for almost nothing within an error nobody can see, it returns the cheapest mesh that is still
+    // honestly the same shape. Flat glass, floor pans and door cards collapse to a fraction of
+    // their allocation this way, and a budget spent on a windscreen that a quarter of the triangles
+    // would have drawn identically is a budget taken from the wheels.
     //
     // Only used when it comes in under the allocation. When it does not, the allocation is what
-    // gets enforced.
+    // gets enforced — which is why the limit below has to be right in *both* directions. A part
+    // that this pass flattens is a part no weight in any config can rescue.
     let mut free_error = 0.0f32;
     let cheap = simplify(
         MIN_TRIANGLES * 3,
-        FREE_ERROR,
+        FREE_ERROR.min(extent(vertices) * FREE_ERROR_FRACTION),
         meshopt::SimplifyOptions::Prune | meshopt::SimplifyOptions::ErrorAbsolute,
         &mut free_error,
     );
@@ -209,12 +281,30 @@ pub fn reduce(
     // the E36's wheel hardware came out at 1,060 against a target of 180, at 24% error, which is a
     // decimator being asked to do something it structurally cannot. Pruning drops whole small
     // components instead, which is the only reduction that works on a bag of tiny closed shells.
-    let reduced = simplify(
+    let mut reduced = simplify(
         target_triangles * 3,
         1.0,
         meshopt::SimplifyOptions::Prune,
         &mut error,
     );
+
+    // Pruning can take everything, and an empty answer is about pruning rather than about the part.
+    // Components are removed whole, so a part that is a hundred small shells and no large one has
+    // nothing left once the target is small enough — which is every part of every car at LOD2.
+    //
+    // Reading that as "the simplifier could not help" and keeping the original is the worst
+    // available answer, because the original is then far enough over the target to trip the sloppy
+    // pass below, which is how a bumper becomes shrapnel. Collapse alone always returns a surface,
+    // so ask for one.
+    if reduced.is_empty() {
+        error = 0.0;
+        reduced = simplify(
+            target_triangles * 3,
+            1.0,
+            meshopt::SimplifyOptions::None,
+            &mut error,
+        );
+    }
     if !reduced.is_empty() {
         *indices = reduced;
     }

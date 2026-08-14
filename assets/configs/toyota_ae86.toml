@@ -12,13 +12,13 @@ name = "Toyota AE86"
 # The model is 3.49 m long and a Trueno is 4.18 m, uniformly 0.835 of life size.
 scale = 1.2
 
-triangles = 15000
+triangles = 24000
 
 # Coarser copies of the whole car, for when it is not the one being driven. The plan's shape:
 # LOD0 for the player, LOD1 for a car a few lengths away, LOD2 for anything far enough back that
 # it is a hundred pixels wide. Each is decimated from the welded original rather than from the
 # level above, so LOD2 carries one decimation's error instead of three.
-lods = [4500, 1800]
+lods = [3000, 1200]
 
 [wheels]
 # There are no wheel nodes to match: all four tyres are one 98,000-triangle mesh and all four rims

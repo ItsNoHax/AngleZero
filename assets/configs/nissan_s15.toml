@@ -11,8 +11,8 @@ name = "Nissan S15"
 # front lip and a rear diffuser, so 4.50 is the right answer rather than a rounding error.
 scale = 100.0
 
-triangles = 15000
-lods = [4500, 1800]
+triangles = 24000
+lods = [3000, 1200]
 
 [wheels]
 # The corners are named twice over, because the wheels came from another car: the rim is a Subaru

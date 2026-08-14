@@ -12,8 +12,8 @@ name = "Mercedes 190E"
 
 # 4.43 m across the bounding box against a real W201's 4.42 m. Already life size in metres.
 
-triangles = 15000
-lods = [4500, 1800]
+triangles = 24000
+lods = [3000, 1200]
 
 [wheels]
 # Six of the seven wheel meshes, by the only names the model has:

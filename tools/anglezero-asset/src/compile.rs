@@ -48,9 +48,15 @@ const AMBIENT: f32 = 0.45;
 const DIFFUSE: f32 = 0.55;
 /// Lights read as lit rather than shaded: a lamp lens with a shadow on it looks broken.
 const LIGHT_FLOOR: f32 = 0.92;
+/// What fraction of a part has to read as its own back face before the whole part is drawn with
+/// culling off. See where it is used.
+const TWO_SIDED_SHARE: f32 = 0.15;
 /// How bright a lamp lens's brightest channel is made, so the glass looks lit rather than merely
 /// pale. Not 1.0: the additive glow the renderer puts over the lens has to have somewhere to go.
 const LENS_LIT: f32 = 0.88;
+/// How far from grey a lens has to be before being lit is worth doing to it, as a fraction of its
+/// own brightest channel. Below this there is no hue to preserve and scaling only whitens it.
+const LENS_HUE: f32 = 0.2;
 
 /// How far away each level takes over, in metres.
 ///
@@ -82,7 +88,10 @@ struct Piece {
     /// What the config says this part is worth, over and above its category. Multiplies its
     /// measured pixels when the bucket's budget is shared out between its parts.
     weight: f32,
-    source_triangles: usize,
+    /// Whether the console's culling would turn this part into a hole, so it is drawn with culling
+    /// off. A whole part at a time — see where it is decided for why it is never a part of one.
+    two_sided: bool,
+    node: String,
 }
 
 /// One output draw call: a category, optionally belonging to a wheel.
@@ -101,6 +110,10 @@ struct Bucket {
     /// Pixels this bucket's parts own across the visibility sweep. The budget follows this.
     pixels: u64,
     weight: f32,
+    /// Where in `indices` the two-sided pieces begin, once flattened. Everything before it is
+    /// culled and everything from it on is not, which is what lets one bucket be drawn as two
+    /// meshes over one vertex array.
+    two_sided_from: usize,
 }
 
 impl Bucket {
@@ -117,13 +130,25 @@ impl Bucket {
     }
 
     /// Concatenates the surviving pieces into the one array the bucket is drawn from.
+    ///
+    /// Culled pieces first, then the ones that have to be drawn two-sided, so the boundary between
+    /// them is a single index and the bucket can be issued as two draws over one vertex array
+    /// rather than as two buckets that would each have wanted their own share of the budget.
     fn flatten(&mut self) {
+        // `false` sorts before `true`, and the sort is stable, so this only moves the two-sided
+        // pieces to the end and leaves every other piece where it was.
+        self.pieces.sort_by_key(|p| p.two_sided);
+        let mut boundary = 0;
         for p in &self.pieces {
             let base = self.vertices.len() as u32;
             self.vertices.extend_from_slice(&p.vertices);
             self.uvs.extend(p.attrs.iter().map(|a| a.uv));
             self.indices.extend(p.indices.iter().map(|i| i + base));
+            if !p.two_sided {
+                boundary = self.indices.len();
+            }
         }
+        self.two_sided_from = boundary;
         self.pieces.clear();
     }
 }
@@ -214,6 +239,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut dropped_by_name = 0usize;
+    let mut two_sided_triangles = 0usize;
     for (i, part) in model.parts.iter().enumerate() {
         if config.reduce.drop_hidden && seen.pixels[i] == 0 {
             continue;
@@ -236,6 +262,14 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             .unwrap_or([0.0; 3]);
 
         let material = &model.materials[part.material];
+        // A config may say the model is wrong about a material's colour outright. Applied before
+        // everything the category does to it, so a lens named here is still lit and a window named
+        // here still gets its alpha.
+        let mut material = material.clone();
+        if let Some(rgb) = config.materials.colour_for(&material.name) {
+            material.base_color = [rgb[0], rgb[1], rgb[2], material.base_color[3]];
+        }
+        let material = &material;
         let base = base_colour(material, category);
         let tile = atlas.tiles[part.material];
 
@@ -251,6 +285,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                     indices: Vec::new(),
                     source_triangles: 0,
                     pixels: 0,
+                    two_sided_from: 0,
                     // Wheels are weighted up on top of their category. They are small on screen
                     // and, with the lights, most of what says which car this is — and there are
                     // four of them sharing one allocation, so an unweighted split gives each a
@@ -266,16 +301,13 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             }
         };
         let packed = pack(base);
-        let mut piece = Piece {
-            vertices: Vec::with_capacity(part.positions.len()),
-            attrs: Vec::with_capacity(part.positions.len()),
-            indices: part.indices.clone(),
-            pixels: seen.pixels[i] as u64,
-            weight: config.reduce.part_weight(&part.node, &part.parent),
-            source_triangles: part.triangles(),
-        };
+        // Where this part's texture coordinates sit relative to the unit square, before the tile
+        // clamps them into it. See `texture::unit_shift`.
+        let shift = crate::texture::unit_shift(&part.uvs);
+        let mut vertices = Vec::with_capacity(part.positions.len());
+        let mut attrs = Vec::with_capacity(part.positions.len());
         for (j, (v, n)) in part.positions.iter().zip(&part.normals).enumerate() {
-            piece.vertices.push(Vertex::new(
+            vertices.push(Vertex::new(
                 v[0] - origin[0],
                 v[1] - origin[1],
                 v[2] - origin[2],
@@ -284,16 +316,49 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             // A part with no texture coordinates at all still gets a valid one: its tile is a flat
             // colour, so any point inside it is the same answer.
             let uv = part.uvs.get(j).copied().unwrap_or([0.0, 0.0]);
-            piece.attrs.push(Attr {
+            attrs.push(Attr {
                 light: light_at(*n, category),
-                uv: tile.map(uv),
+                uv: tile.map([uv[0] + shift[0], uv[1] + shift[1]]),
             });
         }
 
+        // A part is drawn two-sided, whole, if the sweep found any triangle in it that culling
+        // would turn into a hole. Whole is the operative word, and it was learned the hard way: an
+        // earlier version cut the part into a culled half and a two-sided half so that a grille
+        // sheet could keep its culling while the bumper around it kept none, which is a better
+        // answer in principle and was a worse one in practice.
+        //
+        // Cutting a mesh means decimating the two halves against each other with nothing relating
+        // them, and both drift. Pinning the row of vertices along the cut was not enough — pinning
+        // fixes the seam and leaves the interiors free, and what came out was worse tearing than
+        // before on three of the five cars it was meant to help. Not cutting at all beat it on four
+        // of five and beat the *original* on four of five too.
+        //
+        // What it costs is culling on a whole part where a sheet inside it was the reason. That is
+        // a fill cost on parts a car has a few dozen of, against a class of crack that cannot
+        // happen if no mesh is ever divided.
+        let back_only = seen
+            .two_sided_triangles(i, part.triangles())
+            .filter(|b| *b)
+            .count();
+        let two_sided = back_only as f32 > part.triangles() as f32 * TWO_SIDED_SHARE;
+
+        let weight = config.reduce.part_weight(&part.node, &part.parent);
         let bucket = &mut buckets[slot];
-        bucket.pixels += piece.pixels;
-        bucket.source_triangles += piece.source_triangles;
-        bucket.pieces.push(piece);
+        bucket.pixels += seen.pixels[i] as u64;
+        bucket.source_triangles += part.triangles();
+        if two_sided {
+            two_sided_triangles += part.triangles();
+        }
+        bucket.pieces.push(Piece {
+            vertices,
+            attrs,
+            pixels: seen.pixels[i] as u64,
+            indices: part.indices.clone(),
+            weight,
+            two_sided,
+            node: part.node.clone(),
+        });
     }
 
     // The four corners get the same budget, whatever the sweep happened to see of each.
@@ -329,6 +394,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     }
     if dropped_by_name > 0 {
         report.note_dropped_by_name(dropped_by_name, config.reduce.drop.len());
+    }
+    if two_sided_triangles > 0 {
+        report.note_two_sided(two_sided_triangles);
     }
 
     // Weld first, then spend the budget. Welding changes what a triangle costs, so a budget shared
@@ -456,16 +524,31 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             };
             let index_count = (indices.len() as u32) - first_index;
             level_triangles += index_count as usize / 3;
-            meshes.push(Mesh {
-                first_index,
-                index_count,
-                material: categories.iter().position(|c| *c == b.category).unwrap() as u16,
-                wheel: b.wheel.map(u16::from).unwrap_or(NO_WHEEL),
-                name,
-                flags: 0,
-                center: centre,
-                radius,
-            });
+            // One run, or two where the bucket holds sheets as well as solids: same material, same
+            // vertices, one extra draw call, and the second is issued with culling off.
+            let split = b.two_sided_from as u32;
+            for (at, count, flags) in [
+                (first_index, split, 0),
+                (
+                    first_index + split,
+                    index_count - split,
+                    azcar::MESH_TWO_SIDED,
+                ),
+            ] {
+                if count == 0 {
+                    continue;
+                }
+                meshes.push(Mesh {
+                    first_index: at,
+                    index_count: count,
+                    material: categories.iter().position(|c| *c == b.category).unwrap() as u16,
+                    wheel: b.wheel.map(u16::from).unwrap_or(NO_WHEEL),
+                    name,
+                    flags,
+                    center: centre,
+                    radius,
+                });
+            }
         }
 
         level_ranges.push((
@@ -669,16 +752,23 @@ fn base_colour(material: &crate::model::Material, category: Category) -> [f32; 4
     // red stays red and simply gets brighter. This is the emissive material the lighting wants, and
     // there is nowhere else to put one: the renderer's entire material system is two flags and a
     // vertex colour, and the vertex colour is this.
+    //
+    // Only for a lens that has a colour, though, and that is the other half of the same argument. A
+    // lamp cluster is not all lens: the E39's `tail_light_lod0` is 846 triangles of the dark grey
+    // backing the red lens is set into, and scaling a grey until its brightest channel reads as lit
+    // does not make it a brighter grey, it makes it white. Both of the car's rear clusters were
+    // coming out as white blobs with some red in them for exactly this reason. A neutral surface has
+    // no ratio between its channels to keep, so there is nothing for the scaling to preserve and it
+    // keeps the brightness the model gave it — which leaves a white headlight lens white, because it
+    // was already at 1.0, and a grey backing grey.
     if category == Category::Light {
         let brightest = out[0].max(out[1]).max(out[2]);
-        if brightest > 0.02 {
+        let darkest = out[0].min(out[1]).min(out[2]);
+        if brightest > 0.02 && brightest - darkest > LENS_HUE * brightest {
             let lift = (LENS_LIT / brightest).max(1.0);
             for c in out.iter_mut().take(3) {
                 *c = (*c * lift).min(1.0);
             }
-        } else {
-            // A lens modelled as pure black has no colour left to keep.
-            out[..3].fill(LENS_LIT * 0.7);
         }
     }
     out[3] = match category {
@@ -1235,7 +1325,18 @@ fn spend_budget_with(buckets: &mut Vec<Bucket>, targets: &[usize], mut report: O
         let mut error_sum = 0.0f64;
         let mut error_weight = 0.0f64;
         for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
+            let was = p.indices.len() / 3;
             let error = simplify::reduce(&mut p.vertices, &mut p.attrs, &mut p.indices, *target);
+            if std::env::var("AZ_PARTS").is_ok() {
+                eprintln!(
+                    "PART {:>7} -> {:>6} (target {:>6}) {:5.2}%  {}",
+                    was,
+                    p.indices.len() / 3,
+                    target,
+                    error * 100.0,
+                    p.node
+                );
+            }
 
             // Some geometry cannot be simplified at all. The E36's engine block is 80,869
             // triangles that both simplifiers hand back untouched: it is a mass of hoses, fins and

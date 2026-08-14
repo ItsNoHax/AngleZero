@@ -10,8 +10,8 @@ name = "VW Golf R"
 
 scale = 100.0
 
-triangles = 15000
-lods = [4500, 1800]
+triangles = 24000
+lods = [3000, 1200]
 
 [wheels]
 # Everything at a corner is under an `Ani_` node — the rig's animation handles, kept by the
@@ -34,7 +34,7 @@ match = ["Ani_Wheel", "Ani_Disc"]
 #
 # 0.35 was too far: it bought 166 triangles at 40% error, which is not a cabin held down, it is a
 # cabin gone. 0.5 is the number where the seat backs are still seat backs.
-interior = 0.5
+interior = 1.0
 
 # The alloys, once they are sorted out of the tyre bucket — see `rimBC` below. 6,916 triangles a
 # corner of five twin spokes, and the same argument the E36 makes about spoke windows applies to a
@@ -43,7 +43,18 @@ wheel = 2.0
 
 # The Mk7.5's face is its headlights, and they are one continuous lit strip into the grille. It is
 # the thing that makes the car recognisable at the distance the chase camera sits at.
-light = 8.0
+#
+# 25, and high for a reason this car alone has: `Light_Map` is one material across seven parts —
+# both lamp units, the trunk lid, the spoiler, the rear bumper and both mirrors — so the lamps do
+# not have this category to themselves and are decimated alongside a boot lid. At 8.0 the bucket
+# took 1,470 triangles out of 23,476 at 6.7% error and both headlights came out as flat black
+# slabs. The colour was never the problem — drawn without the atlas the same mesh is white — it is
+# that the geometry carrying the texture coordinates had collapsed to a handful of facets, and what
+# survived sampled the dark half of the lens photo. That is why this is a weight and not a floor.
+#
+# 60 draws a visibly crisper lamp and is still the wrong number: it takes the body from 7,369
+# triangles to 5,344 and the bumper's black lower grille goes soft with it.
+light = 25.0
 chrome = 6.0
 
 # 33,372 triangles of engine bay, and unlike the E36's the visibility sweep can see it — the model

@@ -461,6 +461,43 @@ pub struct MaterialRules {
     pub light: Vec<String>,
     #[serde(default)]
     pub chrome: Vec<String>,
+    /// Colours to use in place of what a material declares. See `ColourRule`.
+    #[serde(default)]
+    pub colour: Vec<ColourRule>,
+}
+
+/// A colour to use in place of the one a material declares.
+///
+/// The one thing a category cannot fix. A model is free to describe black plastic with a white base
+/// colour and no texture, and several here do: the E36's front lip and rear valance are 360
+/// triangles of `etki_modparts.001` at rgba(1,1,1,1) untextured, so they draw as a white strip
+/// across the bottom of both bumpers. Nothing about that is a budget, a category or a UV — the
+/// model simply says white, and whatever renderer it was authored for must have said otherwise.
+///
+/// Keyed by the same name fragments the category rules use, and applied after the texture is
+/// sampled into the atlas, so a material that *does* carry a texture is left alone by default and
+/// only overridden if it is named here.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColourRule {
+    /// Name fragments this applies to, matched case-insensitively like the category rules.
+    #[serde(rename = "match")]
+    pub match_: Vec<String>,
+    /// sRGB, 0–255.
+    pub rgb: [u8; 3],
+}
+
+impl MaterialRules {
+    /// The replacement colour for a material, if the config named one.
+    pub fn colour_for(&self, name: &str) -> Option<[f32; 3]> {
+        let name = name.to_ascii_lowercase();
+        self.colour.iter().find_map(|rule| {
+            rule.match_
+                .iter()
+                .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
+                .then(|| rule.rgb.map(|c| c as f32 / 255.0))
+        })
+    }
 }
 
 /// Where the car sits relative to the origin the game drives it by, after the converter has put
