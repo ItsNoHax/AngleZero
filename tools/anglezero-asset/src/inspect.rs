@@ -32,7 +32,7 @@ struct MeshUse {
 /// Triangles and part count per material name.
 type Materials = HashMap<String, (usize, usize)>;
 
-pub fn run(path: &Path, deep: bool) -> Result<()> {
+pub fn run(path: &Path, deep: bool, material: Option<&str>) -> Result<()> {
     let gltf = Gltf::open(path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
 
     let mut uses = Vec::new();
@@ -144,7 +144,7 @@ pub fn run(path: &Path, deep: bool) -> Result<()> {
 
     if deep {
         println!();
-        deep_report(path)?;
+        deep_report(path, material)?;
     }
     Ok(())
 }
@@ -156,7 +156,7 @@ pub fn run(path: &Path, deep: bool) -> Result<()> {
 /// declared min/max disagrees with its contents, triangles with no area, parts with no UVs that a
 /// texture stage would later map to a single texel, and vertices split so finely that welding is
 /// the difference between a simplifier that works and one that cannot collapse anything.
-fn deep_report(path: &Path) -> Result<()> {
+fn deep_report(path: &Path, material: Option<&str>) -> Result<()> {
     let start = std::time::Instant::now();
     let model = crate::extract::load(path)?;
     let elapsed = start.elapsed();
@@ -284,6 +284,49 @@ fn deep_report(path: &Path) -> Result<()> {
                 truncate(&img.name, 28),
                 commas(img.data.len() / 1024),
                 img.mime
+            );
+        }
+        println!();
+    }
+
+    // Which parts wear one material, when a config has to tell them apart.
+    //
+    // A material override paints every part that wears it, and sometimes that is one thing too
+    // many: the Golf's `material` is its grille bars, the strakes in the lower bumper *and* the
+    // ring round the badge, which want black and black and silver. Splitting them needs the node
+    // names, and this is the only place they are all listed.
+    if let Some(fragment) = material {
+        let want = fragment.to_ascii_lowercase();
+        println!("Parts wearing a material matching `{fragment}`:");
+        let mut parts: Vec<_> = model
+            .parts
+            .iter()
+            .filter(|p| {
+                model.materials[p.material]
+                    .name
+                    .to_ascii_lowercase()
+                    .contains(&want)
+            })
+            .collect();
+        parts.sort_by_key(|p| std::cmp::Reverse(p.triangles()));
+        if parts.is_empty() {
+            println!("  none");
+        }
+        for part in parts {
+            let b = part.bounds();
+            let c = centre(&b);
+            let s = b.size();
+            println!(
+                "  {:<40} {:>8} tris  at ({:6.2},{:6.2},{:6.2})  {:.2}x{:.2}x{:.2}  [{}]",
+                truncate(&part.node, 40),
+                commas(part.triangles()),
+                c[0],
+                c[1],
+                c[2],
+                s[0],
+                s[1],
+                s[2],
+                truncate(&model.materials[part.material].name, 20),
             );
         }
         println!();

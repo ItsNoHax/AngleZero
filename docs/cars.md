@@ -540,6 +540,34 @@ to how the atlas resamples moved them across it, and the whole front of the car 
 olive-yellow. There is no tile size that settles that, because a matcap has no stable answer to
 sample.
 
+`inside = { min = [...], max = [...] }` narrows a rule to a box in compiled car space — metres, Y
+up, Z forward, wheels on the ground and wheelbase centred, which is the same coordinates
+`azview --look` takes. It is there for the grain below a material, and below a *part*: the Golf's
+grille bars, bumper strakes, mirrors, window surrounds and the ring round its badge are all one
+50,880-triangle part of one material, so the badge cannot be named. It can only be located.
+
+```toml
+[[materials.colour]]
+match = ["material"]
+rgb = [26, 26, 28]                # black plastic, everywhere else on the car
+flat = true
+
+[[materials.colour]]
+match = ["material"]
+rgb = [185, 188, 196]             # …except the badge, which is silver
+inside = { min = [-0.06, 0.57, 2.12], max = [0.06, 0.70, 2.30] }
+```
+
+**Make the box tighter than the thing looks.** A vertex colour is interpolated across the triangle
+it belongs to, so a box that catches one vertex of a long triangle bleeds along the whole of it: at
+±0.08 in Z this one caught the inboard end of the grille bar and the badge's colour smeared halfway
+to each headlight. Find the axis that actually separates them — here Z, because the badge stands
+proud of the bar it sits on — rather than making the box small in all three.
+
+`anglezero-asset inspect --material <name> <model.glb>` lists every part wearing a material, with
+node names and bounds. That is how you find out whether a part rule would have worked before
+reaching for a box.
+
 **The way to find which material owns a surface is the rule itself.** Paint a candidate a colour
 nothing else on the car wears, compile, and look at where it lands:
 

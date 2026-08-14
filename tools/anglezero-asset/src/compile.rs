@@ -271,6 +271,15 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         }
         let material = &material;
         let base = base_colour(material, category);
+        // …and it may say that one region of the material is a different colour again, for the
+        // surface an exporter merged into something it is not. Both colours go through
+        // `base_colour` and the category, because whichever a vertex ends up with has to have been
+        // treated the same way; only the choice between them is per vertex.
+        let region = config.materials.region_for(&material.name).map(|(r, rgb)| {
+            let mut inside = material.clone();
+            inside.base_color = [rgb[0], rgb[1], rgb[2], material.base_color[3]];
+            (r, pack(base_colour(&inside, category)))
+        });
         let tile = atlas.tiles[part.material];
 
         let slot = match buckets.iter().position(|b| b.key() == (wheel, category)) {
@@ -307,11 +316,17 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         let mut vertices = Vec::with_capacity(part.positions.len());
         let mut attrs = Vec::with_capacity(part.positions.len());
         for (j, (v, n)) in part.positions.iter().zip(&part.normals).enumerate() {
+            // Against the position before the hub is subtracted, because a region is written in
+            // car space and a wheel's vertices are stored about their own centre.
+            let colour = match region {
+                Some((r, inside)) if r.contains(*v) => inside,
+                _ => packed,
+            };
             vertices.push(Vertex::new(
                 v[0] - origin[0],
                 v[1] - origin[1],
                 v[2] - origin[2],
-                packed,
+                colour,
             ));
             // A part with no texture coordinates at all still gets a valid one: its tile is a flat
             // colour, so any point inside it is the same answer.
@@ -1666,6 +1681,53 @@ mod tests {
         let mid_z = (b[2] + b[5]) * 0.5;
         assert!(mid_x.abs() < 0.05, "off centre by {mid_x} m across");
         assert!(mid_z.abs() < 0.05, "off centre by {mid_z} m along");
+    }
+
+    /// A region rule paints part of a material and leaves the rest of it alone.
+    ///
+    /// This is the grain a material rule cannot reach and a part rule would not either: the Golf's
+    /// grille bars, bumper strakes and the ring round its badge are one part of one material, and
+    /// the only thing that tells the badge apart is where it is. The check is that both colours
+    /// come out — a box that painted everything, or nothing, would be the two ways this fails.
+    #[test]
+    fn a_region_paints_part_of_a_material_and_leaves_the_rest() {
+        let mut model = four_wheeled_model();
+        let mut config = config_matching(&["tyre_", "rim_"]);
+        // The shell is 1.8 x 1.2 x 4.2 about (0, 0.8, 0); this is its nose and nothing else.
+        config.materials.colour = vec![
+            crate::config::ColourRule {
+                match_: vec!["paint".into()],
+                rgb: [200, 30, 30],
+                flat: false,
+                inside: None,
+            },
+            crate::config::ColourRule {
+                match_: vec!["paint".into()],
+                rgb: [20, 200, 40],
+                flat: false,
+                inside: Some(crate::config::Region {
+                    min: [-1.0, 0.0, 1.9],
+                    max: [1.0, 2.0, 3.0],
+                }),
+            },
+        ];
+
+        let compiled = compile(&mut model, &config, 10_000).unwrap();
+        let car = angle_zero::azcar::Car::parse(&compiled.bytes).unwrap();
+
+        // The light term multiplies the colour per vertex, so what survives the round trip is
+        // which channel dominates, not the byte.
+        let (mut reddish, mut greenish) = (0, 0);
+        for v in car.vertices() {
+            let (r, g) = ((v.color & 0xFF) as u32, ((v.color >> 8) & 0xFF) as u32);
+            if r > g + 8 {
+                reddish += 1;
+            } else if g > r + 8 {
+                greenish += 1;
+            }
+        }
+        assert!(reddish > 0, "nothing kept the material's own colour");
+        assert!(greenish > 0, "nothing was painted by the region");
     }
 
     /// Wheel geometry is stored about its own hub, which is what lets the runtime steer and spin

@@ -90,8 +90,22 @@ body = ["CarPaint"]
 # answer to sample; the only fix is to stop believing the image, which is what `flat` says.
 [[materials.colour]]
 match = ["material"]
-rgb = [70, 70, 74]
+rgb = [26, 26, 28]
 flat = true
+
+# The badge is the exception, and it cannot be named — it is inside that same 50,880-triangle part,
+# so there is no material and no node to key on. It is a disc about 12 cm across standing proud of
+# the grille bar at the centre of the nose, and that is the only thing in the file that tells it
+# apart, so that is what the rule says.
+#
+# The box is tighter than the badge looks, because a vertex colour is interpolated across the
+# triangle it belongs to: at ±0.08 in Z the box caught the inboard vertices of the grille bar too,
+# and the magenta used to find it smeared halfway to each headlight. Z is what separates them — the
+# badge stands forward of the bar it sits on.
+[[materials.colour]]
+match = ["material"]
+rgb = [185, 188, 196]
+inside = { min = [-0.06, 0.57, 2.12], max = [0.06, 0.70, 2.30] }
 
 [handling]
 # 1500 kg, 2.63 m between the axles, and the mass over the front wheels that a transverse engine

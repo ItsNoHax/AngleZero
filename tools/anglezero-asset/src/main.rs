@@ -59,9 +59,11 @@ fn main() -> ExitCode {
 fn usage() {
     println!("AngleZero car asset compiler");
     println!();
-    println!("  anglezero-asset inspect [--deep] <model.glb>");
+    println!("  anglezero-asset inspect [--deep] [--material <name>] <model.glb>");
     println!("      Report what is inside a source model, without converting anything.");
     println!("      --deep also reads every vertex, and reports what only the data can say.");
+    println!("      --material <name>     list every part wearing a material matching <name>,");
+    println!("                            which is how a config tells them apart by node. Deep.");
     println!();
     println!("  anglezero-asset convert <model.glb> <car.azcar> [options]");
     println!("      Compile a source model into the car the game loads.");
@@ -118,9 +120,21 @@ fn run_convert(args: &[&str]) -> Result<()> {
 
 fn run_inspect(args: &[&str]) -> Result<()> {
     let deep = args.contains(&"--deep");
-    let paths: Vec<&&str> = args.iter().filter(|a| !a.starts_with("--")).collect();
+    let material = args
+        .iter()
+        .position(|a| *a == "--material")
+        .and_then(|at| args.get(at + 1))
+        .copied();
+    let paths: Vec<&&str> = args
+        .iter()
+        .enumerate()
+        .filter(|(i, a)| {
+            !a.starts_with("--") && args.get(i.wrapping_sub(1)) != Some(&"--material")
+        })
+        .map(|(_, a)| a)
+        .collect();
     match paths[..] {
-        [path] => inspect::run(std::path::Path::new(path), deep),
+        [path] => inspect::run(std::path::Path::new(path), deep || material.is_some(), material),
         [] => Err("inspect needs a path to a .glb".into()),
         _ => Err("inspect takes exactly one path".into()),
     }

@@ -502,6 +502,33 @@ pub struct ColourRule {
     /// image is not a picture of the thing it is on.
     #[serde(default)]
     pub flat: bool,
+    /// Paint only the part of the material inside this box, and leave the rest alone.
+    ///
+    /// For the surface an exporter merged into something it is not. A material rule is the wrong
+    /// grain when one material is two things — and a *part* rule would be no better, because the
+    /// Golf's grille bars, bumper strakes, mirrors, window surrounds and the ring round the badge
+    /// are all one 50,880-triangle part. There is nothing in the file to key on. There is only
+    /// where they sit.
+    ///
+    /// In compiled car space: metres, Y up, Z forward, the wheels on the ground and the wheelbase
+    /// centred — the same coordinates `azview --look` takes, so a box can be read off a render and
+    /// checked by painting it something garish.
+    #[serde(default)]
+    pub inside: Option<Region>,
+}
+
+/// A box in compiled car space.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Region {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
+impl Region {
+    pub fn contains(&self, p: [f32; 3]) -> bool {
+        (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
+    }
 }
 
 /// sRGB to linear, the inverse of `compile::srgb`, so a colour a config names survives the round
@@ -524,22 +551,41 @@ impl MaterialRules {
     /// compiling to a mid grey around 96 — dark enough to fix the pale band it was written for,
     /// which is why nobody noticed, and about three times the colour that was asked for.
     pub fn colour_for(&self, name: &str) -> Option<[f32; 3]> {
-        self.rule_for(name)
-            .map(|r| r.rgb.map(|c| linear(c as f32 / 255.0)))
+        self.rule_for(name, false).map(ColourRule::linear_rgb)
+    }
+
+    /// The colour for the part of a material inside a box, and the box, if the config named one.
+    ///
+    /// Looked up separately from `colour_for` rather than found by the same search, so a material
+    /// can carry both: one rule saying what it is, another saying what a corner of it is instead.
+    pub fn region_for(&self, name: &str) -> Option<(&Region, [f32; 3])> {
+        let rule = self.rule_for(name, true)?;
+        rule.inside.as_ref().map(|r| (r, rule.linear_rgb()))
     }
 
     /// Whether the config says to throw this material's image away. See `ColourRule::flat`.
+    ///
+    /// Asked of the whole-material rule only. Whether an image is believed is a judgement about
+    /// the image, and a box carves up a surface rather than the texture behind it.
     pub fn is_flat(&self, name: &str) -> bool {
-        self.rule_for(name).is_some_and(|r| r.flat)
+        self.rule_for(name, false).is_some_and(|r| r.flat)
     }
 
-    fn rule_for(&self, name: &str) -> Option<&ColourRule> {
+    fn rule_for(&self, name: &str, regional: bool) -> Option<&ColourRule> {
         let name = name.to_ascii_lowercase();
         self.colour.iter().find(|rule| {
-            rule.match_
-                .iter()
-                .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
+            rule.inside.is_some() == regional
+                && rule
+                    .match_
+                    .iter()
+                    .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
         })
+    }
+}
+
+impl ColourRule {
+    fn linear_rgb(&self) -> [f32; 3] {
+        self.rgb.map(|c| linear(c as f32 / 255.0))
     }
 }
 
