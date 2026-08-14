@@ -58,7 +58,7 @@ Without them the game boots to a title screen reading `car asset not found on th
 no car. That is the message to expect on a stick that has only ever had builds copied to it.
 
 There is a ceiling, and it is the arena rather than the twelve slots behind it. Cars are loaded
-into a fixed 6 MB arena (`ARENA_BYTES` in `src/psp/car.rs`); the seven current ones come to 5.05 MB,
+into a fixed 6 MB arena (`ARENA_BYTES` in `src/psp/car.rs`); the seven current ones come to 5.45 MB,
 leaving room for about one more. A car that does not fit is refused with `not enough room for
 every car on the stick` rather than silently dropped, and the rest still load — so the symptom is
 one car missing from the title screen's rotation and a message under the car's name, not a build

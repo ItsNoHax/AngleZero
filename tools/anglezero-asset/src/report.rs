@@ -440,21 +440,26 @@ impl Report {
         }
         println!();
 
+        // Distinct names, because `resized` has an entry per material and several materials can
+        // share one image — the E39's six textured materials are four images, and counting the
+        // entries had it reporting "6 of 4 source images used".
+        let used: std::collections::HashSet<&str> =
+            self.resized.iter().map(|(n, _, _)| n.as_str()).collect();
         println!(
             "Texture: one {}x{} atlas, {} of {} source images used, {} materials textured",
             crate::texture::ATLAS,
             crate::texture::ATLAS,
-            self.resized.len(),
+            used.len(),
             self.source_textures,
             self.textured_materials,
         );
-        if let Some((name, from, _)) = self.resized.iter().max_by_key(|(_, f, _)| f.0 * f.1) {
+        if let Some((name, from, to)) = self.resized.iter().max_by_key(|(_, f, _)| f.0 * f.1) {
+            // The tile size comes from the entry rather than being recomputed: the grid is sized by
+            // how many materials brought an image, not by how many materials there are, and only
+            // the packer knows which images decoded.
             println!(
                 "         largest was `{}` at {}x{}, into a {}px tile",
-                name,
-                from.0,
-                from.1,
-                crate::texture::ATLAS / crate::texture::tiles_across(self.source_materials),
+                name, from.0, from.1, to.0,
             );
         }
         println!();

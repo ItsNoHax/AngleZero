@@ -36,7 +36,7 @@ added with a thirty-line TOML and no renderer change at all.
 
 There are twelve slots and a 6 MB arena behind them, so the limit anybody reaches is the arena —
 which is a number of bytes that can be measured, rather than a number of cars somebody picked. Seven
-cars at the budgets in this repo come to 5.05 MB, leaving room for about one more. A car that does
+cars at the budgets in this repo come to 5.45 MB, leaving room for about one more. A car that does
 not fit is refused by name on the title screen and the rest still load.
 
 That margin used to be four cars, and it was spent deliberately — see
@@ -431,17 +431,24 @@ The coarse levels are 3,000 and 1,200 against LOD0's 24,000, and they were 4,500
 and 1,800 the two of them were 30% of every file, spent on a car that is eighteen metres away and a
 hundred pixels wide.
 
-That is what made the arena the binding limit. Seven cars run from the AE86's 702 KB to the R34's
-874 KB and come to 5.54 MB together — against an arena that was 1.5 MB, which is why the four slots
+That is what made the arena the binding limit. Seven cars run from the AE86's 704 KB to the R34's
+857 KB and come to 5.45 MB together — against an arena that was 1.5 MB, which is why the four slots
 next to it were never once reached: the third car was refused for want of bytes long before a
 fourth was asked for. The arena is 6 MB now and the slots are twelve, deliberately more than it can
 hold, so that the failure names the resource that actually ran out.
 
-5.54 MB is up from 5.05. Most of the difference is what the free-error fix bought — bodywork that
+5.45 MB is up from 5.05. Most of the difference is what the free-error fix bought — bodywork that
 was being flattened for nothing now spends the budget it had been allocated all along — and 125 KB
 of it is the E39 alone, which is the one car asking for 32,000 triangles rather than 24,000 and
-says why in its own config. It leaves about 470 KB, which is no longer a spare car. The arena is
+says why in its own config. It leaves about 558 KB, which is no longer a spare car. The arena is
 the thing to raise for the eighth.
+
+It came down from 5.54 when the atlas grid was sized by the images rather than the materials, which
+is not a saving anybody asked for and is worth understanding rather than pocketing: `UV_WEIGHT`
+prices a unit of texture slide against a metre of geometry, and a unit of atlas space is now more
+texels than it was, so a collapse that drags a decal across a panel costs the simplifier more than
+it used to and it stops sooner. That is the right direction — the slide really is more visible now
+— but it means the triangle counts moved on every car without any budget changing.
 
 ## Measuring
 
@@ -545,14 +552,49 @@ fine and the car is missing" points at the renderer and not at the pipeline.
 
 ## The texture
 
-One per car, 256×256, and every source material has a tile in it. The runtime merges parts into six
-materials, so a draw call covers the paint and the badges on it at once — a texture per material
-could not be bound. Packing means the console binds once per car and never switches.
+One per car, 256×256, and every source material samples somewhere inside it. The runtime merges
+parts into six materials, so a draw call covers the paint and the badges on it at once — a texture
+per material could not be bound. Packing means the console binds once per car and never switches.
 
-Materials with no image get a white tile. That is what keeps the whole thing additive: glTF's base
+Materials with no image sample white. That is what keeps the whole thing additive: glTF's base
 colour is `texture × factor`, the factor is already baked into the vertex alongside the light term,
-so a white tile multiplies to exactly the colour that vertex had before textures existed. Anything
+so white multiplies to exactly the colour that vertex had before textures existed. Anything
 untextured looks the same as it always did.
+
+### Why the grid is sized by the images, not the materials
+
+A material with no image needs one texel. Counting it into the grid anyway is what held every car
+at a 32 px tile, and 32 px is where both of the texture faults came from: the S15's tyre tread is
+about a texel tall there and came out blocky, and the Golf's grille sits one texel from the orange
+tail-light strip in the same image, so a one-texel gutter round each tile — which fixes the tread
+outright — moved the grille's band into the orange and turned it olive-yellow. The gutter was never
+wrong. There was no room for it.
+
+So the grid holds one tile per *image*, plus one shared tile in which every flat colour gets a
+single texel, and it is the smallest square that fits — not the smallest power of two, which was
+costing a factor of two per axis for nothing. Nothing needs a tile to be a power of two; the atlas
+is, and that is the only size the hardware has an opinion about.
+
+| Car | materials | textured | tile before | tile now |
+|---|---|---|---|---|
+| VW Golf R | 21 | 15 | 32 px | 64 px |
+| BMW E39 | 61 | 6 | 32 px | 85 px |
+| Toyota AE86 | 20 | 6 | 32 px | 85 px |
+| Nissan R34 | 26 | 17 | 32 px | 51 px |
+| Nissan S15 | 27 | 16 | 32 px | 51 px |
+| BMW E36 | 57 | 17 | 32 px | 51 px |
+| Mercedes 190E | 62 | 60 | 32 px | 32 px |
+
+The 190E is the case that gains nothing, and it is honest that it does not: it really does bring
+sixty images, so it really does need a 8×8 grid. Everything else was paying for tiles that held one
+colour.
+
+The one thing to look at after changing this is any material whose image is a gradient rather than
+a picture. `material` on the Golf is a matcap — three strips of sky, horizon and sunset — and its
+interior panels are a lookup into that ramp, so which band a panel lands in moves when the tile is
+resampled. Point-sampled at 32 px it read grey; at 64 it reads yellow in places. Both are honest
+samples of the same source and the finer one is closer to it, but it is a visible change with no
+fault behind it, and it is the kind of thing to recognise rather than chase.
 
 ```bash
 anglezero-asset convert ... --atlas /tmp/atlas.png    # look at what was packed

@@ -13,9 +13,19 @@
 //! already baked into the vertex with the light term, so the tile only has to supply the texture,
 //! and a material without one supplies 1.0.
 //!
-//! Tiles are a fixed size rather than allotted by importance. At 480×272 a door is about sixty
-//! pixels across, so a 32×32 tile is already near the limit of what can be told apart, and a
-//! packer that varied the size would spend its complexity on detail nobody can see.
+//! Every tile that holds an image is the same size — a packer that graded them by importance would
+//! spend its complexity on a judgement it has no information to make. What the grid does not do is
+//! give a tile to a material that has no image. Those need one texel, not a thousand, and counting
+//! them into the grid is what kept every car at 32 px tiles: the Golf has twenty-one materials but
+//! only fifteen images, and the E39 sixty-one and four. Sizing the grid by the images alone, and
+//! parking every flat colour in one shared tile a texel each, takes the Golf to 64 px and the E39
+//! to 85 — four and seven times the texels, on the same 256×256 atlas and for no extra memory.
+//!
+//! That mattered because both open texture faults were the same starvation. The S15's tyre tread
+//! and the Golf's grille plastics are each about a texel tall in a 32 px tile, which is why the
+//! tread came out blocky and why a one-texel gutter round each tile — which fixes the tread outright
+//! — shifted the grille's UV band from the dark part of its image into the orange part and turned it
+//! olive-yellow. The gutter is not wrong; at 32 px there was no room for it.
 
 use std::collections::HashMap;
 
@@ -27,12 +37,17 @@ pub const ATLAS: usize = 256;
 
 
 
-/// The smallest power-of-two grid that holds one tile per material. 57 materials need 8×8, which
-/// at 256 across is 32 px a tile.
-pub fn tiles_across(materials: usize) -> usize {
+/// The smallest grid that holds this many tiles.
+///
+/// Not rounded to a power of two. Nothing needs it to be — the atlas itself is 256×256 and that is
+/// the only size the hardware has an opinion about, while a tile is just a rectangle inside it. The
+/// rounding was costing a factor of two in each axis at the worst of it: eighteen tiles is 5×5 at
+/// 51 px, and was 8×8 at 32. The last row and column may be a pixel short of the edge when the grid
+/// does not divide 256; those pixels are never sampled.
+fn tiles_across(tiles: usize) -> usize {
     let mut across = 1usize;
-    while across * across < materials.max(1) {
-        across *= 2;
+    while across * across < tiles.max(1) {
+        across += 1;
     }
     across
 }
@@ -125,10 +140,6 @@ impl Atlas {
     /// Images are decoded here and nowhere else — this is the only stage that needs the pixels,
     /// and on the E36 it is eighteen embedded PNGs against a report that otherwise costs 28 ms.
     pub fn build(model: &SourceModel) -> Atlas {
-        let count = model.materials.len().max(1);
-        let across = tiles_across(count);
-        let tile = (ATLAS / across).max(1);
-
         let mut atlas = Atlas {
             pixels: vec![0; ATLAS * ATLAS * 4],
             tiles: vec![Tile::default(); model.materials.len()],
@@ -136,31 +147,51 @@ impl Atlas {
             resized: Vec::new(),
             warnings: Vec::new(),
         };
+
+        // Decoding comes before the layout, not during it, because the grid is sized by how many
+        // materials actually arrive with a usable image and a texture that will not decode falls
+        // back to a flat colour like any other. Decoded once each: several materials can share one
+        // image, and the E36's headlight PNG is 715 KB.
+        let mut decoded: HashMap<usize, Option<Decoded>> = HashMap::new();
+        for material in &model.materials {
+            if let Some(img) = material.image {
+                decoded
+                    .entry(img)
+                    .or_insert_with(|| decode(model, img, &mut atlas.warnings));
+            }
+        }
+        let image_for = |material: &crate::model::Material| -> Option<&Decoded> {
+            material.image.and_then(|img| decoded[&img].as_ref())
+        };
+
+        let textured = model.materials.iter().filter(|m| image_for(m).is_some()).count();
+        let flat = model.materials.len() - textured;
+        // One slot per image, and one more shared by every flat colour if there are any.
+        let slots = textured + usize::from(flat > 0);
+        let across = tiles_across(slots);
+        let tile = (ATLAS / across).max(1);
         if tile < 4 {
             atlas.warnings.push(format!(
-                "{count} materials do not fit an atlas of {ATLAS}px at a usable tile size; \
-                 textures were skipped"
+                "{textured} textured materials do not fit an atlas of {ATLAS}px at a usable tile \
+                 size; textures were skipped"
             ));
             return atlas;
         }
 
-        // Decoded once each: several materials can share one image, and the E36's headlight PNG is
-        // 715 KB.
-        let mut decoded: HashMap<usize, Option<Decoded>> = HashMap::new();
+        // The flat colours' shared tile sits after the images, and is white throughout so that a
+        // coordinate landing anywhere in it still multiplies to no change.
+        let shared = slot_origin(textured, across, tile);
+        if flat > 0 {
+            fill_white(&mut atlas.pixels, shared.0, shared.1, tile);
+        }
 
+        let mut next_image = 0usize;
+        let mut next_flat = 0usize;
         for (i, material) in model.materials.iter().enumerate() {
-            let (col, row) = (i % across, i / across);
-            let (x0, y0) = (col * tile, row * tile);
-
-            let source = material.image.and_then(|img| {
-                decoded
-                    .entry(img)
-                    .or_insert_with(|| decode(model, img, &mut atlas.warnings))
-                    .as_ref()
-            });
-
-            match source {
+            atlas.tiles[i] = match image_for(material) {
                 Some(image) => {
+                    let (x0, y0) = slot_origin(next_image, across, tile);
+                    next_image += 1;
                     atlas.textured += 1;
                     if image.width as usize != tile || image.height as usize != tile {
                         atlas.resized.push((
@@ -170,19 +201,38 @@ impl Atlas {
                         ));
                     }
                     blit_scaled(&mut atlas.pixels, image, x0, y0, tile);
-                }
-                None => fill_white(&mut atlas.pixels, x0, y0, tile),
-            }
 
-            // Half a texel in from each edge. The GE samples tile-nearest for the car, but a UV
-            // landing exactly on the boundary still rounds outward on hardware, and the neighbour
-            // is a different material rather than more of the same.
-            let half = 0.5 / ATLAS as f32;
-            atlas.tiles[i] = Tile {
-                u0: x0 as f32 / ATLAS as f32 + half,
-                v0: y0 as f32 / ATLAS as f32 + half,
-                u1: (x0 + tile) as f32 / ATLAS as f32 - half,
-                v1: (y0 + tile) as f32 / ATLAS as f32 - half,
+                    // Half a texel in from each edge. The GE samples tile-nearest for the car, but
+                    // a UV landing exactly on the boundary still rounds outward on hardware, and
+                    // the neighbour is a different material rather than more of the same.
+                    let half = 0.5 / ATLAS as f32;
+                    Tile {
+                        u0: x0 as f32 / ATLAS as f32 + half,
+                        v0: y0 as f32 / ATLAS as f32 + half,
+                        u1: (x0 + tile) as f32 / ATLAS as f32 - half,
+                        v1: (y0 + tile) as f32 / ATLAS as f32 - half,
+                    }
+                }
+                None => {
+                    // A texel, and a degenerate tile that maps every coordinate onto its centre.
+                    // That is not a loss of anything: the tile is white, so what the material draws
+                    // is the colour already in the vertex, and every point of a full tile of white
+                    // gave the same answer as its centre does. Keeping them distinct rather than
+                    // sharing one texel is what lets the compiler's check that each material
+                    // samples its own tile still mean something.
+                    //
+                    // Wrapping if a car somehow brings more flat materials than the shared tile has
+                    // texels — 1,024 at the smallest tile this can produce — costs nothing either,
+                    // for the same reason: they are all the same white.
+                    let n = next_flat % (tile * tile);
+                    next_flat += 1;
+                    let centre = |at: usize| (at as f32 + 0.5) / ATLAS as f32;
+                    let (u, v) = (
+                        centre(shared.0 + n % tile),
+                        centre(shared.1 + n / tile),
+                    );
+                    Tile { u0: u, v0: v, u1: u, v1: v }
+                }
             };
         }
         atlas
@@ -235,6 +285,11 @@ fn decode(model: &SourceModel, index: usize, warnings: &mut Vec<String>) -> Opti
     }
 }
 
+/// The top-left pixel of a grid slot.
+fn slot_origin(slot: usize, across: usize, tile: usize) -> (usize, usize) {
+    ((slot % across) * tile, (slot / across) * tile)
+}
+
 /// Nearest-neighbour, which is the right filter for the size of drop involved: a 1024×1024 source
 /// going into a 32×32 tile is a factor of 32, and averaging over that reduces most car textures to
 /// their mean colour. Point-sampling at least keeps a stripe a stripe.
@@ -264,6 +319,7 @@ fn fill_white(atlas: &mut [u8], x0: usize, y0: usize, tile: usize) {
 mod tests {
     use super::*;
     use crate::model::Material;
+    use image::ImageEncoder;
 
     fn model_with(materials: Vec<Material>) -> SourceModel {
         SourceModel {
@@ -288,6 +344,26 @@ mod tests {
         }
     }
 
+    /// A 1×1 red PNG, so a material can bring an image a test can actually decode. Flat materials
+    /// share one tile between them, so nothing below can tell the layout apart without one.
+    fn textured(name: &str) -> (Material, crate::model::Image) {
+        let mut data = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut data)
+            .write_image(&[255, 0, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .expect("encode a 1x1 png");
+        (
+            Material {
+                image: Some(0),
+                ..flat(name, [1.0; 4])
+            },
+            crate::model::Image {
+                name: name.into(),
+                mime: "image/png".into(),
+                data,
+            },
+        )
+    }
+
     #[test]
     fn every_material_gets_its_own_tile_and_they_do_not_overlap() {
         let atlas = Atlas::build(&model_with(vec![
@@ -297,12 +373,69 @@ mod tests {
         ]));
         assert_eq!(atlas.tiles.len(), 3);
         for (i, a) in atlas.tiles.iter().enumerate() {
-            assert!(a.u0 < a.u1 && a.v0 < a.v1);
+            // Not `<`: a flat colour's tile is one texel, so its two corners are the same point.
+            assert!(a.u0 <= a.u1 && a.v0 <= a.v1);
             for b in &atlas.tiles[i + 1..] {
-                let apart = a.u1 <= b.u0 || b.u1 <= a.u0 || a.v1 <= b.v0 || b.v1 <= a.v0;
+                let apart = a.u1 < b.u0 || b.u1 < a.u0 || a.v1 < b.v0 || b.v1 < a.v0;
                 assert!(apart, "tiles overlap: {a:?} and {b:?}");
             }
         }
+    }
+
+    /// The whole point of the layout: a material with no image costs a texel, not a tile, so the
+    /// grid is sized by the images and everything textured gets more of the atlas. Twelve flat
+    /// colours beside three images used to force a 4×4 grid at 64 px; now three images and their
+    /// shared neighbour make 2×2 at 128.
+    #[test]
+    fn flat_colours_do_not_shrink_the_tiles_the_images_get() {
+        let (material, image) = textured("paint");
+        let mut materials = vec![material; 3];
+        materials.extend((0..12).map(|i| flat(&format!("plastic{i}"), [0.2, 0.2, 0.2, 1.0])));
+        let mut model = model_with(materials);
+        model.images.push(image);
+
+        let atlas = Atlas::build(&model);
+        assert_eq!(atlas.textured, 3);
+        let side = (atlas.tiles[0].u1 - atlas.tiles[0].u0) * ATLAS as f32;
+        assert!(
+            (side - 127.0).abs() < 0.01,
+            "a 2x2 grid is a 128px tile, less the half texel at each edge; got {side}"
+        );
+        for t in &atlas.tiles[3..] {
+            assert_eq!(t.u0, t.u1, "a flat colour is one texel wide");
+            assert_eq!(t.v0, t.v1, "a flat colour is one texel tall");
+        }
+    }
+
+    /// Every flat colour lands somewhere white, wherever in the shared tile it was put. Sampling
+    /// one of the images by mistake would tint a part that the model said had no texture at all.
+    #[test]
+    fn a_flat_colour_still_samples_white_when_it_shares_a_tile_with_others() {
+        let (material, image) = textured("paint");
+        let mut materials = vec![material];
+        materials.extend((0..40).map(|i| flat(&format!("trim{i}"), [0.5, 0.5, 0.5, 1.0])));
+        let mut model = model_with(materials);
+        model.images.push(image);
+
+        let atlas = Atlas::build(&model);
+        for (i, t) in atlas.tiles.iter().enumerate().skip(1) {
+            let m = t.map([0.4, 0.7]);
+            let x = (m[0] * ATLAS as f32) as usize;
+            let y = (m[1] * ATLAS as f32) as usize;
+            let at = (y * ATLAS + x) * 4;
+            assert_eq!(&atlas.pixels[at..at + 3], &[255, 255, 255], "material {i}");
+        }
+    }
+
+    #[test]
+    fn the_grid_is_the_smallest_square_that_holds_its_tiles() {
+        assert_eq!(tiles_across(0), 1);
+        assert_eq!(tiles_across(1), 1);
+        assert_eq!(tiles_across(2), 2);
+        assert_eq!(tiles_across(4), 2);
+        // The rounding this replaced took eighteen tiles to 8×8 and a 32px tile.
+        assert_eq!(tiles_across(18), 5);
+        assert_eq!(tiles_across(64), 8);
     }
 
     /// A material with no image has to multiply to no change at all, or every untextured part of
