@@ -1712,6 +1712,17 @@ unsafe fn draw_one_car(
     }
 }
 
+/// The most indices one `sceGumDrawArray` can be given.
+///
+/// The count in a GE draw command is a 16-bit field, so 65,535 is not a tuning choice, it is the
+/// width of the register. Handing it more does not draw more: the count wraps, and what the
+/// hardware draws is the remainder. The E39's body mesh at 22,210 triangles is 66,630 indices,
+/// which came out as 1,094 — 364 triangles of a whole car body — and the car rendered as a tan
+/// skeleton with the cabin showing through the paint, on a file the offline viewer drew perfectly.
+///
+/// 65,535 is exactly 3 × 21,845, so a chunk this size never splits a triangle.
+const MAX_DRAW_INDICES: u32 = u16::MAX as u32;
+
 /// One indexed run out of the car's buffers.
 ///
 /// Both pointers are into the arena the file was read into: the vertices are already in the GE's
@@ -1721,16 +1732,19 @@ unsafe fn draw_car_mesh(car: &azcar::Car<'static>, mesh: &azcar::Mesh) {
     // Counted like every other pass, so the trace's vertex column includes the cars. Without this
     // a frame with eight of them in it looks, in the record, exactly like a frame with one.
     STATS.cars = STATS.cars.saturating_add(1);
-    STATS.verts = STATS
-        .verts
-        .saturating_add(mesh.index_count.min(u16::MAX as u32));
-    sys::sceGumDrawArray(
-        GuPrimitive::Triangles,
-        CAR_VERTEX_FORMAT,
-        mesh.index_count as i32,
-        car.indices_ptr().add(mesh.first_index as usize * 2) as *const c_void,
-        car.vertices_ptr() as *const c_void,
-    );
+    STATS.verts = STATS.verts.saturating_add(mesh.index_count);
+    let mut drawn = 0;
+    while drawn < mesh.index_count {
+        let run = (mesh.index_count - drawn).min(MAX_DRAW_INDICES);
+        sys::sceGumDrawArray(
+            GuPrimitive::Triangles,
+            CAR_VERTEX_FORMAT,
+            run as i32,
+            car.indices_ptr().add((mesh.first_index + drawn) as usize * 2) as *const c_void,
+            car.vertices_ptr() as *const c_void,
+        );
+        drawn += run;
+    }
 }
 
 /// Skid marks and tyre smoke.
