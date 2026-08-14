@@ -240,6 +240,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut dropped_by_name = 0usize;
     let mut two_sided_triangles = 0usize;
+    let mut reversed = 0usize;
     for (i, part) in model.parts.iter().enumerate() {
         if config.reduce.drop_hidden && seen.pixels[i] == 0 {
             continue;
@@ -377,6 +378,24 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             .count();
         let two_sided = back_only as f32 > part.triangles() as f32 * TWO_SIDED_SHARE;
 
+        // A triangle the sweep only ever saw the back of, and whose removal opens a hole, is one
+        // the model wound the wrong way round rather than one meant to be seen from both sides —
+        // see `Visibility::wound_backwards`. Reversing it closes the hole and costs nothing to
+        // draw, where making the whole part two-sided costs fill on every frame.
+        //
+        // Only where the part is not two-sided already. If it is, the sweep found a real sheet in
+        // there, and the safe reading of a mixed part is to leave every winding as the model wrote
+        // it and simply draw all of it.
+        let mut indices = part.indices.clone();
+        if !two_sided {
+            for (t, backwards) in seen.wound_backwards(i, part.triangles()).enumerate() {
+                if backwards {
+                    indices.swap(t * 3 + 1, t * 3 + 2);
+                    reversed += 1;
+                }
+            }
+        }
+
         let weight = config.reduce.part_weight(&part.node, &part.parent);
         let bucket = &mut buckets[slot];
         bucket.pixels += seen.pixels[i] as u64;
@@ -388,7 +407,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             vertices,
             attrs,
             pixels: seen.pixels[i] as u64,
-            indices: part.indices.clone(),
+            indices,
             weight,
             two_sided,
             node: part.node.clone(),
@@ -431,6 +450,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     }
     if two_sided_triangles > 0 {
         report.note_two_sided(two_sided_triangles);
+    }
+    if reversed > 0 {
+        report.note_reversed(reversed);
     }
 
     // Weld first, then spend the budget. Welding changes what a triangle costs, so a budget shared
