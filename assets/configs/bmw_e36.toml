@@ -121,6 +121,13 @@ match = ["wheel_bmw_aplg", "Object_4.", "amdb11_brakedisc"]
 #
 # Found by painting candidates and looking, which is what this rule is best at: give a material a
 # colour nothing else on the car has, compile, and the render says which surface wears it.
+#
+# 95, and it said 28 for as long as this field was being read as linear — which compiled to about
+# 95. So 95 is the number that was ever actually on screen and kept; 28 was never seen by anybody.
+# When the field started meaning the sRGB it always claimed, the strip went to a true near-black,
+# disappeared into the shadow under the bumper, and read as *missing* trim rather than dark trim.
+# Dark grey plastic is what an M-Tech lip is. A splitter that cannot be told from the gap under it
+# is not an improvement on a pale one.
 [[materials.colour]]
 match = ["BMWE36_paint.004"]
-rgb = [28, 28, 30]
+rgb = [95, 95, 100]

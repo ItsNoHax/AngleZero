@@ -146,6 +146,10 @@ pub struct Atlas {
     pub textured: usize,
     /// Source images that were resized, as (name, from, to), for the report.
     pub resized: Vec<(String, (u32, u32), (u32, u32))>,
+    /// The full-resolution image of every material the config called a palette, kept rather than
+    /// packed: the compiler samples these per vertex and bakes the result into the vertex colour.
+    /// Indexed by source material.
+    pub palettes: HashMap<usize, Decoded>,
     pub warnings: Vec<String>,
 }
 
@@ -160,6 +164,7 @@ impl Atlas {
             tiles: vec![Tile::default(); model.materials.len()],
             textured: 0,
             resized: Vec::new(),
+            palettes: HashMap::new(),
             warnings: Vec::new(),
         };
 
@@ -172,6 +177,7 @@ impl Atlas {
             match material.image {
                 // A material the config calls flat has had its image disbelieved, so it is not
                 // decoded either — and on the Golf that is the 715 KB the matcap would have cost.
+                // A palette is decoded, but for the compiler rather than for a tile.
                 Some(img) if !rules.is_flat(&material.name) => {
                     decoded
                         .entry(img)
@@ -181,9 +187,12 @@ impl Atlas {
             }
         }
         // Asked again per material rather than read off `decoded`, because two materials can share
-        // one image and only one of them be called flat.
+        // one image and only one of them be called flat — or a palette.
+        let untiled = |material: &crate::model::Material| {
+            rules.is_flat(&material.name) || rules.is_palette(&material.name)
+        };
         let image_for = |material: &crate::model::Material| -> Option<&Decoded> {
-            if rules.is_flat(&material.name) {
+            if untiled(material) {
                 return None;
             }
             material.image.and_then(|img| decoded[&img].as_ref())
@@ -268,6 +277,27 @@ impl Atlas {
                 }
             };
         }
+
+        // The palettes go out whole, for the compiler to sample per vertex. Keyed by material and
+        // cloned rather than shared, because several materials can name the same image — on the
+        // Golf that is three interior materials and one 512×512 sheet.
+        for (i, material) in model.materials.iter().enumerate() {
+            if !rules.is_palette(&material.name) {
+                continue;
+            }
+            match material.image.and_then(|img| decoded.get(&img)) {
+                Some(Some(image)) => {
+                    atlas.palettes.insert(i, image.clone());
+                }
+                // Named as a palette and has no image to be one. Worth saying: the material will
+                // draw its base colour, which is not what the config asked for and not obviously
+                // wrong on screen either.
+                _ => atlas.warnings.push(format!(
+                    "`{}` is named as a palette but has no image the converter could read",
+                    material.name
+                )),
+            }
+        }
         atlas
     }
 
@@ -287,11 +317,32 @@ impl Atlas {
     }
 }
 
-struct Decoded {
+#[derive(Clone)]
+pub struct Decoded {
     name: String,
     width: u32,
     height: u32,
     pixels: Vec<u8>,
+}
+
+impl Decoded {
+    /// One texel at the source's own resolution, as 0–1 linear-ish RGB.
+    ///
+    /// Point-sampled, and that is not a compromise here: this exists for a palette, and the answer
+    /// to "which swatch does this vertex point at" is one swatch. Interpolating between two of
+    /// them would invent a colour the model never named — which is exactly what filtering the
+    /// atlas was doing.
+    pub fn sample(&self, uv: [f32; 2]) -> [f32; 3] {
+        let x = ((uv[0].clamp(0.0, 1.0) * self.width as f32) as usize).min(self.width as usize - 1);
+        let y =
+            ((uv[1].clamp(0.0, 1.0) * self.height as f32) as usize).min(self.height as usize - 1);
+        let at = (y * self.width as usize + x) * 4;
+        [
+            self.pixels[at] as f32 / 255.0,
+            self.pixels[at + 1] as f32 / 255.0,
+            self.pixels[at + 2] as f32 / 255.0,
+        ]
+    }
 }
 
 fn decode(model: &SourceModel, index: usize, warnings: &mut Vec<String>) -> Option<Decoded> {
@@ -624,6 +675,59 @@ mod tests {
         let t = atlas.tiles[1];
         assert_eq!((t.u0, t.v0), (t.u1, t.v1), "a flat material gets one texel");
         assert_eq!(bilinear(&atlas, t.u0, t.v0), [255.0; 3], "and it is white");
+    }
+
+    /// A palette is kept whole and out of the grid, because the whole point is that it is sampled
+    /// at the source's resolution instead of being crushed into texels. Two swatches side by side
+    /// in a two-pixel image is the smallest thing that can tell the difference: packed into a tile
+    /// they would still be two texels, but the Golf's real sheet is forty-eight swatches across
+    /// two thirds of an image, which is one texel each at any tile this packer makes.
+    #[test]
+    fn a_palette_is_kept_whole_and_takes_no_tile() {
+        let mut data = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut data)
+            .write_image(
+                &[255, 0, 0, 255, 0, 0, 255, 255],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .expect("encode a 2x1 png");
+        let swatches = Material {
+            image: Some(0),
+            ..flat("swatches", [1.0; 4])
+        };
+        let mut model = model_with(vec![swatches]);
+        model.images.push(crate::model::Image {
+            name: "swatches".into(),
+            mime: "image/png".into(),
+            data,
+        });
+
+        let rules: crate::config::MaterialRules =
+            toml::from_str("palette = [\"swatches\"]").expect("the rule parses");
+        let atlas = Atlas::build(&model, &rules);
+
+        assert_eq!(atlas.textured, 0, "a palette is not a texture in the atlas");
+        let t = atlas.tiles[0];
+        assert_eq!((t.u0, t.v0), (t.u1, t.v1), "and it takes a texel, not a tile");
+        assert_eq!(bilinear(&atlas, t.u0, t.v0), [255.0; 3], "which is white");
+
+        let kept = atlas.palettes.get(&0).expect("the palette was kept");
+        assert_eq!(kept.sample([0.1, 0.5]), [1.0, 0.0, 0.0]);
+        assert_eq!(kept.sample([0.9, 0.5]), [0.0, 0.0, 1.0]);
+        assert!(atlas.warnings.is_empty(), "{:?}", atlas.warnings);
+    }
+
+    /// Naming a material that brings no image is a config that will do nothing and look almost
+    /// right, which is the kind of mistake worth a line of output.
+    #[test]
+    fn a_palette_with_no_image_says_so() {
+        let rules: crate::config::MaterialRules =
+            toml::from_str("palette = [\"paint\"]").expect("the rule parses");
+        let atlas = Atlas::build(&model_with(vec![flat("paint", [1.0; 4])]), &rules);
+        assert_eq!(atlas.warnings.len(), 1, "{:?}", atlas.warnings);
+        assert!(atlas.warnings[0].contains("paint"));
     }
 
     #[test]

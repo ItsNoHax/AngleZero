@@ -316,6 +316,27 @@ fn deep_report(path: &Path, material: Option<&str>) -> Result<()> {
             let b = part.bounds();
             let c = centre(&b);
             let s = b.size();
+            // The UV range as the source wrote it, before `unit_shift` or the tile's clamp touch
+            // it. This is where a part that samples the wrong corner of its image gives itself
+            // away: an island reaching 0 or 1 exactly is using the edge of the picture, and an
+            // island outside the square is one the clamp will pin to that edge whether it wants
+            // to be there or not.
+            let mut lo = [f32::INFINITY; 2];
+            let mut hi = [f32::NEG_INFINITY; 2];
+            for uv in &part.uvs {
+                for a in 0..2 {
+                    lo[a] = lo[a].min(uv[a]);
+                    hi[a] = hi[a].max(uv[a]);
+                }
+            }
+            if lo[0].is_finite() {
+                println!(
+                    "      uv u[{:.3},{:.3}] v[{:.3},{:.3}]",
+                    lo[0], hi[0], lo[1], hi[1]
+                );
+            } else {
+                println!("      no uvs");
+            }
             println!(
                 "  {:<40} {:>8} tris  at ({:6.2},{:6.2},{:6.2})  {:.2}x{:.2}x{:.2}  [{}]",
                 truncate(&part.node, 40),

@@ -464,6 +464,24 @@ pub struct MaterialRules {
     /// Colours to use in place of what a material declares. See `ColourRule`.
     #[serde(default)]
     pub colour: Vec<ColourRule>,
+    /// Materials whose image is a colour palette rather than a picture of the surface.
+    ///
+    /// Named the same way the category rules are. The Golf's whole interior is like this: the
+    /// image `Int_Plas_SH`, `Leather_Int` and `GolfCarpet_Int` share is a sheet of dashboard
+    /// symbols with a strip of colour swatches across its top sixteen rows, and every one of those
+    /// parts has V in [0.001, 0.068] — they address the swatches and nothing else. The model is
+    /// not textured, it is painted by pointing at a palette.
+    ///
+    /// An atlas cannot carry that. Forty-eight swatches across two thirds of the image come to
+    /// about one texel each at any tile size this packer produces, so nearest sampling picks an
+    /// arbitrary neighbour and linear sampling blends two — which is what turned the Golf's door
+    /// cards into a smear of yellow the moment the car was filtered.
+    ///
+    /// So the lookup is done here instead, at full source resolution, and multiplied into the
+    /// vertex colour. It is exact where the atlas could only approximate, it costs no tile, and it
+    /// cannot be disturbed by anything the atlas does later.
+    #[serde(default)]
+    pub palette: Vec<String>,
 }
 
 /// A colour to use in place of the one a material declares.
@@ -561,6 +579,14 @@ impl MaterialRules {
     pub fn region_for(&self, name: &str) -> Option<(&Region, [f32; 3])> {
         let rule = self.rule_for(name, true)?;
         rule.inside.as_ref().map(|r| (r, rule.linear_rgb()))
+    }
+
+    /// Whether the config says this material's image is a palette. See `MaterialRules::palette`.
+    pub fn is_palette(&self, name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        self.palette
+            .iter()
+            .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
     }
 
     /// Whether the config says to throw this material's image away. See `ColourRule::flat`.

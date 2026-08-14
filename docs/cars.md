@@ -568,6 +568,34 @@ proud of the bar it sits on — rather than making the box small in all three.
 node names and bounds. That is how you find out whether a part rule would have worked before
 reaching for a box.
 
+### When the image is not a picture
+
+Three of these models carry an image that is not a photograph of the surface it is on, and each one
+breaks the atlas in its own way. They are worth recognising, because all three look like a texturing
+bug and none of them is one.
+
+| What it is | How it looks | What to do |
+|---|---|---|
+| A **matcap** — strips of sky, horizon and sunset, indexed by the normal | A gradient that flips colour whenever the tile size moves | `flat = true` and name a colour |
+| A **palette** — a strip of colour swatches the UVs point at | Neighbouring swatches blend into each other once filtered | `palette = [...]` |
+| A real picture | Fine detail goes blocky when there are too few texels | more texels, then the gutter |
+
+The Golf has both of the first two. Its interior is palette-mapped: `Int_Plas_SH`, `Leather_Int`
+and `GolfCarpet_Int` share a sheet of dashboard symbols with about forty-eight colour swatches
+across its top sixteen rows, and every part wearing them has V in [0.001, 0.068]. They address the
+swatches and nothing else.
+
+An atlas cannot carry that, at any tile size this packer produces: two thirds of the image reduced
+to sixty-two texels is roughly one texel a swatch, so nearest sampling picks an arbitrary
+neighbour and linear sampling blends two. That is what smeared the Golf's door cards yellow the
+moment the car was filtered. `palette = ["Int_Plas", "Leather_Int", "Carpet_Int"]` does the lookup
+in the compiler instead, at the source's full 512 px, and multiplies the result into the vertex
+colour exactly where the hardware's `Modulate` would have. It is exact rather than approximate, it
+costs no tile, and nothing the atlas does later can disturb it.
+
+**`inspect --material <name>` prints each part's source UV range**, which is how a palette gives
+itself away: an island a few hundredths tall is not reading a picture.
+
 **The way to find which material owns a surface is the rule itself.** Paint a candidate a colour
 nothing else on the car wears, compile, and look at where it lands:
 

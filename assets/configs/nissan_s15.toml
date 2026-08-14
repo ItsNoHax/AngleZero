@@ -44,8 +44,16 @@ chrome = 8.0
 #
 # `phong13/14/15` are the lamp lenses and `phong21` is the rear window: four numbers that would
 # all otherwise land in the body, which is the difference between lit tail lamps and painted ones.
-light = ["phong13SG", "phong14SG", "phong15SG"]
-window = ["phong21SG", "phong20SG"]
+light = ["phong14SG", "phong15SG"]
+# `phong13SG` is the headlight lens and it is deliberately *not* a lamp. It is rgba(0, 0, 0, 0.47)
+# — a smoked cover, and behind it this model has a full reflector unit that `--hide light` shows
+# off. A lamp lens is drawn opaque and its alpha is thrown away, so as a light it was a solid black
+# slab over the top of that assembly, which is what "the headlights are not showing properly" is.
+# As a window it keeps its alpha, blends, and the lamp behind it comes through smoked.
+#
+# The cost is that the headlight anchors were being found from its geometry, so they are said
+# outright below — at the positions the converter itself measured before the change.
+window = ["phong21SG", "phong20SG", "phong13SG"]
 interior = ["phong18SG", "phong8SG", "phong19SG", "phong17SG"]
 chrome = ["phong16SG", "phong10SG", "phong11SG", "Caliper", "Wheel1"]
 tyre = ["Tire1A"]
@@ -63,3 +71,14 @@ top_speed = 55.0
 brake = 9800.0
 steer_lock = 0.72
 grip = 0.98
+
+[lights]
+# Measured by the converter from `phong13SG` when it was still a lens, and kept when it stopped
+# being one. Both numbers are its own report: "headlight left at (0.59, 0.56, 1.95), 0.70 m across".
+[lights.headlight_left]
+at = [0.59, 0.56, 1.95]
+radius = 0.35
+
+[lights.headlight_right]
+at = [-0.59, 0.56, 1.95]
+radius = 0.35

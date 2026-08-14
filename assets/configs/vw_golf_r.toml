@@ -75,6 +75,17 @@ chrome = ["carbon", "mirrors", "Color_2", "rimBC"]
 tyre = ["tire"]
 body = ["CarPaint"]
 
+# The whole interior is painted from a palette, not textured. `Int_Plas_SH`, `Leather_Int` and
+# `GolfCarpet_Int` share one 512x512 sheet of dashboard symbols with a strip of about forty-eight
+# colour swatches across its top sixteen rows, and every part wearing them has V in [0.001, 0.068]
+# — they address the swatches and nothing else. `inspect --material Int_Plas` shows it in one line.
+#
+# Two thirds of the image is swatches, which at any tile this packer produces is about one texel
+# each, so the atlas could only ever pick a neighbour or, once the car was filtered, blend two.
+# That is what smeared the door cards yellow. Sampled here at 512 and baked into the vertex it is
+# exact, and it costs no tile.
+palette = ["Int_Plas", "Leather_Int", "Carpet_Int"]
+
 # `rimBC` is the line that separates the alloy from the tyre. Unnamed, the rim is simply the
 # largest part of each corner, and the converter's fallback calls the largest part of a wheel the
 # tyre — so alloy and tyre went into one 7,696-triangle bucket per corner and were decimated as

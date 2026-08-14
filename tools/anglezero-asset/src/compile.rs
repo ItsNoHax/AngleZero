@@ -280,6 +280,11 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             inside.base_color = [rgb[0], rgb[1], rgb[2], material.base_color[3]];
             (r, pack(base_colour(&inside, category)))
         });
+        // A material whose image is a palette is sampled here rather than packed, at the source's
+        // own resolution, and multiplied into the vertex exactly as the hardware would have
+        // multiplied a tile. See `MaterialRules::palette`: an atlas cannot hold a swatch one texel
+        // wide, and every attempt to make it either picked a neighbour or blended two.
+        let palette = atlas.palettes.get(&part.material);
         let tile = atlas.tiles[part.material];
 
         let slot = match buckets.iter().position(|b| b.key() == (wheel, category)) {
@@ -318,22 +323,36 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         for (j, (v, n)) in part.positions.iter().zip(&part.normals).enumerate() {
             // Against the position before the hub is subtracted, because a region is written in
             // car space and a wheel's vertices are stored about their own centre.
-            let colour = match region {
+            let mut colour = match region {
                 Some((r, inside)) if r.contains(*v) => inside,
                 _ => packed,
             };
+            // A part with no texture coordinates at all still gets a valid one: its tile is a flat
+            // colour, so any point inside it is the same answer.
+            let uv = part.uvs.get(j).copied().unwrap_or([0.0, 0.0]);
+            let shifted = [uv[0] + shift[0], uv[1] + shift[1]];
+            if let Some(image) = palette {
+                // Multiplied after `base_colour`, because that is where the texture stage sits: it
+                // is `Modulate` on the console, over a vertex that already carries the material's
+                // colour and the category's treatment of it. Doing it here rather than there is
+                // the only difference, and the palette's tile is white so the console's multiply
+                // is now by one.
+                let texel = image.sample(shifted);
+                let mut c = unpack(colour);
+                for k in 0..3 {
+                    c[k] *= texel[k];
+                }
+                colour = pack(c);
+            }
             vertices.push(Vertex::new(
                 v[0] - origin[0],
                 v[1] - origin[1],
                 v[2] - origin[2],
                 colour,
             ));
-            // A part with no texture coordinates at all still gets a valid one: its tile is a flat
-            // colour, so any point inside it is the same answer.
-            let uv = part.uvs.get(j).copied().unwrap_or([0.0, 0.0]);
             attrs.push(Attr {
                 light: light_at(*n, category),
-                uv: tile.map([uv[0] + shift[0], uv[1] + shift[1]]),
+                uv: tile.map(shifted),
             });
         }
 
@@ -807,6 +826,13 @@ fn srgb(linear: f32) -> f32 {
 fn pack(c: [f32; 4]) -> u32 {
     let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u32;
     (byte(c[3]) << 24) | (byte(c[2]) << 16) | (byte(c[1]) << 8) | byte(c[0])
+}
+
+/// The inverse of `pack`, for the one stage that has to reach back into a packed colour: a palette
+/// lookup multiplies into a vertex that has already been through `base_colour` and packed.
+fn unpack(c: u32) -> [f32; 4] {
+    let chan = |shift: u32| ((c >> shift) & 0xFF) as f32 / 255.0;
+    [chan(0), chan(8), chan(16), chan(24)]
 }
 
 /// How much light a surface with this normal gets.
