@@ -497,6 +497,31 @@ Three things about that are worth knowing.
 It comes to 0.5% of the Golf's triangles and 3% of the E36's, and it is the difference between a
 grille and a hole you can see the scenery through. Cars go from 13 draw calls to between 16 and 25.
 
+## When a part is missing rather than wrong
+
+Two different mechanisms delete a part, and they want opposite fixes.
+
+**The visibility sweep can drop it outright.** A part owning no pixels from any of 72 viewpoints is
+removed before the budget is shared. That sweep runs at 128 px a side — 3.3 cm a pixel on a 4.2 m
+car — which resolves a door handle and does not resolve a foglight behind a bumper aperture, a mesh
+in a bumper opening, or the panel behind a kidney grille. The E36 was losing 98 parts and 21,294
+triangles that way.
+
+Existence is therefore settled by the finer sweep that already runs for culling, at 512 px a side
+or 8 mm a pixel; the coarse sweep still decides the *share*, which is all it was ever good for. The
+report's `Visibility:` line is the one to read — if it says a suspicious number of parts, they are
+gone before any weight can help them.
+
+**Or decimation can flatten it.** A part that survives the sweep still competes for triangles on
+measured pixels, and a lattice always loses: a grille slat or a mesh square is a pixel from where
+the camera stands and a wing is a thousand. The tell is a part that is *present but flat* — a black
+slab across a bumper opening rather than a hole in one. That is what `[reduce.parts]` is for, and
+the E36's front needed three of them.
+
+A useful signature for a lattice: **more vertices than triangles.** `BMWE36_black.008` is 27,360
+vertices against 18,084 triangles, which is hundreds of disconnected little squares and could not
+be anything else. `inspect` prints both.
+
 ## When a part looks wrong
 
 A wheel is about twenty pixels on a 480-wide screen, which is too few to tell a bad mesh from a

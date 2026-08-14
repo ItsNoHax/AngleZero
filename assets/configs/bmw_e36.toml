@@ -87,6 +87,30 @@ chrome = 12.0
 # `amdb11_` prefix is not a typo: the discs were lifted from an Aston Martin DB11 and the names
 # came with them.
 [reduce.parts]
+# The face of the car, and the three parts that make it one.
+#
+# All of this is inside `body`, which decimates 255,077 source triangles to about 6,600 — a ratio
+# of forty to one that a door skin survives and a lattice does not. Shared out on measured pixels
+# alone the front of the car loses every time, because a grille slat and a mesh square are a pixel
+# each from where the camera stands and a wing is a thousand.
+#
+#   E36_coupe_grille      the kidney grille, its slats, and the panel 17 cm behind it. Without
+#                         this the grille is a dark recess with a few struts in it and there is
+#                         nothing behind it at all.
+#   E36_coupe_bumper_F    the front bumper's own parts, which is where both foglights are — a lens,
+#                         its glass and its surround, about 900 triangles a side.
+#   BMWE36_black.008      27,360 vertices against 18,084 triangles, which is the signature of a
+#                         part made of hundreds of disconnected little squares: it is the mesh in
+#                         the lower bumper opening. Decimated with the bodywork it collapses into
+#                         a flat black slab across the opening, which is what "missing the mesh"
+#                         was. It needs the quotes — a bare dotted key is a TOML table.
+#
+# Deliberately not a budget raise. 30,000 draws the same face and costs 122 KB of an arena with
+# about 400 KB left in it; what was wrong was the share, not the total.
+E36_coupe_grille = 10.0
+E36_coupe_bumper_F = 6.0
+"BMWE36_black.008" = 6.0
+
 wheel_bmw_aplg = 6.0
 amdb11_brakedisc = 0.4
 

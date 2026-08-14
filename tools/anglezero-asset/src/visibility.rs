@@ -247,7 +247,38 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
         }
     }
 
-    let needed = what_culling_would_cost(model, transparent, &triangle_at, total, centre, radius);
+    let mut fine = vec![0u32; model.parts.len()];
+    let needed = what_culling_would_cost(
+        model,
+        transparent,
+        &triangle_at,
+        total,
+        centre,
+        radius,
+        &part_of,
+        &mut fine,
+    );
+
+    // The coarse sweep decides how much of the budget a part is worth. It does not get to decide
+    // whether the part exists.
+    //
+    // At 3.3 cm a pixel, a foglight behind a bumper aperture, a mesh grille and the radiator
+    // behind a kidney grille all own nothing — not because nobody can see them but because the
+    // sampling cannot resolve them. The E36 was dropping 98 parts and 21,294 triangles that way,
+    // and what reached the screen was a bumper with gaps where its lamps and its mesh belong. The
+    // finer sweep runs anyway for culling and asks the same question at 8 mm a pixel, so existence
+    // is settled there while the share is still settled here.
+    //
+    // Rescued at the fine count scaled back into coarse units — 512 against 128 is sixteen times
+    // the pixels — because it is the same measurement better sampled, not a different one. It
+    // comes to a handful of pixels either way, which is the point: these are small parts and they
+    // should get a small share of the budget, not nothing and not a special case.
+    for (i, p) in pixels.iter_mut().enumerate() {
+        if *p == 0 && fine[i] > 0 {
+            *p = (fine[i] / 16).max(1);
+        }
+    }
+
     triangle_at.pop();
     Visibility {
         pixels,
@@ -266,6 +297,11 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
 ///
 /// Drawn at [`CULL_RESOLUTION`] rather than [`RESOLUTION`] because the question is about individual
 /// triangles rather than about whole parts; see the constant.
+///
+/// It also counts what each part owns at this resolution into `fine`, which costs one add per
+/// pixel over a buffer that is being walked anyway. That is what settles whether a part small
+/// enough to fall through the coarse sweep is really invisible or merely under-sampled.
+#[allow(clippy::too_many_arguments)]
 fn what_culling_would_cost(
     model: &SourceModel,
     transparent: &[bool],
@@ -273,6 +309,8 @@ fn what_culling_would_cost(
     total: usize,
     centre: [f32; 3],
     radius: f32,
+    part_of: &impl Fn(usize) -> usize,
+    fine: &mut [u32],
 ) -> Vec<bool> {
     const N: usize = CULL_RESOLUTION * CULL_RESOLUTION;
     let mut needed = vec![false; total];
@@ -322,7 +360,11 @@ fn what_culling_would_cost(
 
             for at in 0..N {
                 let slot = owner[at];
-                if slot == u32::MAX || !facing[at] {
+                if slot == u32::MAX {
+                    continue;
+                }
+                fine[part_of(slot as usize)] += 1;
+                if !facing[at] {
                     continue;
                 }
                 if culled_owner[at] == u32::MAX || culled_depth[at] < depth[at] {
