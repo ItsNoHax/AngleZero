@@ -72,9 +72,7 @@ pub struct Visibility {
     /// grille inside it, and no part-wide answer can say that the grille is a sheet and the wing
     /// beside it is not.
     needed: Vec<bool>,
-    /// Per triangle, whether it is wound the wrong way round rather than genuinely two-sided.
-    backwards: Vec<bool>,
-    /// Where each part's triangles start in the arrays above.
+    /// Where each part's triangles start in the array above.
     triangle_at: Vec<usize>,
 }
 
@@ -102,28 +100,6 @@ impl Visibility {
     ) -> impl Iterator<Item = bool> + '_ {
         let at = self.triangle_at.get(part).copied().unwrap_or(0);
         (0..triangles).map(move |i| self.needed.get(at + i).copied().unwrap_or(false))
-    }
-
-    /// Which of a part's triangles the model wound the wrong way round.
-    ///
-    /// The narrower half of the same question, and the distinction is what makes it safe to act
-    /// on. `two_sided_triangles` says culling costs the picture here, which is true of two quite
-    /// different things: a sheet the player sees from both sides, and a triangle somebody mirrored
-    /// without reversing. Flipping the first moves the hole to the other side of the sheet — which
-    /// is what happened when an earlier attempt flipped everything the sweep flagged and took the
-    /// E39's flank with it. Flipping the second fixes it outright and costs nothing to draw.
-    ///
-    /// They are told apart by whether any view ever saw the triangle's *front*. A sheet is seen
-    /// from both sides by definition, so it has been the nearest surface facing towards the camera
-    /// at some pixel. A triangle that is only ever seen from behind, and whose removal opens a
-    /// hole, is a triangle that is meant to be facing the other way.
-    pub fn wound_backwards(
-        &self,
-        part: usize,
-        triangles: usize,
-    ) -> impl Iterator<Item = bool> + '_ {
-        let at = self.triangle_at.get(part).copied().unwrap_or(0);
-        (0..triangles).map(move |i| self.backwards.get(at + i).copied().unwrap_or(false))
     }
 }
 
@@ -272,7 +248,6 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
     }
 
     let mut fine = vec![0u32; model.parts.len()];
-    let mut front = vec![false; total];
     let needed = what_culling_would_cost(
         model,
         transparent,
@@ -282,15 +257,7 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
         radius,
         &part_of,
         &mut fine,
-        &mut front,
     );
-    // A triangle nobody ever saw the front of, that culling would turn into a hole, is one the
-    // model wound the wrong way round. See `wound_backwards`.
-    let backwards: Vec<bool> = needed
-        .iter()
-        .zip(&front)
-        .map(|(n, f)| *n && !*f)
-        .collect();
 
     // The coarse sweep decides how much of the budget a part is worth. It does not get to decide
     // whether the part exists.
@@ -317,7 +284,6 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
         pixels,
         views,
         needed,
-        backwards,
         triangle_at,
     }
 }
@@ -345,7 +311,6 @@ fn what_culling_would_cost(
     radius: f32,
     part_of: &impl Fn(usize) -> usize,
     fine: &mut [u32],
-    front: &mut [bool],
 ) -> Vec<bool> {
     const N: usize = CULL_RESOLUTION * CULL_RESOLUTION;
     let mut needed = vec![false; total];
@@ -400,9 +365,6 @@ fn what_culling_would_cost(
                 }
                 fine[part_of(slot as usize)] += 1;
                 if !facing[at] {
-                    // Nearest surface here and showing its front, which is the fact that separates
-                    // a sheet from a mistake. See `Visibility::wound_backwards`.
-                    front[slot as usize] = true;
                     continue;
                 }
                 if culled_owner[at] == u32::MAX || culled_depth[at] < depth[at] {
