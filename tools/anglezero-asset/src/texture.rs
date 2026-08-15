@@ -150,6 +150,14 @@ pub struct Atlas {
     /// packed: the compiler samples these per vertex and bakes the result into the vertex colour.
     /// Indexed by source material.
     pub palettes: HashMap<usize, Decoded>,
+    /// How much of the atlas one tile's content spans, as a fraction — 83 texels of 256 is 0.324.
+    ///
+    /// The simplifier needs it. UVs are rewritten into tile space before decimation, so a tile
+    /// twice as wide makes the same source texture twice as far across in the numbers the
+    /// simplifier sees, and its trade-off between moving a vertex and sliding a texture moves with
+    /// it. Dividing by this puts the question back in the source's own UV space, where it belongs
+    /// and where the packer cannot reach it. See `simplify::UV_WEIGHT`.
+    pub span: f32,
     pub warnings: Vec<String>,
 }
 
@@ -165,6 +173,9 @@ impl Atlas {
             textured: 0,
             resized: Vec::new(),
             palettes: HashMap::new(),
+            // Replaced below once the grid is known; the value only matters to a car that has a
+            // grid at all, and the early return below leaves every tile degenerate anyway.
+            span: 1.0,
             warnings: Vec::new(),
         };
 
@@ -213,6 +224,8 @@ impl Atlas {
             ));
             return atlas;
         }
+
+        atlas.span = content as f32 / ATLAS as f32;
 
         // The flat colours' shared tile sits after the images, and is white throughout so that a
         // coordinate landing anywhere in it still multiplies to no change.

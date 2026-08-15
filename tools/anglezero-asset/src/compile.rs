@@ -440,7 +440,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut welded_away = 0;
     for b in &mut buckets {
         for p in &mut b.pieces {
-            welded_away += simplify::weld(&mut p.vertices, &mut p.attrs, &mut p.indices);
+            welded_away += simplify::weld(&mut p.vertices, &mut p.attrs, &mut p.indices, atlas.span);
         }
     }
     report.note_welding(welded_away);
@@ -458,7 +458,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Kept always now rather than only for the levels: the refill pass re-simplifies from it too.
     let welded = buckets.clone();
 
-    spend_and_refill(&mut buckets, &welded, budget, Some(&mut report));
+    spend_and_refill(&mut buckets, &welded, budget, atlas.span, Some(&mut report));
     if buckets.is_empty() {
         return Err("the triangle budget left nothing to draw".into());
     }
@@ -468,7 +468,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut levels: Vec<Vec<Bucket>> = Vec::new();
     for &lod_budget in &config.lods {
         let mut coarse = welded.clone();
-        spend_budget(&mut coarse, lod_budget, None);
+        spend_budget(&mut coarse, lod_budget, atlas.span, None);
         if coarse.is_empty() {
             report.warn(format!(
                 "LOD at {lod_budget} triangles collapsed to nothing and was dropped"
@@ -1267,6 +1267,7 @@ fn spend_and_refill(
     buckets: &mut Vec<Bucket>,
     welded: &[Bucket],
     budget: usize,
+    tile_span: f32,
     report: Option<&mut Report>,
 ) {
     let first = share_budget(
@@ -1274,7 +1275,7 @@ fn spend_and_refill(
         budget,
         MIN_BUCKET_TRIANGLES,
     );
-    spend_budget_with(buckets, &first, None);
+    spend_budget_with(buckets, &first, tile_span, None);
 
     let used: Vec<usize> = buckets.iter().map(|b| b.indices.len() / 3).collect();
     // What the four corners of a category are judged to have used, which is not always what each
@@ -1284,7 +1285,7 @@ fn spend_and_refill(
     // Nothing meaningful came back, so the first pass was already the answer.
     if spent + spent / 20 >= budget {
         *buckets = welded.to_vec();
-        spend_budget_with(buckets, &first, report);
+        spend_budget_with(buckets, &first, tile_span, report);
         return;
     }
 
@@ -1327,7 +1328,7 @@ fn spend_and_refill(
     }
 
     *buckets = welded.to_vec();
-    spend_budget_with(buckets, &second, report);
+    spend_budget_with(buckets, &second, tile_span, report);
 }
 
 /// Shares a budget out across welded buckets and decimates each bucket to its share.
@@ -1337,17 +1338,27 @@ fn spend_and_refill(
 ///
 /// The report is only filled in for the level written as LOD0. The others would double every line
 /// in it, and it is the car the player is looking at whose error is worth warning about.
-fn spend_budget(buckets: &mut Vec<Bucket>, budget: usize, report: Option<&mut Report>) {
+fn spend_budget(
+    buckets: &mut Vec<Bucket>,
+    budget: usize,
+    tile_span: f32,
+    report: Option<&mut Report>,
+) {
     let targets = share_budget(
         &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
         budget,
         MIN_BUCKET_TRIANGLES,
     );
-    spend_budget_with(buckets, &targets, report);
+    spend_budget_with(buckets, &targets, tile_span, report);
 }
 
 /// Decimates each bucket to a target that has already been decided.
-fn spend_budget_with(buckets: &mut Vec<Bucket>, targets: &[usize], mut report: Option<&mut Report>) {
+fn spend_budget_with(
+    buckets: &mut Vec<Bucket>,
+    targets: &[usize],
+    tile_span: f32,
+    mut report: Option<&mut Report>,
+) {
     for (b, bucket_target) in buckets.iter_mut().zip(targets) {
         let piece_targets = share_budget(
             &b.pieces
@@ -1367,7 +1378,13 @@ fn spend_budget_with(buckets: &mut Vec<Bucket>, targets: &[usize], mut report: O
         let mut error_weight = 0.0f64;
         for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
             let was = p.indices.len() / 3;
-            let error = simplify::reduce(&mut p.vertices, &mut p.attrs, &mut p.indices, *target);
+            let error = simplify::reduce(
+                &mut p.vertices,
+                &mut p.attrs,
+                &mut p.indices,
+                *target,
+                tile_span,
+            );
             if std::env::var("AZ_PARTS").is_ok() {
                 eprintln!(
                     "PART {:>7} -> {:>6} (target {:>6}) {:5.2}%  {}",

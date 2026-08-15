@@ -62,9 +62,20 @@ const FREE_ERROR: f32 = 0.0005;
 const FREE_ERROR_FRACTION: f32 = 0.002;
 /// The smallest thing worth asking for when finding out what a part costs at no visual price.
 const MIN_TRIANGLES: usize = 2;
-/// What a unit of texture slide costs against a metre of geometry, when deciding a collapse. See
-/// `reduce`.
-const UV_WEIGHT: f32 = 4.0;
+/// What a unit of texture slide costs against a metre of geometry, when deciding a collapse, in
+/// the **source's** UV space — a whole image across, not a whole atlas across.
+///
+/// This was 4.0 and meant atlas units, which quietly made the number depend on the packer. A tile
+/// was an eighth of the atlas on every car, so 4.0 was really 0.5 per unit of source texture; when
+/// the grid started being sized by the images a tile became a third of the atlas on the E39, the
+/// same slide suddenly cost two and a half times more, and the simplifier kept a different set of
+/// triangles on every car.
+///
+/// That is not a tuning question, it is a coupling: how much a texture may slide is a fact about
+/// the picture on the part, and it must not change because the packer laid the atlas out
+/// differently. `reduce` divides by the tile's span to put the question back in source units, and
+/// 0.5 is the value that was in force for every car that has ever been looked at.
+const UV_WEIGHT: f32 = 0.5;
 
 /// What a vertex carries besides its position and colour, until the very end.
 ///
@@ -88,8 +99,14 @@ pub struct Attr {
 ///
 /// Returns how many vertices went away, which is worth reporting: on a model that welds badly, it
 /// is the number that explains why the decimation afterwards achieved nothing.
-pub fn weld(vertices: &mut Vec<Vertex>, attrs: &mut Vec<Attr>, indices: &mut Vec<u32>) -> usize {
+pub fn weld(
+    vertices: &mut Vec<Vertex>,
+    attrs: &mut Vec<Attr>,
+    indices: &mut Vec<u32>,
+    tile_span: f32,
+) -> usize {
     let before = vertices.len();
+    let span = tile_span.max(1.0e-6);
     let mut map: HashMap<(i32, i32, i32, u32, i32, i32), u32> = HashMap::with_capacity(before);
     let mut out: Vec<Vertex> = Vec::with_capacity(before);
     let mut light_sum: Vec<f32> = Vec::with_capacity(before);
@@ -104,8 +121,13 @@ pub fn weld(vertices: &mut Vec<Vertex>, attrs: &mut Vec<Attr>, indices: &mut Vec
             quantise(v.y),
             quantise(v.z),
             v.color,
-            (a.uv[0] * 1000.0) as i32,
-            (a.uv[1] * 1000.0) as i32,
+            // Divided by the tile's span for the same reason `reduce` divides its weight: these
+            // are atlas coordinates, and how far apart two texture coordinates have to be before
+            // they are a seam is a fact about the source's UVs, not about the grid the packer
+            // happened to choose. Left in atlas units, a bigger tile pulled the same two vertices
+            // further apart, welded fewer of them, and handed the decimator a different mesh.
+            (a.uv[0] / span * 1000.0) as i32,
+            (a.uv[1] / span * 1000.0) as i32,
         );
         let at = *map.entry(key).or_insert_with(|| {
             out.push(*v);
@@ -199,6 +221,7 @@ pub fn reduce(
     attrs: &mut Vec<Attr>,
     indices: &mut Vec<u32>,
     target_triangles: usize,
+    tile_span: f32,
 ) -> f32 {
     if indices.len() / 3 <= target_triangles || vertices.is_empty() {
         compact(vertices, attrs, indices);
@@ -221,11 +244,17 @@ pub fn reduce(
     //
     // Without this the decimator sees only geometry, and the collapse it likes best on a flat
     // panel is exactly the one that drags a decal across it: the shape is unchanged and the
-    // texture slides. The weight is high because these UVs are already in atlas space, where a
-    // whole tile is an eighth of the image — a full tile of slide has to cost about half a metre
-    // of geometry to be worth refusing.
+    // texture slides.
+    //
+    // These UVs are in atlas space, because that is what the vertex has to carry out to the
+    // console, and atlas space is not a fixed unit — a tile is whatever fraction of the image the
+    // packer gave it. Dividing the weight by that fraction asks the question in the source's own
+    // units instead, so a part's texture is allowed to slide by the same amount whatever grid it
+    // ended up in. Scaling the weight is the same as scaling the attribute; meshoptimizer squares
+    // the product either way.
     let uvs: Vec<f32> = attrs.iter().flat_map(|a| a.uv).collect();
-    let weights = [UV_WEIGHT, UV_WEIGHT];
+    let weight = UV_WEIGHT / tile_span.max(1.0e-6);
+    let weights = [weight, weight];
     let locks = vec![false; vertices.len()];
     let simplify = |target: usize, error_limit: f32, options, out: &mut f32| {
         meshopt::simplify_with_attributes_and_locks(
@@ -403,7 +432,7 @@ mod tests {
         let mut light = attrs(6);
         let mut indices = vec![0, 1, 2, 3, 4, 5];
 
-        let dropped = weld(&mut vertices, &mut light, &mut indices);
+        let dropped = weld(&mut vertices, &mut light, &mut indices, 0.125);
         assert_eq!(dropped, 2);
         assert_eq!(vertices.len(), 4);
         assert_eq!(indices.len(), 6, "both triangles survive");
@@ -415,7 +444,7 @@ mod tests {
         let mut vertices = vec![v(1.0, 0.0, 0.0, 7), v(1.000_001, 0.0, 0.0, 7)];
         let mut light = attrs(2);
         let mut indices = vec![];
-        weld(&mut vertices, &mut light, &mut indices);
+        weld(&mut vertices, &mut light, &mut indices, 0.125);
         assert_eq!(vertices.len(), 1);
     }
 
@@ -425,7 +454,7 @@ mod tests {
         let mut vertices = vec![v(0.0, 0.0, 0.0, 0xFF00_0000), v(0.0, 0.0, 0.0, 0xFF00_00FF)];
         let mut light = attrs(2);
         let mut indices = vec![];
-        weld(&mut vertices, &mut light, &mut indices);
+        weld(&mut vertices, &mut light, &mut indices, 0.125);
         assert_eq!(vertices.len(), 2);
     }
 
@@ -435,7 +464,7 @@ mod tests {
         let mut vertices = vec![v(0.0, 0.0, 0.0, 3), v(0.0, 0.0, 0.0, 3)];
         let mut light = vec![lit(0.2), lit(0.8)];
         let mut indices = vec![];
-        weld(&mut vertices, &mut light, &mut indices);
+        weld(&mut vertices, &mut light, &mut indices, 0.125);
         assert_eq!(vertices.len(), 1);
         assert!((light[0].light - 0.5).abs() < 1e-6, "light was {}", light[0].light);
     }
@@ -446,7 +475,7 @@ mod tests {
         let mut vertices = vec![v(0.0, 0.0, 0.0, 1), v(0.0, 0.0, 0.0, 1), v(1.0, 0.0, 0.0, 1)];
         let mut light = attrs(3);
         let mut indices = vec![0, 1, 2];
-        weld(&mut vertices, &mut light, &mut indices);
+        weld(&mut vertices, &mut light, &mut indices, 0.125);
         assert!(indices.is_empty(), "a zero-area triangle survived welding");
     }
 
@@ -474,7 +503,7 @@ mod tests {
         let before = indices.len() / 3;
         assert_eq!(before, 2048);
 
-        let error = reduce(&mut vertices, &mut light, &mut indices, 200);
+        let error = reduce(&mut vertices, &mut light, &mut indices, 200, 0.125);
         let after = indices.len() / 3;
         assert!(after < before / 2, "reduced {before} to {after}");
         assert!(error.is_finite() && error >= 0.0);
@@ -493,7 +522,7 @@ mod tests {
         let mut vertices = vec![v(0.0, 0.0, 0.0, 1), v(1.0, 0.0, 0.0, 1), v(0.0, 0.0, 1.0, 1)];
         let mut light = attrs(3);
         let mut indices = vec![0, 1, 2];
-        let error = reduce(&mut vertices, &mut light, &mut indices, 5000);
+        let error = reduce(&mut vertices, &mut light, &mut indices, 5000, 0.125);
         assert_eq!(indices.len(), 3);
         assert_eq!(vertices.len(), 3);
         assert_eq!(error, 0.0);
