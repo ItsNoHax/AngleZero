@@ -8,20 +8,24 @@ Sekira Pass after dark. Sideways the whole way down.
 
 <p align="center">
   <img src="docs/screenshot.png" width="880"
-       alt="Holding a slide through a right-hander on Sekira Pass">
+       alt="The S15 sideways through a left-hander on Sekira Pass at night">
 </p>
 
 <br>
 
 ## Install
 
-Download `AngleZero.0.1.0.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases) and
-unzip it at the root of the memory stick. That is the whole installation — the archive holds one
-file, already in the right place:
+Download `AngleZero.0.2.0.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases) and
+unzip it at the root of the memory stick. That is the whole installation — everything in the
+archive is already in the place it belongs:
 
 ```
 PSP/GAME/AngleZero/EBOOT.PBP
+PSP/GAME/AngleZero/CARS/*.azcar
 ```
+
+The cars are separate files rather than being built into the EBOOT, so adding one later is copying
+a file into `CARS/` — no rebuild, and the title screen offers it with L/R.
 
 Then it appears under Game → Memory Stick.
 
