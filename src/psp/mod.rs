@@ -105,6 +105,7 @@ fn read_buttons(pad: &SceCtrlData) -> Buttons {
         down: b.contains(CtrlButtons::DOWN),
         left: b.contains(CtrlButtons::LEFT),
         right: b.contains(CtrlButtons::RIGHT),
+        start: b.contains(CtrlButtons::START),
         analog_x,
     }
 }
@@ -201,9 +202,11 @@ pub fn psp_main() {
         #[cfg(not(feature = "harness"))]
         let mut last_tick = sys::sceKernelGetSystemTimeLow();
 
-        // Hardware-only diagnostics: START toggles the readout, SELECT saves a frame and its
+        // Hardware-only diagnostics: R toggles the readout, SELECT saves a frame and its
         // counters to ms0:/ANGLEZERO/. Both are edge-triggered off the raw pad, deliberately
-        // outside the game's own input mapping so they cannot affect driving.
+        // outside the game's own input mapping so they cannot affect driving. R rather than START,
+        // which the game now reads for the pause menu — a button cannot mean both, and the one the
+        // player is told about wins.
         // Without the overlay reading it at the top of the frame, a harness build only ever reads
         // this after the assignment further down, so its initial value really is dead there.
         #[cfg(feature = "devtools")]
@@ -261,8 +264,8 @@ pub fn psp_main() {
             // way to catch something that flickers for a few frames while you are also driving.
             #[cfg(all(feature = "devtools", not(feature = "harness")))]
             let want_capture = {
-                let start_edge = pad.buttons.contains(CtrlButtons::START)
-                    && !prev_debug_buttons.contains(CtrlButtons::START);
+                let r_edge = pad.buttons.contains(CtrlButtons::RTRIGGER)
+                    && !prev_debug_buttons.contains(CtrlButtons::RTRIGGER);
                 let select_held = pad.buttons.contains(CtrlButtons::SELECT);
                 let select_edge = select_held && !prev_debug_buttons.contains(CtrlButtons::SELECT);
                 // L cycles a render-state override, for pinning down a fault that only appears
@@ -271,7 +274,7 @@ pub fn psp_main() {
                 let l_edge = pad.buttons.contains(CtrlButtons::LTRIGGER)
                     && !prev_debug_buttons.contains(CtrlButtons::LTRIGGER);
                 prev_debug_buttons = pad.buttons;
-                if start_edge {
+                if r_edge {
                     show_debug = !show_debug;
                 }
                 if l_edge {

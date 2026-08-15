@@ -52,6 +52,7 @@ const UP: u16 = 1 << 4;
 const DOWN: u16 = 1 << 5;
 const LEFT: u16 = 1 << 6;
 const RIGHT: u16 = 1 << 7;
+const START: u16 = 1 << 8;
 
 const MAX_STEPS: usize = 32;
 
@@ -103,6 +104,7 @@ fn mask_from_letters(s: &[u8]) -> u16 {
             b'd' => DOWN,
             b'l' => LEFT,
             b'r' => RIGHT,
+            b'p' => START,
             _ => 0,
         };
     }
@@ -245,6 +247,7 @@ pub fn buttons_for(frame: u32) -> Buttons {
         down: mask & DOWN != 0,
         left: mask & LEFT != 0,
         right: mask & RIGHT != 0,
+        start: mask & START != 0,
         // The d-pad is enough to steer with, and leaving the nub centred keeps the script's text
         // form simple: one letter per button, no analog axis to encode.
         analog_x: 0.0,

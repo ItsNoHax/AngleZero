@@ -5,7 +5,7 @@
 
 use core::ffi::c_void;
 
-use angle_zero::game::{Game, Phase, Toast};
+use angle_zero::game::{Game, PauseChoice, Phase, Toast};
 use angle_zero::hud::{self as core_hud, Gear, RevZone};
 use angle_zero::math::{abs, clamp};
 use angle_zero::track::{Track, NODE_COUNT};
@@ -319,9 +319,53 @@ pub fn draw(game: &Game, track: &Track) {
     match game.phase {
         Phase::Title => draw_title(game),
         Phase::Run => draw_run(game, track),
+        // The run's own HUD stays up underneath: the clock, the score and the minimap are what a
+        // player pauses to look at, and the menu is a layer over the frame rather than a screen
+        // that replaces it.
+        Phase::Paused => {
+            draw_run(game, track);
+            draw_pause(game);
+        }
         Phase::Results => draw_results(game),
     }
-    draw_toast(game);
+    // The menu owns the middle of the screen while it is up, and a toast lands right under the
+    // word PAUSED. It is frozen rather than expired, so it comes back with the run.
+    if game.phase != Phase::Paused {
+        draw_toast(game);
+    }
+}
+
+/// The pause menu: three entries, the highlighted one marked and lit.
+fn draw_pause(game: &Game) {
+    fill_rect(0.0, 0.0, SCREEN_W, SCREEN_H, rgba(0x05, 0x07, 0x0C, 0xB0));
+    text::bind();
+    text::draw_centered(b"PAUSED", SCREEN_W * 0.5, 68.0, 2.0, AMBER);
+
+    let mut y = 118.0;
+    for choice in PauseChoice::ALL {
+        let label: &[u8] = match choice {
+            PauseChoice::Continue => b"CONTINUE",
+            PauseChoice::Restart => b"RESTART",
+            PauseChoice::ChangeCar => b"SELECT ANOTHER CAR",
+        };
+        let on = choice == game.pause_choice;
+        // The marker as well as the colour: a highlight that is only a colour is hard to read in a
+        // photograph of the handheld, and impossible in the greyscale frames the differ compares.
+        if on {
+            let half = text::width(label, 1.0) * 0.5;
+            text::draw_shadowed(b">", SCREEN_W * 0.5 - half - 14.0, y, 1.0, GREEN);
+        }
+        text::draw_centered(label, SCREEN_W * 0.5, y, 1.0, if on { GREEN } else { DIM });
+        y += 20.0;
+    }
+
+    text::draw_centered(
+        b"UP/DOWN CHOOSE   X SELECT   START RESUME",
+        SCREEN_W * 0.5,
+        210.0,
+        1.0,
+        DIM,
+    );
 }
 
 fn draw_title(game: &Game) {
@@ -475,7 +519,8 @@ fn draw_results(game: &Game) {
     text::draw_centered(&combo_line[..w], SCREEN_W * 0.5, 150.0, 1.0, ACCENT);
 
     draw_best(game, 172.0);
-    text::draw_centered(b"PRESS TRIANGLE TO RUN AGAIN", SCREEN_W * 0.5, 208.0, 1.0, GREEN);
+    text::draw_centered(b"PRESS X TO RUN AGAIN", SCREEN_W * 0.5, 204.0, 1.0, GREEN);
+    text::draw_centered(b"SQUARE TO CHANGE CAR", SCREEN_W * 0.5, 220.0, 1.0, DIM);
 }
 
 fn draw_run(game: &Game, track: &Track) {

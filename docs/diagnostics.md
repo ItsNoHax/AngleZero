@@ -19,7 +19,7 @@ PPSSPP's software rasteriser is far more forgiving than the GE — no cache, no 
 no display list to overrun — so some faults only appear on a PSP. With the feature on, the game
 captures its own evidence:
 
-- **START** toggles a counter readout.
+- **R** toggles a counter readout. (START used to, and now opens the pause menu instead.)
 - **SELECT** writes the current frame and those counters to `ms0:/ANGLEZERO/`.
 
 Put the PSP into USB mode (Settings → USB Connection) and run:

@@ -23,6 +23,7 @@ const NONE: Buttons = Buttons {
     down: false,
     left: false,
     right: false,
+    start: false,
     analog_x: 0.0,
 };
 

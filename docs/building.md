@@ -66,8 +66,15 @@ memory-stick directory instead.
 | Brake | □ (or D-pad Down) |
 | Handbrake | ○ |
 | Steer | D-pad Left/Right, or the analog nub |
-| Reset to road | △ |
-| Start run / restart from results | ✕ / △ |
+| Look at the front of the car | △ (held) |
+| Pause menu | START |
+| Start run | ✕ |
+| From the results: run again / change car | ✕ / □ |
+
+The pause menu offers Continue, Restart and Select another car; D-pad Up/Down choose and ✕ confirms,
+and START closes it again the way it opened it. Holding △ swings the chase camera round to look back
+at the car's nose — the same pose it takes by itself when the car is reversing — and letting go
+swings it back behind.
 
 Best time, score and combo persist to `ms0:/PSP/SAVEDATA/ANGLEZERO/RECORD.BIN` and show on the
 title and results screens.

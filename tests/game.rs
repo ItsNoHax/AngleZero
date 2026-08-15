@@ -1,6 +1,7 @@
 //! Screen flow, PSP button mapping and the fixed-timestep loop.
 
-use angle_zero::game::{Buttons, Game, Phase, Toast};
+use angle_zero::game::{Buttons, Game, PauseChoice, Phase, Toast};
+use angle_zero::math::{cos, sin};
 use angle_zero::track::{Track, BAY_NODE, NODE_COUNT};
 use angle_zero::vehicle::FIXED_DT;
 
@@ -25,11 +26,29 @@ const NONE: Buttons = Buttons {
     down: false,
     left: false,
     right: false,
+    start: false,
     analog_x: 0.0,
 };
 
 const CROSS: Buttons = Buttons {
     cross: true,
+    ..NONE
+};
+
+const SQUARE: Buttons = Buttons {
+    square: true,
+    ..NONE
+};
+
+const START: Buttons = Buttons {
+    start: true,
+    ..NONE
+};
+
+const UP: Buttons = Buttons { up: true, ..NONE };
+
+const DOWN: Buttons = Buttons {
+    down: true,
     ..NONE
 };
 
@@ -127,53 +146,191 @@ fn the_run_clock_stops_once_the_results_are_up() {
     assert_eq!(g.result.time, frozen);
 }
 
+/// Drives to the finish and leaves the game on the results screen with nothing held, so the next
+/// press is a clean edge.
+fn finish_a_run(g: &mut Game, t: &Track) {
+    g.update(t, CROSS, 1.0 / 60.0);
+    g.vehicle.place_at_node(t, NODE_COUNT - 30);
+    g.vehicle.state.vx = 20.0;
+    hold(g, t, CROSS, 6.0);
+    assert_eq!(g.phase, Phase::Results, "run never finished");
+    g.update(t, NONE, 1.0 / 60.0);
+}
+
 #[test]
-fn triangle_restarts_from_the_results_screen() {
+fn cross_restarts_from_the_results_screen() {
     let t = track();
     let mut g = game(&t);
-    g.update(&t, CROSS, 1.0 / 60.0);
-    g.vehicle.place_at_node(&t, NODE_COUNT - 30);
-    g.vehicle.state.vx = 20.0;
-    hold(&mut g, &t, CROSS, 6.0);
-    assert_eq!(g.phase, Phase::Results);
+    finish_a_run(&mut g, &t);
 
-    g.update(
-        &t,
-        Buttons {
-            triangle: true,
-            ..NONE
-        },
-        1.0 / 60.0,
-    );
+    g.update(&t, CROSS, 1.0 / 60.0);
     assert_eq!(g.phase, Phase::Run);
     assert_eq!(g.scoring.score, 0.0);
     assert!(g.vehicle.locator.last_idx <= 4, "restart should go back to the top");
 }
 
 #[test]
-fn triangle_during_a_run_puts_the_car_back_on_the_road() {
+fn square_sends_the_results_screen_back_to_the_car_selection() {
+    let t = track();
+    let mut g = game(&t);
+    finish_a_run(&mut g, &t);
+
+    g.update(&t, SQUARE, 1.0 / 60.0);
+    assert_eq!(g.phase, Phase::Title);
+    // The title screen is where a car gets picked, so the car has to be parked in the pull-off
+    // again rather than left wherever the run ended.
+    let bay = &t.nodes[BAY_NODE];
+    let dx = g.vehicle.state.x - bay.p.x;
+    let dz = g.vehicle.state.z - bay.p.z;
+    assert!((dx * bay.nrm.x + dz * bay.nrm.z) > 8.0);
+}
+
+#[test]
+fn triangle_during_a_run_looks_at_the_front_of_the_car_and_lets_go_again() {
     let t = track();
     let mut g = game(&t);
     g.update(&t, CROSS, 1.0 / 60.0);
     hold(&mut g, &t, CROSS, 3.0);
 
-    // Shove the car off into the scenery.
-    g.vehicle.state.x += 40.0;
-    g.update(
-        &t,
-        Buttons {
-            triangle: true,
-            ..NONE
-        },
-        1.0 / 60.0,
+    // How far ahead of the car's nose the camera is standing: positive is in front of it, which is
+    // the whole point of the view and is what a yaw comparison would only imply.
+    let along_nose = |g: &Game| {
+        let (car, cam) = (&g.vehicle.state, &g.camera);
+        (cam.pos.x - car.x) * sin(car.yaw) + (cam.pos.z - car.z) * cos(car.yaw)
+    };
+    assert!(along_nose(&g) < -3.0, "the chase should start out behind");
+
+    let ahead = Buttons {
+        triangle: true,
+        ..CROSS
+    };
+    hold(&mut g, &t, ahead, 2.0);
+
+    // The run carries on — this is a camera, not a reset.
+    assert_eq!(g.phase, Phase::Run);
+    assert!(g.camera.front_view);
+    assert!(
+        along_nose(&g) > 3.0,
+        "camera should be out in front of the car, was {}",
+        along_nose(&g)
     );
 
-    assert_eq!(g.phase, Phase::Run);
+    // And letting go swings it back behind.
+    hold(&mut g, &t, CROSS, 2.0);
+    assert!(!g.camera.front_view);
     assert!(
-        g.vehicle.query.lat.abs() < 1.0,
-        "reset should return to the centreline, lat was {}",
-        g.vehicle.query.lat
+        along_nose(&g) < -3.0,
+        "camera did not return behind the car, was {}",
+        along_nose(&g)
     );
+}
+
+// ------------------------------------------------------------------ pause menu
+
+#[test]
+fn start_pauses_the_run_and_nothing_moves_while_it_is_up() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+
+    g.update(&t, START, 1.0 / 60.0);
+    assert_eq!(g.phase, Phase::Paused);
+    assert_eq!(g.pause_choice, PauseChoice::Continue);
+
+    let (x, z, clock) = (g.vehicle.state.x, g.vehicle.state.z, g.run_time);
+    // Two seconds parked on a 1-in-8 descent: rolling away is what an unpaused car would do.
+    hold(&mut g, &t, NONE, 2.0);
+    assert_eq!(g.phase, Phase::Paused);
+    assert_eq!(g.run_time, clock, "the clock ran while paused");
+    assert_eq!((g.vehicle.state.x, g.vehicle.state.z), (x, z));
+}
+
+#[test]
+fn continue_resumes_the_same_run_where_it_stopped() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+    let (clock, node) = (g.run_time, g.vehicle.locator.last_idx);
+
+    g.update(&t, START, 1.0 / 60.0);
+    g.update(&t, NONE, 1.0 / 60.0);
+    g.update(&t, CROSS, 1.0 / 60.0); // Continue is what it opens on
+
+    assert_eq!(g.phase, Phase::Run);
+    assert_eq!(g.vehicle.locator.last_idx, node);
+    assert!(g.run_time >= clock, "resuming rewound the clock");
+    assert!(g.run_time < clock + 0.1, "resuming cost the run a chunk of time");
+}
+
+#[test]
+fn restart_puts_the_car_back_at_the_top_with_the_score_cleared() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+    g.scoring.score = 5000.0;
+
+    g.update(&t, START, 1.0 / 60.0);
+    g.update(&t, DOWN, 1.0 / 60.0);
+    assert_eq!(g.pause_choice, PauseChoice::Restart);
+    g.update(&t, CROSS, 1.0 / 60.0);
+
+    assert_eq!(g.phase, Phase::Run);
+    assert_eq!(g.scoring.score, 0.0);
+    assert!(g.vehicle.locator.last_idx <= 4);
+    assert_eq!(g.run_time, 0.0);
+}
+
+#[test]
+fn select_another_car_goes_back_to_the_title_screen() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+
+    g.update(&t, START, 1.0 / 60.0);
+    g.update(&t, DOWN, 1.0 / 60.0);
+    g.update(&t, NONE, 1.0 / 60.0);
+    g.update(&t, DOWN, 1.0 / 60.0);
+    assert_eq!(g.pause_choice, PauseChoice::ChangeCar);
+    g.update(&t, CROSS, 1.0 / 60.0);
+
+    assert_eq!(g.phase, Phase::Title);
+    assert_eq!(g.vehicle.state.vx, 0.0);
+}
+
+#[test]
+fn the_menu_wraps_both_ways_and_start_closes_it_again() {
+    // Three entries, so wrapping is what makes the last one reachable in one press.
+    assert_eq!(PauseChoice::Continue.step(-1), PauseChoice::ChangeCar);
+    assert_eq!(PauseChoice::ChangeCar.step(1), PauseChoice::Continue);
+
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+
+    g.update(&t, START, 1.0 / 60.0);
+    g.update(&t, UP, 1.0 / 60.0);
+    assert_eq!(g.pause_choice, PauseChoice::ChangeCar);
+
+    // START is its own way out, whatever is highlighted, and does not act on the entry.
+    g.update(&t, NONE, 1.0 / 60.0);
+    g.update(&t, START, 1.0 / 60.0);
+    assert_eq!(g.phase, Phase::Run);
+}
+
+#[test]
+fn a_held_start_does_not_flicker_between_paused_and_running() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, CROSS, 1.0 / 60.0);
+    hold(&mut g, &t, CROSS, 3.0);
+
+    hold(&mut g, &t, START, 1.0);
+    assert_eq!(g.phase, Phase::Paused);
 }
 
 // ------------------------------------------------------------------ controls

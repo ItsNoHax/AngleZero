@@ -142,7 +142,7 @@ use angle_zero::track::{Track, NODE_COUNT};
 
 const NONE: Buttons = Buttons {
     cross: false, circle: false, square: false, triangle: false,
-    up: false, down: false, left: false, right: false, analog_x: 0.0,
+    up: false, down: false, left: false, right: false, start: false, analog_x: 0.0,
 };
 
 /// Runs a descent from near the finish so it completes quickly.

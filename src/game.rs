@@ -26,7 +26,34 @@ pub const TOAST_FADE: f32 = 0.4;
 pub enum Phase {
     Title,
     Run,
+    /// The run, suspended mid-descent with the menu up. Everything keeps its state — this is the
+    /// same run, waiting — so `Continue` is a phase change and nothing else.
+    Paused,
     Results,
+}
+
+/// The pause menu's three entries, in the order they are listed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PauseChoice {
+    Continue,
+    Restart,
+    ChangeCar,
+}
+
+impl PauseChoice {
+    pub const ALL: [PauseChoice; 3] = [
+        PauseChoice::Continue,
+        PauseChoice::Restart,
+        PauseChoice::ChangeCar,
+    ];
+
+    /// Moves `delta` entries down the list, wrapping. Wrapping rather than stopping at the ends
+    /// because there are three of them: the far entry is one press away either way round.
+    pub fn step(self, delta: i32) -> PauseChoice {
+        let n = Self::ALL.len() as i32;
+        let i = Self::ALL.iter().position(|&c| c == self).unwrap_or(0) as i32;
+        Self::ALL[(((i + delta) % n + n) % n) as usize]
+    }
 }
 
 /// The messages that flash up mid-run.
@@ -50,6 +77,8 @@ pub struct Buttons {
     pub down: bool,
     pub left: bool,
     pub right: bool,
+    /// START, which opens the pause menu and closes it again. Never a driving input.
+    pub start: bool,
     /// Analog nub, -1.0 (right) to +1.0 (left). Ignored when the d-pad is used.
     pub analog_x: f32,
 }
@@ -79,6 +108,9 @@ pub struct Game {
     pub record: Record,
     /// Set when `record` has improved and needs writing back.
     record_dirty: bool,
+
+    /// Which pause-menu entry is highlighted. Only meaningful in `Phase::Paused`.
+    pub pause_choice: PauseChoice,
 
     pub toast: Option<Toast>,
     pub toast_timer: f32,
@@ -122,6 +154,7 @@ impl Game {
                 best_combo: 0,
             },
             record_dirty: false,
+            pause_choice: PauseChoice::Continue,
             toast: None,
             toast_timer: 0.0,
             last_throttle: 0.0,
@@ -136,6 +169,7 @@ impl Game {
                 down: false,
                 left: false,
                 right: false,
+                start: false,
                 analog_x: 0.0,
             },
             accumulator: 0.0,
@@ -161,6 +195,7 @@ impl Game {
 
     /// Puts the car in the emergency pull-off and shows the title screen.
     pub fn enter_title(&mut self, track: &Track) {
+        self.camera.front_view = false;
         let n = &track.nodes[BAY_NODE];
         let road_heading = atan2(n.dir.x, n.dir.z);
         // Parked on the apron, then nudged forward and back toward the road.
@@ -204,8 +239,17 @@ impl Game {
         self.run_time = 0.0;
         self.accumulator = 0.0;
         self.phase = Phase::Run;
+        self.camera.front_view = false;
         self.camera.snap_behind(&self.vehicle.state);
         self.show(Toast::Go);
+    }
+
+    /// Suspends the run and opens the menu, always on `Continue` — the entry that undoes the
+    /// press, so a mistaken START costs one more press and nothing else.
+    pub fn pause(&mut self) {
+        self.phase = Phase::Paused;
+        self.pause_choice = PauseChoice::Continue;
+        self.camera.front_view = false;
     }
 
     fn show(&mut self, toast: Toast) {
@@ -247,9 +291,12 @@ impl Game {
     pub fn update(&mut self, track: &Track, buttons: Buttons, dt: f32) {
         let pressed = |now: bool, before: bool| now && !before;
         let cross_edge = pressed(buttons.cross, self.prev.cross);
-        let triangle_edge = pressed(buttons.triangle, self.prev.triangle);
+        let square_edge = pressed(buttons.square, self.prev.square);
+        let start_edge = pressed(buttons.start, self.prev.start);
         let right_edge = pressed(buttons.right, self.prev.right);
         let left_edge = pressed(buttons.left, self.prev.left);
+        let up_edge = pressed(buttons.up, self.prev.up);
+        let down_edge = pressed(buttons.down, self.prev.down);
         self.prev = buttons;
 
         // A hitch must not be simulated in full, or the car teleports through the scenery.
@@ -273,31 +320,56 @@ impl Game {
                 }
             }
             Phase::Run => {
-                if triangle_edge {
-                    self.vehicle.place_at_node(track, self.vehicle.locator.last_idx);
-                    self.vehicle.state.vx = 3.0;
-                    self.scoring.on_wall_tap();
-                    self.show(Toast::BackOnTrack);
-                }
-                self.run_substeps(track, buttons, frame_dt);
-                self.camera.update_run(&self.vehicle.state, frame_dt);
-                // Smoke ages per rendered frame rather than per substep.
-                self.effects.update(frame_dt);
+                if start_edge {
+                    self.pause();
+                } else {
+                    // Held, not toggled: it is a glance at the front of the car, and letting go has
+                    // to put the road back without a second press to remember.
+                    self.camera.front_view = buttons.triangle;
+                    self.run_substeps(track, buttons, frame_dt);
+                    self.camera.update_run(&self.vehicle.state, frame_dt);
+                    // Smoke ages per rendered frame rather than per substep.
+                    self.effects.update(frame_dt);
 
-                if track.progress(self.vehicle.locator.last_idx) > FINISH_PROGRESS {
-                    self.finish();
+                    if track.progress(self.vehicle.locator.last_idx) > FINISH_PROGRESS {
+                        self.finish();
+                    }
+                }
+            }
+            // Nothing moves: no substeps, no camera, no effects and no clock. The frame is drawn
+            // from the state the run was suspended in, which is what makes this a pause rather
+            // than a menu the car keeps rolling behind.
+            Phase::Paused => {
+                if up_edge {
+                    self.pause_choice = self.pause_choice.step(-1);
+                }
+                if down_edge {
+                    self.pause_choice = self.pause_choice.step(1);
+                }
+                // START closes the menu the way it opened it, whatever is highlighted.
+                if start_edge {
+                    self.phase = Phase::Run;
+                } else if cross_edge {
+                    match self.pause_choice {
+                        PauseChoice::Continue => self.phase = Phase::Run,
+                        PauseChoice::Restart => self.start_run(track),
+                        PauseChoice::ChangeCar => self.enter_title(track),
+                    }
                 }
             }
             Phase::Results => {
-                if cross_edge || triangle_edge {
+                if cross_edge {
                     self.start_run(track);
+                } else if square_edge {
+                    self.enter_title(track);
                 } else {
                     self.camera.update_run(&self.vehicle.state, frame_dt);
                 }
             }
         }
 
-        if self.toast_timer > 0.0 {
+        // A toast holds its place while the game is paused rather than fading out behind the menu.
+        if self.phase != Phase::Paused && self.toast_timer > 0.0 {
             self.toast_timer -= frame_dt;
             if self.toast_timer <= 0.0 {
                 self.toast_timer = 0.0;

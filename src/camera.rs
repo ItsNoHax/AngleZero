@@ -4,7 +4,7 @@
 //! is the whole reason slides read properly: the car visibly rotates within the frame instead of
 //! the world swinging around a car that always faces away from you.
 
-use crate::math::{atan2, cos, hypot, lerp, min, sin, wrap_pi, Vec3};
+use crate::math::{atan2, cos, hypot, lerp, min, sin, wrap_pi, Vec3, PI};
 use crate::vehicle::CarState;
 
 /// Radius of the title screen's orbit.
@@ -23,6 +23,11 @@ pub struct Camera {
     pub shake: f32,
     /// Title-screen orbit phase.
     pub orbit_angle: f32,
+    /// Swing the chase round to look at the front of the car. This is the pose the camera already
+    /// takes by itself when the car is reversing — the velocity heading points backwards, so the
+    /// camera ends up ahead of the bonnet looking back down the road — and it is reached the same
+    /// way, by swinging rather than cutting, so it reads as the same camera and not another one.
+    pub front_view: bool,
     /// Cheap deterministic noise for the shake — no RNG in `no_std`, and determinism keeps
     /// headless captures reproducible.
     rng: u32,
@@ -43,6 +48,7 @@ impl Camera {
             fov: RUN_FOV_BASE,
             shake: 0.0,
             orbit_angle: 0.0,
+            front_view: false,
             rng: 0x1234_5678,
         }
     }
@@ -94,7 +100,15 @@ impl Camera {
             car.vx * cos(car.yaw) - car.vy * sin(car.yaw),
         );
         // Below walking pace the velocity heading is just noise.
-        let target = if speed > 4.0 { vel_yaw } else { car.yaw };
+        let target = if self.front_view {
+            // The nose, whichever way the car is travelling: a glance forward has to keep meaning
+            // the same thing when the car is going backwards or sideways.
+            car.yaw + PI
+        } else if speed > 4.0 {
+            vel_yaw
+        } else {
+            car.yaw
+        };
         self.yaw += wrap_pi(target - self.yaw) * min(1.0, 3.2 * dt);
 
         let dist = 7.4 + min(3.2, speed * 0.075);
