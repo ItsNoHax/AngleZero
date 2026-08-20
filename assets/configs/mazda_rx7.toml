@@ -1,0 +1,32 @@
+# Mazda RX-7 FD with the VeilSide C-II kit.
+#
+# NOT SHIPPED YET, and `scripts/cars.sh list` will say so by showing no compiled car beside it.
+# The model carries a shadow-catcher plane — a big flat rectangle with the car's shadow painted on
+# it — whose material blends, so the categoriser files it under `window` and the compiled car ends
+# up with a translucent slab lying under it. It is also what makes the car measure 6.00 m long and
+# 2.80 m wide against a real one's 4.29 by 1.75.
+#
+# The plinth below is a *different* part and dropping it did not fix this. Three passes went on
+# finding the plane's node name without success: it is not the `phong2` part (that is carbon trim),
+# no single part in the file has an extent anywhere near 6 m, and the window bucket's own numbers
+# do not separate cleanly. `azview --only window` shows it plainly, which is where to start again.
+# Everything else about this car is right, so it is one `drop` line away from shipping.
+name = "Mazda RX-7"
+source = "1993_veilside_c-ii_mazda_rx-7_fast__furious.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# Everything wheel-shaped is under the model's own `Mazda_RX7F1_1993_Wheel` group.
+match = ["Mazda_RX7F1_1993_Wh"]
+
+[reduce]
+# This model ships standing on a display plinth — `Base_Geo_lodA`, 1,732 triangles of flat slab
+# under the car. It is not part of the car and it is not harmless: the converter measures the car
+# off its geometry, so the RX-7 came out 6.00 m long and 2.80 m wide against a real one's 4.29 by
+# 1.75, and the lamp detector refused both headlights because the plinth had pulled the candidate
+# positions apart until they were no longer a mirrored pair. One line fixes all three, and it is
+# worth checking every model in this set for one.
+drop = ["Base_Geo_lodA_Base_Geo_lodA"]

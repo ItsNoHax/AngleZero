@@ -1,0 +1,15 @@
+# BMW E30 with the Pandem widebody kit. CC-BY rather than the non-commercial licence most of this
+# fleet carries.
+name = "BMW E30 Pandem"
+source = "2017_pandem_bmw_e30_v1.5_bodykit.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# Three rim materials — `crome_rim`, `rim_B`, `rim_C_2` — under `off1_`/`off2_` nodes, plus the
+# tyre under the model's `Wheel1A` group. `_rim` rather than `rim` so it cannot reach anything that
+# merely ends in those letters, and nothing here is called `SteeringWheel`, which `Wheel` alone
+# would have taken.
+match = ["_rim", "Wheel1A"]

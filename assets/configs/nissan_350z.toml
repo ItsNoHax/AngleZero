@@ -1,0 +1,13 @@
+# Nissan 350Z, Rachel's car from NFS Underground 2, with a Rocket Bunny kit.
+name = "Nissan 350Z"
+source = "rachels_nissan_350z_nfs_underground_2.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# The brake and hub assemblies are named per corner (`SM_Brake_FL`, `SM_Hub_L`), and the tyre is
+# the model's `Wheel1A` group spread over sixty parts — which is fine, since the converter groups
+# by position rather than by count.
+match = ["SM_Brake_", "SM_Hub", "Wheel1A"]

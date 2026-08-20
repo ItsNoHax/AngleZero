@@ -29,3 +29,20 @@ lods = [3000, 1200]
 # `Wheel` on its own would be tempting and is wrong: it also takes `SteeringWheel1_Mesh_007`, and
 # a steering wheel welded into the front axle rotates the cabin with the road speed.
 match = ["ChargerF9_1968_Wheel", "WheelFL6_Mesh"]
+
+[materials]
+# The right front wing is not a lamp. `FenderFR1_Mesh_016` wears a material called
+# `M_Light_Max_007`, and the category guesser reads node names as well as material names, so the
+# whole panel sorted as `light` — while `FenderFL1_Mesh_015`, the identical panel on the other
+# side, wears `M_Opaque_PlasticRough` and sorted as body. The same wing in two categories, so one
+# side of the car was lit like a headlight and the other was paint.
+#
+# It showed up in the silhouette first, as a wedge bitten out between the front wheel and the nose:
+# a silhouette is built from `body` and `window`, so a wing filed under `light` is a wing that is
+# not there. That is the useful thing about the silhouette — it is a categorisation error you can
+# see from across the room.
+#
+# `FenderF` and not `Fender`: the rear wings are `FendersR6` and already sort correctly off
+# `M_CarPaint`, and the three `FenderFR1` pieces this does take are 757, 199 and 111 triangles,
+# mirroring the left side's exactly. All panel, no lens.
+body = ["FenderF"]

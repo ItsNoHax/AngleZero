@@ -1,0 +1,15 @@
+# Honda Civic Type R EK9. The smallest source model in the set at 54,622 triangles — a sixth of the
+# Xsara's — so the budget below is not the constraint it is on the scanned cars.
+name = "Honda EK9"
+source = "2000_honda_civic_type_r_ek9.glb"
+
+# 0.042 units on Z and an EK9 is 4.18 m, so hundredths.
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# Same exporter as the Charger: the rim, badge and hardware are all under one `WheelFL6_Mesh` node
+# name copied to all four corners, and the tyre is the model's own `Wheel1A` group. The converter
+# sorts them into corners by position, so a name shared by four corners is not a problem.
+match = ["WheelFL6_Mesh", "Wheel1A"]

@@ -868,8 +868,12 @@ file name each one is expected to have is in `assets/configs/`, beside the confi
 | Nissan Silvia S15 (Vertex Edge) | [Sketchfab](https://sketchfab.com/3d-models/2010-vertex-edge-nissan-s15-silvia-1edf4f37e6284bdaa6df0f9572389875) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 | Volkswagen Golf R Mk7.5 | [Sketchfab](https://sketchfab.com/3d-models/2019-volkswagen-golf-r-ae63f9a1b236480588bd2e8dcce7b7b2) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 | Dodge Charger R/T 1969 | [Sketchfab](https://sketchfab.com/3d-models/1969-dodge-charger-rt-261de8013c4e4fb0884a8106bd3212a7) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Honda Civic Type R EK9 | [Sketchfab](https://sketchfab.com/3d-models/2000-honda-civic-type-r-ek9-4012706636b843d49ad3974af8fba593) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Abarth 500 | [Sketchfab](https://sketchfab.com/search?q=abarth+500+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| BMW E30 (Pandem) | [Sketchfab](https://sketchfab.com/search?q=pandem+e30+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-4.0 |
+| Nissan 350Z (Rachel's) | [Sketchfab](https://sketchfab.com/search?q=rachel+350z+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 
-**Five of the eight are non-commercial, and four of those are also share-alike.** Fine for a hobby
+**Eight of the twelve are non-commercial, and seven of those are also share-alike.** Fine for a hobby
 build; a paid release could ship the E36, the E39 and the 190E and nothing else. `ShareAlike` is the
 stricter half of that — it reaches the derivative, which is the compiled `.azcar` and arguably the
 screenshots of it, not merely the sale.

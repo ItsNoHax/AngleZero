@@ -1,0 +1,20 @@
+# Abarth 500. The shortest car here at 3.66 m, which is most of a metre less than the AE86 and
+# nearly two less than the Charger.
+name = "Abarth 500"
+source = "2014_abarth_500_1.4_16v.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# One material and one node fragment covers the whole wheel here — rim, tyre and hardware are a
+# single group per corner under `Abarth_500_2014_Wheel`.
+match = ["Abarth_500_2014_Wheel"]
+
+[reduce]
+# Shipped standing on a display plinth: `Base_Geo_lodA_Base_Geo_lodA`, 1,226 triangles of flat slab
+# that is not part of the car. The doubled name is what tells it apart from the body — this
+# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a pattern of plain `Base_Geo` would
+# take the bodywork with it.
+drop = ["Base_Geo_lodA_Base_Geo_lodA"]
