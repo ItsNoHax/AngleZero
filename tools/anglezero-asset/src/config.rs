@@ -53,6 +53,18 @@ pub struct CarConfig {
     /// car, and the whole point of the level is that it is looked at from further away.
     #[serde(default)]
     pub lods: Vec<usize>,
+
+    /// Triangle budget for the silhouette — the flat stand-in the console draws while the rest of
+    /// this car is still being read off the memory stick. `None` takes the default.
+    ///
+    /// Its own budget rather than a share of `triangles`, and drawn from the shell, the glass and
+    /// the tyres alone, because the only thing asked of it is an outline. Worth raising for a car
+    /// whose shape is in details a few hundred triangles cannot hold; worth lowering for a car
+    /// that is mostly a box. Bear in mind that the silhouette has to arrive in the load's first
+    /// 32 KB chunk to be worth anything, and it shares that chunk with the header and the mesh
+    /// records.
+    #[serde(default)]
+    pub silhouette: Option<usize>,
 }
 
 /// How the car drives, as distinct from what it looks like.
@@ -664,6 +676,7 @@ impl CarConfig {
             handling: Handling::default(),
             lights: Lights::default(),
             lods: Vec::new(),
+            silhouette: None,
         }
     }
 

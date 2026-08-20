@@ -631,13 +631,38 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     // The stand-in the console draws while the rest of this file is still being read.
     //
-    // It is the coarsest level's geometry rather than a decimation of its own, and that is a
-    // deliberate refusal to add a fourth budget: a level built to be recognisable at eighteen
-    // metres is already a shape, it has been through the same whole-car simplification every other
-    // level has, and reusing it means no new way for the bodywork to crack. Wheels are baked in at
-    // their hubs, standing straight, so the whole thing draws under one transform — a stand-in has
-    // no steering to do.
-    let silhouette = build_silhouette(levels.last().unwrap_or(&buckets), origin_of);
+    // Built from the welded original rather than handed the coarsest LOD, which is what it used to
+    // be and what made it look like a crushed can. Two things were wrong with that, and both come
+    // from a level tuned for a car eighteen pixels tall being asked to be one four hundred pixels
+    // tall:
+    //
+    // * **The budget went to parts with no outline in them.** LOD2 shares its triangles across
+    //   every category by how many pixels each is worth over the visibility sweep, and the E36's
+    //   interior is 4,841 triangles of seats and door cards that are *inside the shell*. Every one
+    //   it kept was a triangle the bodywork did not get. So the categories that cannot contribute
+    //   to an outline are dropped before the budget is shared, and what is left is the shell, the
+    //   glass that fills the greenhouse, and the tyres.
+    // * **Decimation shrinks a car into itself.** Collapsing edges pulls a convex surface inward,
+    //   which is invisible at 45 m and is the entire subject at 5 m: the arches and sills went
+    //   first, and the wheels ended up standing outside a body that had retreated from them.
+    //   Spending a budget of its own on a quarter as many parts leaves the shell enough triangles
+    //   to keep its own width.
+    //
+    // Dropping whole categories is not the same thing as cutting a mesh up to decimate the pieces,
+    // which cracks bodywork and is never done here: the body bucket goes in whole and comes out
+    // whole.
+    let sil_buckets: Vec<&Bucket> = welded
+        .iter()
+        .filter(|b| SILHOUETTE_CATEGORIES.contains(&b.category))
+        .collect();
+    let mut silhouette = build_silhouette(&sil_buckets, origin_of);
+    simplify::reduce_shell(
+        &mut silhouette.0,
+        &mut silhouette.1,
+        config.silhouette.unwrap_or(SILHOUETTE_TRIANGLES),
+    );
+    silhouette_wheels(&wheel_defs, &mut silhouette.0, &mut silhouette.1);
+    let silhouette = narrow_silhouette(silhouette.0, silhouette.1);
     if silhouette.1.is_empty() {
         report.warn("no silhouette could be built; the car will pop in rather than fade in".into());
     }
@@ -1062,37 +1087,133 @@ impl Strings {
     }
 }
 
-/// Flattens a level's buckets into one positions-only array in car space.
+/// What a silhouette is made of, and by omission what it is not.
+///
+/// `Body` is the shell and is nearly the whole answer on its own — roof, boot, bumpers, sills and
+/// arches are all in it. `Window` is here because the glasshouse is glass: without it the cabin is
+/// a hole between the pillars and the sky shows through the middle of the car.
+///
+/// What is left out is everything that lives inside the shell — the interior, the lamps, the trim
+/// and the wheel hardware. None of them can be seen from outside a filled outline, and on the E36
+/// they were taking most of the budget.
+///
+/// The tyres are left out too, and not because a car needs no wheels: they are *built* rather than
+/// decimated. See `silhouette_wheels`.
+const SILHOUETTE_CATEGORIES: [Category; 2] = [Category::Body, Category::Window];
+
+/// How many sides a generated wheel has.
+///
+/// Twelve is round at the size a title screen draws a car, and costs 48 triangles a wheel: 24 for
+/// the tread and 24 for the two faces. The faces are not optional — the car is looked at three
+/// quarters on, and an open tube shows the scenery through the middle of its own wheel.
+const WHEEL_SEGMENTS: usize = 12;
+
+/// How many triangles a silhouette gets, unless a car's config asks for something else.
+///
+/// Six hundred against the 1,097 the old LOD2-derived version spent, and it looks far better for
+/// it, because they are spent on four kinds of part rather than nine. The number is a size as much
+/// as a shape: the console reads a car in 32 KB chunks and draws the silhouette out of the first
+/// one, so a silhouette that does not fit in a chunk is a silhouette that arrives a frame late.
+const SILHOUETTE_TRIANGLES: usize = 600;
+
+/// Flattens buckets into one positions-only array in car space, at full detail.
 ///
 /// Everything that made these buckets separate — category, material, which wheel they belong to,
 /// whether they are two-sided — is thrown away here, because a silhouette is drawn in one colour
-/// with culling off and none of it would change a pixel.
+/// with culling off and none of it would change a pixel. What comes out is the shell as modelled,
+/// hundreds of thousands of triangles of it, for `simplify::reduce_shell` to weld and cut down as
+/// a single surface.
 ///
-/// A level that needs more than 65,536 vertices produces no silhouette rather than a truncated one:
-/// indices are 16-bit, and half a car is worse than none. No level this pipeline builds comes near
-/// it, which is exactly why the case is worth refusing outright rather than handling.
+/// Read out of `pieces` rather than out of `vertices`: these are the welded buckets, kept before
+/// anything was decimated, and a bucket's merged arrays are not filled in until a budget has been
+/// spent on it.
 fn build_silhouette(
-    group: &[Bucket],
+    group: &[&Bucket],
     origin_of: impl Fn(Option<u8>) -> [f32; 3],
-) -> (Vec<[f32; 3]>, Vec<u16>) {
-    let total: usize = group.iter().map(|b| b.vertices.len()).sum();
-    if total == 0 || total > u16::MAX as usize + 1 {
-        return (Vec::new(), Vec::new());
-    }
-
-    let mut positions = Vec::with_capacity(total);
+) -> (Vec<[f32; 3]>, Vec<u32>) {
+    let mut positions = Vec::new();
     let mut indices = Vec::new();
     for b in group {
-        let base = positions.len() as u16;
         let origin = origin_of(b.wheel);
-        positions.extend(
-            b.vertices
-                .iter()
-                .map(|v| [v.x + origin[0], v.y + origin[1], v.z + origin[2]]),
-        );
-        indices.extend(b.indices.iter().map(|i| base + *i as u16));
+        for p in &b.pieces {
+            // A part the visibility sweep never saw a single pixel of cannot be part of an outline:
+            // it is a floor pan, an inner wing, the back of a bumper skin. Category does not catch
+            // these — they are `body`, the same category as the paint that covers them — and on a
+            // shell of 131,424 source triangles they are most of what a budget gets spent on. The
+            // sweep has already measured this, so it costs nothing to ask.
+            if p.pixels == 0 {
+                continue;
+            }
+            let base = positions.len() as u32;
+            positions.extend(
+                p.vertices
+                    .iter()
+                    .map(|v| [v.x + origin[0], v.y + origin[1], v.z + origin[2]]),
+            );
+            indices.extend(p.indices.iter().map(|i| base + *i));
+        }
     }
     (positions, indices)
+}
+
+/// Narrows the finished silhouette to the 16-bit indices the format carries.
+///
+/// A shell that still needs more than 65,536 vertices after reduction produces no silhouette rather
+/// than a truncated one: half a car is worse than none. It takes an absurd `silhouette` budget to
+/// get there, which is exactly why the case is refused outright rather than handled.
+fn narrow_silhouette(positions: Vec<[f32; 3]>, indices: Vec<u32>) -> (Vec<[f32; 3]>, Vec<u16>) {
+    if positions.is_empty() || positions.len() > u16::MAX as usize + 1 {
+        return (Vec::new(), Vec::new());
+    }
+    let narrowed = indices.iter().map(|i| *i as u16).collect();
+    (positions, narrowed)
+}
+
+/// Adds a plain cylinder at each hub, standing in for the wheel.
+///
+/// Built rather than decimated, which is the one place this pipeline generates geometry instead of
+/// simplifying it, and it is worth saying why. A tyre is a tube: decimation at any budget a
+/// silhouette can afford turns it into a mangled ring, and the rim that would fill the middle of it
+/// is `chrome`, a category with 1,689 triangles a wheel and no business in an outline. The first
+/// attempt gave each tyre 23 triangles and the car came out standing on four bent slivers.
+///
+/// A wheel's outline, though, is not something that has to be discovered: it is a circle of a
+/// radius the compiler already measured, on an axle it already located. Forty-eight triangles of
+/// cylinder is exactly right from every angle, where two hundred of decimated tyre was wrong from
+/// all of them.
+fn silhouette_wheels(
+    wheels: &[WheelDef],
+    positions: &mut Vec<[f32; 3]>,
+    indices: &mut Vec<u32>,
+) {
+    for w in wheels {
+        let base = positions.len() as u32;
+        let half = w.width * 0.5;
+        // The axle is the car's X axis, so the two rims lie in planes either side of the hub.
+        for side in 0..2u32 {
+            let x = w.hub[0] + if side == 0 { -half } else { half };
+            for i in 0..WHEEL_SEGMENTS {
+                let a = i as f32 / WHEEL_SEGMENTS as f32 * std::f32::consts::TAU;
+                positions.push([x, w.hub[1] + w.radius * a.sin(), w.hub[2] + w.radius * a.cos()]);
+            }
+        }
+        // Then the two hub centres, for the faces to fan around.
+        positions.push([w.hub[0] - half, w.hub[1], w.hub[2]]);
+        positions.push([w.hub[0] + half, w.hub[1], w.hub[2]]);
+        let n = WHEEL_SEGMENTS as u32;
+        let centres = [base + 2 * n, base + 2 * n + 1];
+
+        for i in 0..n {
+            let (a, b) = (i, (i + 1) % n);
+            // The tread, as two triangles across the width.
+            indices.extend([base + a, base + b, base + n + b]);
+            indices.extend([base + a, base + n + b, base + n + a]);
+            // A face at each end. Winding is not worth getting right: a silhouette is drawn with
+            // culling off, so both sides of every one of these triangles is the same flat colour.
+            indices.extend([centres[0], base + a, base + b]);
+            indices.extend([centres[1], base + n + a, base + n + b]);
+        }
+    }
 }
 
 /// Lays the sections out with every one of them 16-byte aligned.

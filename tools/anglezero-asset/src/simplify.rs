@@ -400,6 +400,132 @@ fn quantise(v: f32) -> i32 {
     (v / WELD_GRID).round() as i32
 }
 
+/// How far apart two points may be and still be the same point, when the only thing being kept is
+/// an outline.
+///
+/// Five millimetres, against `WELD_GRID`'s tenth of one. That would be far too coarse for a car —
+/// it would run a trim strip into the paint beside it — and is exactly right for a silhouette,
+/// where there is no trim, no paint, no texture and no normal to smear. All that survives is where
+/// the edge of the car is, and nothing about a car's edge is decided at half a centimetre.
+const SHELL_WELD_GRID: f32 = 0.005;
+
+/// Reduces a positions-only shell to a triangle target, as **one mesh**.
+///
+/// This exists because of what a silhouette looked like when it did not. The pipeline decimates a
+/// car piece by piece — a bumper, a wing, a door — which is right for a car, where each piece has
+/// its own material and its own texture and the seams between them are real. Ask that machinery for
+/// six hundred triangles and each piece gets a handful, every piece shrinks away from its
+/// neighbours, and the car arrives covered in cracks with slivers hanging off it.
+///
+/// A silhouette has no pieces. It is one flat shape, so the parts can be welded into one another
+/// on position alone and simplified as a single surface, and then a collapse is free to run a wing
+/// into the door behind it — which is precisely the collapse that keeps an outline whole. It is
+/// also smaller: the seams stop carrying two copies of every vertex.
+///
+/// Note the direction of travel. Nothing here splits a mesh in order to decimate it — that cracks
+/// bodywork and is the one thing this pipeline must never do. This is the opposite: it merges
+/// meshes in order to decimate them together.
+pub fn reduce_shell(positions: &mut Vec<[f32; 3]>, indices: &mut Vec<u32>, target_triangles: usize) {
+    // Weld first, or there is nothing to collapse across: the parts arrive as separate arrays whose
+    // seams merely touch, and a decimator cannot see that two coincident vertices are one point.
+    let mut seen: HashMap<[i32; 3], u32> = HashMap::new();
+    let mut welded = Vec::with_capacity(positions.len());
+    let mut remap = Vec::with_capacity(positions.len());
+    for p in positions.iter() {
+        let key = [
+            (p[0] / SHELL_WELD_GRID).round() as i32,
+            (p[1] / SHELL_WELD_GRID).round() as i32,
+            (p[2] / SHELL_WELD_GRID).round() as i32,
+        ];
+        let at = *seen.entry(key).or_insert_with(|| {
+            welded.push(*p);
+            (welded.len() - 1) as u32
+        });
+        remap.push(at);
+    }
+    for i in indices.iter_mut() {
+        *i = remap[*i as usize];
+    }
+    // A collapsed triangle is two of its corners having become one vertex. They draw nothing and
+    // the decimator counts them against the target, so they go now.
+    indices.retain_triangles();
+    *positions = welded;
+
+    if indices.len() / 3 <= target_triangles || positions.is_empty() {
+        return;
+    }
+
+    let flat: Vec<f32> = positions.iter().flat_map(|p| *p).collect();
+    let bytes = unsafe {
+        std::slice::from_raw_parts(flat.as_ptr() as *const u8, std::mem::size_of_val(&flat[..]))
+    };
+    let Ok(adapter) = meshopt::VertexDataAdapter::new(bytes, 12, 0) else {
+        return;
+    };
+
+    // Clustering, not edge collapse — and this is the whole reason a silhouette gets a function of
+    // its own rather than a call to `reduce`.
+    //
+    // `reduce` collapses edges to minimise error *over the surface*. On a car that is exactly
+    // right: it keeps the panel flat and the crease sharp. But the cheapest error a car body
+    // offers is the concave step where one panel meets another at right angles — the foot of a
+    // C-pillar, the shut line at the back of a bonnet — because filling in a notch moves very
+    // little surface very slightly. Those are the steps a three-box saloon *is*. The E39 came out
+    // of edge collapse at 600 triangles as a smooth wedge with no boot and no bonnet, while the
+    // same geometry at 8,000 was unmistakably a 5-series; it needed 2,400 before the shape came
+    // back, which is 31 KB and more than the whole silhouette is worth.
+    //
+    // `simplify_sloppy` snaps vertices to a grid and rebuilds, ignoring topology. `reduce` keeps it
+    // as a last resort and says there why it would be "obviously wrong for a body panel" — and it
+    // would. It is obviously *right* here, because what a grid preserves is extent, and extent is
+    // the only thing a silhouette has. The same E39 comes out at 597 triangles with its boot, its
+    // greenhouse and its bonnet all where they belong.
+    //
+    // It is not free. A grid that coarse swallows anything thinner than a cell that is standing off
+    // the body: the R34's GT-R wing sits about 15 cm above its boot, which is roughly one cell at
+    // this budget, and it is snapped flat into the boot lid and lost. Raising the budget does not
+    // buy it back — it survives neither 1,000 triangles nor 1,600, which is 16 KB — because the
+    // wing's standoff shrinks with the grid at about the rate the grid shrinks.
+    //
+    // Taken deliberately. A missing wing is a detail off a car that still reads as the right car;
+    // the E39 under edge collapse read as a *different kind of car*, and one of those two mistakes
+    // is much larger than the other.
+    let reduced = meshopt::simplify_sloppy(indices, &adapter, target_triangles * 3, 1.0, None);
+    if !reduced.is_empty() && reduced.len() < indices.len() {
+        *indices = reduced;
+    }
+
+    // Drop whatever is no longer indexed, so the section carries no vertices nothing draws.
+    let mut remap = vec![u32::MAX; positions.len()];
+    let mut out = Vec::with_capacity(positions.len());
+    for i in indices.iter_mut() {
+        let old = *i as usize;
+        if remap[old] == u32::MAX {
+            remap[old] = out.len() as u32;
+            out.push(positions[old]);
+        }
+        *i = remap[old];
+    }
+    *positions = out;
+}
+
+/// Drops triangles that have collapsed to a line or a point, which welding leaves behind.
+trait RetainTriangles {
+    fn retain_triangles(&mut self);
+}
+
+impl RetainTriangles for Vec<u32> {
+    fn retain_triangles(&mut self) {
+        let mut out = Vec::with_capacity(self.len());
+        for t in self.chunks_exact(3) {
+            if t[0] != t[1] && t[1] != t[2] && t[0] != t[2] {
+                out.extend_from_slice(t);
+            }
+        }
+        *self = out;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

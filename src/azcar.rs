@@ -641,6 +641,11 @@ impl<'a> Silhouette<'a> {
         self.index_count / 3
     }
 
+    /// One index, decoded. For anything that wants to look at the shape rather than draw it.
+    pub fn index(&self, i: usize) -> u16 {
+        le_u16(self.bytes, self.indices_at + i * 2)
+    }
+
     /// One vertex, decoded. For anything that wants to look at the shape rather than draw it.
     pub fn vertex(&self, i: usize) -> SilhouetteVertex {
         let at = self.vertices_at + i * core::mem::size_of::<SilhouetteVertex>();

@@ -65,6 +65,10 @@ struct Options {
     /// What the camera orbits, in car space. Defaults to the middle of the car's bounds.
     look: Option<[f32; 3]>,
     background: [u8; 3],
+    /// Draw the silhouette section instead of the car — the stand-in the console shows while the
+    /// rest of the file is still being read. Flat, culling off, exactly as `draw_silhouette` does
+    /// it, because the whole question about a silhouette is what its outline looks like.
+    silhouette: bool,
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
@@ -87,6 +91,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         mesh: Vec::new(),
         look: None,
         background: [24, 24, 32],
+        silhouette: false,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -111,6 +116,7 @@ fn run(args: &[&str]) -> Result<(), String> {
             "--only" => o.only = Some(it.next().ok_or("--only needs a name")?.to_string()),
             "--hide" => o.hide = Some(it.next().ok_or("--hide needs a name")?.to_string()),
             "--by-mesh" => o.by_mesh = true,
+            "--silhouette" => o.silhouette = true,
             "--no-cull" => o.no_cull = true,
             "--no-tex" => o.no_tex = true,
             "--mesh" => o.mesh.push(number("--mesh")? as usize),
@@ -135,7 +141,23 @@ fn run(args: &[&str]) -> Result<(), String> {
 
     let bytes = std::fs::read(&o.input).map_err(|e| format!("{}: {e}", o.input.display()))?;
     let car = Car::parse(&bytes).map_err(|e| format!("{}: {}", o.input.display(), e.message()))?;
+
+    if o.silhouette {
+        match car.silhouette() {
+            Some(s) => eprintln!(
+                "  silhouette  {} tris, {} verts, {} KB of a {} KB file",
+                s.triangle_count(),
+                s.vertex_count(),
+                (s.vertex_count() * 12 + s.index_count() * 2) / 1024,
+                car.byte_len() / 1024,
+            ),
+            None => return Err("this car carries no silhouette".into()),
+        }
+    }
     for i in 0..car.lod(0).mesh_count as usize {
+        if o.silhouette {
+            break;
+        }
         let m = car.mesh(i);
         let mat = car.material(m.material as usize);
         // Where in the atlas this mesh actually samples, and how bright what it finds is. A part
@@ -236,6 +258,52 @@ fn draw(car: &Car, o: &Options) -> Vec<u8> {
     };
 
     let texture = if o.no_tex { None } else { car.texture() };
+
+    // The stand-in, drawn the way the console draws it: one flat tone, no texture, culling off, and
+    // the wheels already baked in at their hubs so there is nothing to offset.
+    if o.silhouette {
+        let Some(sil) = car.silhouette() else {
+            return colour;
+        };
+        let flat = Some([210u8, 210, 220]);
+        for t in 0..sil.triangle_count() {
+            let mut win = [[0.0f32; 3]; 3];
+            let mut eyez = [0.0f32; 3];
+            let mut verts = [azcar::CarVertex::default(); 3];
+            let mut ok = true;
+            for k in 0..3 {
+                let p = sil.vertex(sil.index(t * 3 + k) as usize);
+                let (w, z) = project([p.x, p.y, p.z]);
+                if z <= NEAR {
+                    ok = false;
+                }
+                win[k] = w;
+                eyez[k] = z;
+                verts[k] = azcar::CarVertex {
+                    x: p.x,
+                    y: p.y,
+                    z: p.z,
+                    color: 0xFFFF_FFFF,
+                    ..Default::default()
+                };
+            }
+            if !ok {
+                continue;
+            }
+            raster(
+                &mut colour,
+                &mut depth,
+                o,
+                &win,
+                &eyez,
+                [&verts[0], &verts[1], &verts[2]],
+                None,
+                false,
+                flat,
+            );
+        }
+        return colour;
+    }
 
     for blended in [false, true] {
         for i in meshes.clone() {

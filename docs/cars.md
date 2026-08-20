@@ -427,7 +427,7 @@ A car carries three copies of itself: LOD0 for the one being driven, LOD1 beyond
 carries one decimation's error and not three.
 
 With eight cars on screen this halves the vertex load for 0.05% of pixels differing at all. It costs
-file size: the E36 is 792 KB, of which 128 KB is the texture, 22 KB is the silhouette, and the rest
+file size: the E36 is 775 KB, of which 128 KB is the texture, 5 KB is the silhouette, and the rest
 is geometry across three levels.
 
 The coarse levels are 3,000 and 1,200 against LOD0's 24,000, and they were 4,500 and 1,800 against
@@ -435,8 +435,8 @@ The coarse levels are 3,000 and 1,200 against LOD0's 24,000, and they were 4,500
 and 1,800 the two of them were 30% of every file, spent on a car that is eighteen metres away and a
 hundred pixels wide.
 
-That is what used to make the arena the binding limit. Seven cars run from the AE86's 725 KB to the
-R34's 940 KB and come to 5.7 MB together, against an arena of 6 MB — so the eighth car did not fit,
+That is what used to make the arena the binding limit. Seven cars run from the AE86's 716 KB to the
+R34's 905 KB and come to 5.6 MB together, against an arena of 6 MB — so the eighth car did not fit,
 and the answer was going to be another megabyte of `.bss` on a machine with 24 MB of it, bought to
 hold six cars nobody was looking at.
 
@@ -469,10 +469,55 @@ pressed rather than on the next frame, which is the difference between a car rep
 and a car that blinks out of the lay-by on its way to being one — that gap existed, and a scripted
 capture is what found it.
 
-The geometry is LOD2's, reused rather than decimated again: a level built to be recognisable at
-45 m is already a shape, it has been through the same whole-car simplification as everything else,
-and reusing it adds no new way for the bodywork to crack. It costs about 22 KB, near enough 3% of a
-file, to avoid a second seek into the middle of one.
+The geometry was LOD2's to begin with, reused on the argument that a level built to be recognisable
+at 45 m is already a shape. It is not. A silhouette is 22 KB of proof that "coarse" and "coarse in
+the right way" are different things, and the E36 was the worst of it: a crushed can with slivers
+hanging off it, wheels standing outside a body that had shrunk away from them. Four things were
+wrong, and each is worth knowing because each is a different kind of mistake.
+
+**The budget went to parts with no outline in them.** LOD2 shares triangles across every category
+by measured pixels, and the E36's interior is 4,841 triangles of seats and door cards *inside the
+shell*. So the silhouette is built from `body` and `window` only — the shell, and the glass that
+fills the greenhouse, without which the cabin is a hole you can see the sky through. Parts the
+visibility sweep never saw a single pixel of are dropped as well: floor pans and inner wings are
+`body` too, and category alone does not catch them.
+
+**It was decimated piece by piece.** That is right for a car, where each piece has its own material
+and the seams are real, and it is wrong for one flat shape: at a few hundred triangles every piece
+shrinks away from its neighbours and the car arrives covered in cracks. `simplify::reduce_shell`
+welds the whole shell together on position alone — 5 mm, which would be far too coarse for a car
+and is nothing to an outline — and simplifies it as **one mesh**. That is also most of the size
+saving: the seams stop carrying two copies of every vertex, and the E36 went from 763 vertices to
+197.
+
+**It was decimated the wrong way.** `reduce` collapses edges to minimise error over the surface,
+and the cheapest error a car body offers is the concave step where one panel meets another — the
+foot of a C-pillar, the shut line behind a bonnet. Those steps are what a three-box saloon *is*.
+The E39 came out a smooth wedge with no boot and no bonnet, and needed 2,400 triangles and 31 KB
+before the shape came back. Vertex clustering instead — `simplify_sloppy`, which `reduce` keeps
+only as a last resort and calls "obviously wrong for a body panel" — preserves extent rather than
+smoothness, and extent is the only thing a silhouette has. The same E39 is correct at 597
+triangles.
+
+**The wheels were decimated at all.** A tyre is a tube; at 23 triangles it is a bent sliver, and the
+rim that would fill it is `chrome` and excluded. But a wheel's outline does not have to be
+discovered — it is a circle of a radius the compiler already measured, on an axle it already
+located. Four generated twelve-sided cylinders, 48 triangles each, are exactly right from every
+angle.
+
+The result is **5–7 KB a car**, under 1% of the file, against 22 KB before. `--silhouette` on
+`azview` draws one, which is how all of the above was found:
+
+```bash
+cargo run --release -p anglezero-asset --bin azview -- \
+    assets/compiled/bmw_e39.azcar out.png --silhouette --yaw 270 --pitch 6 --size 640x300
+```
+
+One thing is knowingly given up. Clustering swallows anything thinner than a grid cell standing off
+the body, so the R34 loses its GT-R wing, and no budget buys it back — the wing's standoff shrinks
+with the grid about as fast as the grid does. A missing wing is a detail off a car that still reads
+as the right car; the E39 under edge collapse read as a different kind of car. `silhouette` in a
+car's config raises the budget for a car whose shape needs it.
 
 The header had no room left for the offset — `LIGHT_COUNT` ends at byte 110 of a 112-byte header —
 so it is stored in the two bytes that remain, **in 16-byte units**. Growing the header instead
@@ -570,6 +615,8 @@ cargo run --release -p anglezero-asset --bin azview -- \
 `--only body`, `--hide interior` and `--lod 2` narrow it down; `--white` puts a pale background
 behind the car, which is how you tell a black part from a hole. **`--no-cull` is the diagnostic**:
 run it with and without, and anything that appears is something culling is throwing away.
+`--silhouette` draws the stand-in instead of the car, with the console's rules for that — flat,
+culling off — and prints what it costs.
 
 Rendering at float depth, or without culling, shows a clean car and hides the fault being looked
 for. That is not hypothetical — a throwaway rasteriser that drew every triangle showed the far side
