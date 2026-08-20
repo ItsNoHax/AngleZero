@@ -7,6 +7,10 @@ scale = 100.0
 triangles = 24000
 lods = [3000, 1200]
 
+# Short and tall, which is the awkward shape for a grid sized off a triangle count: the default
+# 1,000 loses the top of its roof and a strip of sill. 1,400 brings it into line with the rest.
+silhouette = 1400
+
 [wheels]
 # One material and one node fragment covers the whole wheel here — rim, tyre and hardware are a
 # single group per corner under `Abarth_500_2014_Wheel`.

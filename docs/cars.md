@@ -100,7 +100,7 @@ centring, which of 57 materials is glass — the converter works out.
 | `[spawn] yaw` | Degrees about Y, for a model that does not face +Z. The E39 needs 180. |
 | `triangles` | The budget for LOD0. Default 10,000. |
 | `lods` | Coarser budgets, nearest first, e.g. `[4500, 1800]`. |
-| `silhouette` | The stand-in's budget, default 600. Raise it for a car whose shape is in details that few triangles cannot hold. |
+| `silhouette` | The stand-in's budget, default 1,000. Raise it for a long or awkwardly shaped car — the number sizes a *grid*, so a 5 m saloon needs more of it than a hatchback. |
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
 | `[materials]` | The category guesser does not speak this model's language. |
 | `[reduce]` | A category deserves more or less of the budget than its screen area suggests. |
@@ -524,13 +524,20 @@ discovered — it is a circle of a radius the compiler already measured, on an a
 located. Four generated twelve-sided cylinders, 48 triangles each, are exactly right from every
 angle.
 
-The result is **5–7 KB a car**, under 1% of the file, against 22 KB before. `--silhouette` on
+The result is **8–13 KB a car**, around 1% of the file, against 22 KB before. `--silhouette` on
 `azview` draws one, which is how all of the above was found:
 
 ```bash
 cargo run --release -p anglezero-asset --bin azview -- \
     assets/compiled/bmw_e39.azcar out.png --silhouette --yaw 270 --pitch 6 --size 640x300
 ```
+
+The budget is a **grid** resolution, not a triangle count, and that is the thing to remember when
+one looks wrong. Clustering snaps vertices to a lattice sized by the target, so the same number
+buys less on a longer car: at 600 the M5 was missing 3.9% of itself — a strip of sill down its
+whole length and its front air dam — while the median car was at 0.6%. The default is 1,000 now,
+and the M5 and the 500 ask for 1,400 in their own configs. `scripts/silhouette_check.py` is what
+measures this; it renders each car against its silhouette and reports what is not covered.
 
 One thing is knowingly given up. Clustering swallows anything thinner than a grid cell standing off
 the body, so the R34 loses its GT-R wing, and no budget buys it back — the wing's standoff shrinks

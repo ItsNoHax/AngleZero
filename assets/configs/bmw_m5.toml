@@ -6,6 +6,11 @@ scale = 100.0
 triangles = 24000
 lods = [3000, 1200]
 
+# The longest car in the fleet at 5.09 m, and the clustering grid is sized by the triangle
+# target, so the default 1,000 rounds its sills away — 3.9% of the car missing against a median of
+# 0.1%. At 1,400 it is 0.3%, for about two extra kilobytes.
+silhouette = 1400
+
 [wheels]
 match = ["SedanRewardRecycled_2024_Wheel"]
 

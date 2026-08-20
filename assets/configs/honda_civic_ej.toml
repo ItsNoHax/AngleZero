@@ -7,7 +7,12 @@ triangles = 24000
 lods = [3000, 1200]
 
 [wheels]
-match = ["Wheel1A", "_Ca"]
+# `_Ca` was here for the callipers and was a bad pattern: it also matches `_CarPaint`, so bodywork
+# was swallowed into the front wheels. The damage is visible in the numbers — the front hubs sat at
+# x = ±0.43 against the rears' ±0.74, and the front "wheels" measured 0.86 m wide against 0.24 —
+# because a hub is the centre of everything matched, and body panels reach the centreline. In game
+# those panels would have turned with the steering.
+match = ["Wheel1A", "Calliper"]
 
 [reduce]
 # Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this

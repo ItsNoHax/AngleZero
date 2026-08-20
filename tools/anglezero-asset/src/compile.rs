@@ -605,7 +605,29 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             steers: w.corner == azcar::WHEEL_FRONT_LEFT || w.corner == azcar::WHEEL_FRONT_RIGHT,
             name: strings.push(CORNER_NAMES[w.corner as usize]),
             hub: *hub,
-            radius: config.wheels.radius.unwrap_or(w.radius * placement.scale),
+            // Never smaller than the hub is high, which is the measurement that cannot be wrong:
+            // the pipeline grounds every car so its wheels touch y = 0, and a wheel resting on the
+            // road has its centre at exactly its own radius. So the hub's height *is* the rolling
+            // radius, by construction.
+            //
+            // `measure` derives its figure from the largest part of the wheel by triangle count,
+            // on the reasoning that a caliper standing proud of the tread would otherwise inflate
+            // it. That guards the right way for a model whose tyre is the biggest part and the
+            // wrong way for the many where it is not: a detailed rim easily outweighs the tyre
+            // wrapped around it, and a rim is *smaller* in diameter, so the radius came out short.
+            // Eleven of twenty-three cars were affected, the E30 worst at 0.177 m against a hub
+            // sitting 0.309 m up — a wheel little more than half the size of the one modelled.
+            //
+            // It showed up as silhouettes with holes where the wheels belong, because those are
+            // drawn as cylinders of this radius. The quieter half is worse: this is the rolling
+            // radius, so those eleven cars span their wheels far too fast for the road speed.
+            //
+            // Taking the larger of the two keeps the caliper guard — a caliper cannot raise the
+            // hub — while refusing to believe a wheel is smaller than the car standing on it.
+            radius: config
+                .wheels
+                .radius
+                .unwrap_or_else(|| (w.radius * placement.scale).max(hub[1])),
             width: w.width * placement.scale,
         })
         .collect();
@@ -1110,11 +1132,22 @@ const WHEEL_SEGMENTS: usize = 12;
 
 /// How many triangles a silhouette gets, unless a car's config asks for something else.
 ///
-/// Six hundred against the 1,097 the old LOD2-derived version spent, and it looks far better for
-/// it, because they are spent on four kinds of part rather than nine. The number is a size as much
-/// as a shape: the console reads a car in 32 KB chunks and draws the silhouette out of the first
-/// one, so a silhouette that does not fit in a chunk is a silhouette that arrives a frame late.
-const SILHOUETTE_TRIANGLES: usize = 600;
+/// A thousand. It was six hundred, which was chosen when the fleet was seven cars that all happened
+/// to suit it, and which turned out to be a *grid* limit rather than a triangle limit: clustering
+/// snaps vertices to a lattice sized by the target, and at six hundred that lattice was coarse
+/// enough to round the bottom off a long car. It showed as a strip of missing sill along the whole
+/// length and a missing front air dam — the silhouette sitting a little higher off the road than
+/// the car, which is exactly the sort of fault that is invisible in isolation and obvious when the
+/// shadow is replaced by the car it stood in for.
+///
+/// The M5 is the case that set the number: 5.9% of it was missing at 600 and 0.3% at 1,400. A
+/// thousand puts every car in the fleet under about 1%, which is a rim a pixel or two wide and
+/// nothing anybody can see.
+///
+/// The number is a size as much as a shape: the console reads a car in 32 KB chunks and draws the
+/// silhouette out of the first one, so a silhouette that does not fit in a chunk is a silhouette
+/// that arrives a frame late. A thousand triangles is about 10 KB, comfortably inside it.
+const SILHOUETTE_TRIANGLES: usize = 1000;
 
 /// Flattens buckets into one positions-only array in car space, at full detail.
 ///

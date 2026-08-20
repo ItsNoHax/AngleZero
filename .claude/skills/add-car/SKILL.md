@@ -123,6 +123,22 @@ the early ones invalidate the later ones:
 | Is anything a colour it should not be? | `[[materials.colour]]` |
 | Does the silhouette read as this car — wheels, roofline, no wedge? | `silhouette` budget; see **Silhouettes** in `docs/cars.md` |
 
+For that last row there is a measurement rather than a judgement, and it is worth running on every
+car because the ways a silhouette goes wrong are not the ways you notice by looking at one:
+
+```bash
+scripts/silhouette_check.py                    # every car
+scripts/silhouette_check.py --overlay bmw_m5   # and see *where* it is wrong
+```
+
+It renders each car and its silhouette from the same camera and reports how much of the car the
+silhouette fails to cover, having first eroded the car's outline by a few pixels so that ordinary
+decimation shrinkage does not drown the real faults. Under 2% is fine. Above it, the overlay paints
+missing geometry red, and red is the whole diagnosis: a red panel is a categorisation fault (the
+part is in a category silhouettes are not built from), a red ring at a wheel is a wheel-pattern
+fault, and a red strip along the sills means the budget is too coarse for the car's length — raise
+`silhouette` in its config.
+
 Two rules that were learned the expensive way and are worth obeying without re-deriving:
 
 - **Render the part on its own and large.** A wheel is twenty pixels on a whole-car shot, which is
