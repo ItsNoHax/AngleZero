@@ -38,10 +38,18 @@ look like flickering geometry rather than like an error.
 The title screen carries a line of its own, top-left, because it is the only screen that loads a
 car: `RD PK` is the longest a single chunk read has taken, in microseconds, and `ARENA` is how much
 of the residency slots hold a car. Press L or R and watch `RD PK`. That number is what
-`CHUNK_BYTES` in [`src/psp/car.rs`](../src/psp/car.rs) has to be chosen against, and it is the one
+`CHUNK_BYTES` in [`src/psp/car.rs`](../src/psp/car.rs) is chosen against, and it is the one
 measurement that **cannot** be taken under the emulator — headless reads a car off a host
-filesystem, so every chunk size looks free there. Anything past about 16,000 is a chunk that costs
-a frame.
+filesystem, so every chunk size looks free there.
+
+On the console this repo is developed against it reads **4,438 µs, consistently**, for a 32 KB
+chunk: 7.4 MB/s, about 27% of a 60 Hz frame, and a car on screen in some 29 frames. Anything past
+about 16,000 would be a chunk that costs a whole frame on its own. The figure being steady matters
+as much as its size — one that wandered would mean seeks, and a worst case that an average hides.
+
+Worth re-taking on a different stick, and worth taking again if `CHUNK_BYTES` is ever changed.
+`ARENA` beside it should sit at one car and never climb however many are cycled through; if it
+climbs, residency is leaking.
 
 ## Headless screenshots
 

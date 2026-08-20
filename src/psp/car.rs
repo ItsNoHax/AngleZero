@@ -64,10 +64,19 @@ const SLOTS: usize = if cfg!(feature = "devtools") { 5 } else { 2 };
 
 /// How much to read per frame.
 ///
-/// A guess until it is measured on hardware, where it has to be: under the headless emulator a
-/// "memory stick" is a directory on an SSD and every chunk size looks free. What is being traded is
-/// frames against waiting — 32 KB of a 900 KB car is 28 frames, near enough half a second, and a
-/// chunk large enough to drop a frame defeats the entire point of not reading the file at once.
+/// Measured on hardware, which is the only place it can be: under the headless emulator a "memory
+/// stick" is a directory on an SSD and every chunk size looks free. On the console this reads
+/// **consistently in 4,438 µs**, which is 7.4 MB/s and about 27% of a 60 Hz frame, leaving 12.2 ms
+/// for the title screen to draw in. Consistent is the load-bearing word: a figure that wandered
+/// would mean seeks behind it, and a worst case hiding behind an average.
+///
+/// So a car lands in about 29 frames, just under half a second for the largest in this repo. It
+/// could be halved by doubling this — and should not be. Two chunks a frame would put 8.9 ms of
+/// blocking read in front of a frame that has 16.7 ms to spend, and a stutter on the one screen
+/// with a camera orbiting smoothly is far more noticeable than a shadow standing in for an extra
+/// fifth of a second. That trade only got worse for the chunk when the silhouette got cheap: at
+/// 5 KB it arrives inside the first read whatever this is, so what is being bought by reading
+/// faster is no longer *when the player sees the car's shape* but only *when the paint arrives*.
 const CHUNK_BYTES: usize = 32 * 1024;
 
 /// Longest path this will assemble, including the NUL. `DIR` plus `catalogue::NAME_MAX` plus one.
