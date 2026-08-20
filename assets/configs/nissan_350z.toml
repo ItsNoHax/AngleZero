@@ -11,3 +11,22 @@ lods = [3000, 1200]
 # the model's `Wheel1A` group spread over sixty parts — which is fine, since the converter groups
 # by position rather than by count.
 match = ["SM_Brake_", "SM_Hub", "Wheel1A"]
+
+# The glass is not glass. `MAT_Glass_142` brings a red-and-black graphic — window vinyl, which this
+# car wears in the game it is from — and the converter packed it as a tile like any other picture,
+# so the rear screen and the quarter windows came out as slabs of red. It is easy to miss on a
+# still render and impossible to miss in motion.
+#
+# The image is almost certainly meant to be read with an alpha channel, the red being a decal over
+# clear glass. This pipeline's textures are 5650 with no alpha — what blends is decided per
+# material, and the alpha it uses lives in the vertex colour — so a decal sheet has nowhere to put
+# its transparency and arrives opaque. There is no tile size or filter that fixes that, in the same
+# way there is none for the Golf's matcap: the image is not a picture of the surface it is on.
+#
+# So `flat` stops believing the image and the glass draws its own colour, which is what every other
+# car's glass does. The colour is the model's declared grey darkened towards the S15's, which is
+# the darkest glass in the fleet — a 350Z's rear screen is not light.
+[[materials.colour]]
+match = ["MAT_Glass"]
+rgb = [30, 32, 36]
+flat = true
