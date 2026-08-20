@@ -94,6 +94,16 @@ Two hard limits: the file must come in under **1.25 MB**, which is one residency
 console and which the compiler refuses to exceed, and the compiled car must have found its
 **wheels** — a car with none gets default proportions and skates.
 
+Four wheels is not the same as four *whole* wheels. A wheel is about a fourteenth of the car's
+length, and the report warns when it is much less, because that means the patterns caught the rim
+and missed the tyre. It is a quiet fault — the car compiles, has four wheels, and then drives with
+them turning too fast for the road while sitting a tyre's thickness too low.
+
+Be careful about what you drop, too. Names lie in both directions: the Golf R32's tyres live in a
+part called `TARMAC_TYRE_WALL`, which reads like scenery and is a sidewall, and dropping it put the
+car out on bare rims. Before dropping anything, render it — `--only` it, or drop it and compare —
+rather than deciding from the name.
+
 ## 5. Look at it, and keep looking until it is right
 
 This is the loop, and it is the reason this skill exists. `azview` renders a compiled car offline
@@ -117,7 +127,7 @@ the early ones invalidate the later ones:
 | Is it that car at all — right silhouette, right proportions? | `scale`, or the wrong model |
 | Is the nose where the nose should be? | `[spawn] yaw = 180` |
 | Is it standing on its wheels, not hovering or sunk? | `[spawn]` offset, `[wheels] radius` |
-| Are there four wheels, round, in the arches? | `[wheels] match` patterns — see **When the car steers with the wrong wheels** |
+| Are there four wheels, round, in the arches, **with rubber on them**? | `[wheels] match` patterns — see **When the car steers with the wrong wheels** |
 | Any holes into the cabin, or surfaces lit from inside? | run again with `--no-cull`; what appears is what culling throws away |
 | Is the glass glass, are the lamps lamps? | `[[materials.category]]`, but see below |
 | Is anything a colour it should not be? | `[[materials.colour]]` |

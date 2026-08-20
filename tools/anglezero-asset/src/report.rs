@@ -284,6 +284,21 @@ impl Report {
                 size[2]
             ));
         }
+        // A wheel is about a fourteenth of a car's length, on everything from an Abarth 500 to a
+        // '69 Charger — across this whole fleet the ratio sits between 0.064 and 0.082. Well under
+        // that means the patterns caught the rim and missed the rubber, which is a quiet fault: the
+        // car still compiles, still has four wheels, and then drives with them turning too fast for
+        // the road while sitting a tyre's thickness too low. The Golf R32 shipped like that,
+        // matching `SM_Hub` and `SM_Brake` while its tyres sat in a part called `TARMAC_TYRE` —
+        // which was then dropped as scenery, on the strength of its name, and the car went out on
+        // bare rims. The number would have said so.
+        if self.wheel_radius > 0.0 && size[2] > 2.0 && self.wheel_radius / size[2] < 0.058 {
+            self.warn(format!(
+                "the wheels are {:.3} m on a {:.2} m car, which is small for a wheel — the \
+                 patterns in `[wheels] match` may have caught the rim and missed the tyre",
+                self.wheel_radius, size[2]
+            ));
+        }
         if self.out_materials > 8 {
             self.warn(format!(
                 "the car has {} materials, and so at least that many draw calls",

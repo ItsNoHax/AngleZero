@@ -7,7 +7,10 @@ triangles = 24000
 lods = [3000, 1200]
 
 [wheels]
-match = ["SM_Brake", "SM_Hub", "SM_Tire", "SM_Wheel"]
+# `SM_Hub` and `SM_Brake` are the rim and the brake; `TARMAC_TYRE` is the rubber. The last of
+# those is one part holding all four tyres at once, which is why it spans two metres by three —
+# the converter cuts a merged wheel part into quadrants for exactly this case.
+match = ["SM_Brake", "SM_Hub", "SM_Tire", "SM_Wheel", "TARMAC_TYRE"]
 
 # The tail lamps have to be named because the detector guessed, and guessed the interior.
 #
@@ -27,16 +30,3 @@ node = "Base_042_Lights"
 [lights.tail_right]
 node = "Base_042_Lights"
 
-[reduce]
-# `TARMAC_TYRE_WALL` and `TARMAC_TYRE_TREAD` are not tyres and not the car: they are a pair of
-# 2 x 3 m props — a patch of tarmac with tyre marks on it — that the model is posed on. They cost
-# more than their 1,360 triangles.
-#
-# The car is grounded on its wheels, because a wheel touches the road by definition. These sit
-# 7.7 cm *below* the wheels, which no part of a real car does, so the compiled car reached
-# y = -0.08 and the game would have sunk it into the road by that much. They also carry `TYRE` in
-# their names, so they sorted into the tyre category and were drawn as though they were wheels.
-#
-# This is the other half of why the wheels measured small. The rolling radius is now taken from the
-# hub's height above the ground, and the ground was 8 cm out.
-drop = ["TARMAC_TYRE"]
