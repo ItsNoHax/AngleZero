@@ -872,8 +872,19 @@ file name each one is expected to have is in `assets/configs/`, beside the confi
 | Abarth 500 | [Sketchfab](https://sketchfab.com/search?q=abarth+500+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 | BMW E30 (Pandem) | [Sketchfab](https://sketchfab.com/search?q=pandem+e30+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-4.0 |
 | Nissan 350Z (Rachel's) | [Sketchfab](https://sketchfab.com/search?q=rachel+350z+ddiaz) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Mazda RX-7 (VeilSide C-II) | [Sketchfab](https://sketchfab.com/3d-models/1993-veilside-c-ii-mazda-rx-7-fast-furious-e145e48775b8460da9de844769cc407b) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Honda Civic EJ (ViS Racing) | [Sketchfab](https://sketchfab.com/3d-models/1993-honda-civic-coupe-vis-racing-fast-furious-c4c2acfb6fe9444c85364ddd8c8454b0) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Lancia Delta HF Integrale Evo 2 | [Sketchfab](https://sketchfab.com/3d-models/1994-lancia-delta-hf-integrale-evo-2-227eb681355d468d96726b419adaf519) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Volkswagen Golf R32 Mk4 | [Sketchfab](https://sketchfab.com/3d-models/2002-volkswagen-golf-r32-mk4-57fa4f06ba3e4eb09572796a4d76f546) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Citroen Xsara WRC | [Sketchfab](https://sketchfab.com/3d-models/2005-citroen-xsara-wrc-sebastien-loeb-edd3efd463b24035aa231de33ed59aaa) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Honda NSX (Rocket Bunny) | [Sketchfab](https://sketchfab.com/3d-models/2015-rocket-bunny-racing-honda-nsx-e30ef65ebbcc4526bc727edcce93c9b3) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| McLaren 720S (LB-Works) | [Sketchfab](https://sketchfab.com/3d-models/2017-mclaren-720s-lbworks-97ea6542578c4ae1a0045c80551bd903) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-4.0 |
+| Nissan Silvia S14 (Vertex Ridge) | [Sketchfab](https://sketchfab.com/3d-models/2018-vertex-ridge-s14-silvia-kouki-c5958cec759f41bbb770fca138bdb6ce) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Audi RS6 Avant | [Sketchfab](https://sketchfab.com/3d-models/2020-audi-rs6-avant-980dbda2cbbb4bae8decaed2fa80aa0c) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Lamborghini Murcielago (LB Silhouette Works) | [Sketchfab](https://sketchfab.com/3d-models/2024-lbsilhouette-works-murcielago-gt-evo-64f859d01c9345429874513cf561ec12) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| BMW M5 Sedan | [Sketchfab](https://sketchfab.com/3d-models/2025-bmw-m5-sedan-4ab34c43bada482b8e467be97ebaeba3) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 
-**Eight of the twelve are non-commercial, and seven of those are also share-alike.** Fine for a hobby
+**Nineteen of the twenty-three are non-commercial, and eighteen of those are also share-alike.** Fine for a hobby
 build; a paid release could ship the E36, the E39 and the 190E and nothing else. `ShareAlike` is the
 stricter half of that — it reaches the derivative, which is the compiled `.azcar` and arguably the
 screenshots of it, not merely the sale.

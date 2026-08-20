@@ -7,4 +7,11 @@ triangles = 24000
 lods = [3000, 1200]
 
 [wheels]
-match = ["Ani_Wheel", "Ani_Disc", "Ani_Tyre", "Ani_Tire"]
+# Four corners named on two different schemes, which is what a rally car with an animated wheel
+# rig looks like after export: three are `Ani_Wheel_FL` / `Ani_Disc_Scale_FR` / `Ani_Disc_Scale_BR`
+# and the fourth is plain `SK_Rim_101`. Leaving `SK_Rim` out matched three corners of four, and the
+# converter then refused the lot — which is the right refusal, since a car with three wheels
+# identified steers on whichever one was missed.
+#
+# `SK_Rim` rather than `SK_`: the body panels are `SK_Door_FR` and friends.
+match = ["Ani_Wheel", "Ani_Disc", "Ani_Tyre", "SK_Rim"]
