@@ -22,15 +22,20 @@ match = ["wheels_rb", "Wheel1A"]
 # What this does not buy is the lens *geometry* lighting up, only the glow in front of it. If this
 # car ever looks like it is projecting light from nowhere, the fix is `[materials] light` naming the
 # right phong, which someone will have to find by rendering them one at a time.
+# The heights are calibrated rather than guessed: across the 40 lamps in this fleet that the
+# converter measured off real lens geometry, headlights sit at about 44% of a car's height and
+# tail lights at about 57%. These were eyeballed higher than that at first, outside the range
+# every measured car falls in, which is the only cross-check available when a model gives you
+# no lens to measure.
 [lights.headlight_left]
-at = [0.66, 0.63, 2.10]
+at = [0.66, 0.56, 2.10]
 radius = 0.30
 [lights.headlight_right]
-at = [-0.66, 0.63, 2.10]
+at = [-0.66, 0.56, 2.10]
 radius = 0.30
 [lights.tail_left]
-at = [0.66, 0.80, -2.18]
+at = [0.66, 0.71, -2.18]
 radius = 0.28
 [lights.tail_right]
-at = [-0.66, 0.80, -2.18]
+at = [-0.66, 0.71, -2.18]
 radius = 0.28

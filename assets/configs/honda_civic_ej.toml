@@ -30,15 +30,20 @@ drop = ["Base_Geo_lodA_Base_Geo_lodA"]
 # There is no node to name that means "the front half of the light mesh", so these are placed by
 # hand. Measured off the bodywork: the nose is at +2.20 and the tail at -2.31, and an EJ coupé
 # carries its headlights low and its tail lights high.
+# The heights are calibrated rather than guessed: across the 40 lamps in this fleet that the
+# converter measured off real lens geometry, headlights sit at about 44% of a car's height and
+# tail lights at about 57%. These were eyeballed higher than that at first, outside the range
+# every measured car falls in, which is the only cross-check available when a model gives you
+# no lens to measure.
 [lights.headlight_left]
-at = [0.62, 0.66, 2.02]
+at = [0.62, 0.60, 2.02]
 radius = 0.30
 [lights.headlight_right]
-at = [-0.62, 0.66, 2.02]
+at = [-0.62, 0.60, 2.02]
 radius = 0.30
 [lights.tail_left]
-at = [0.60, 0.88, -2.16]
+at = [0.60, 0.77, -2.16]
 radius = 0.28
 [lights.tail_right]
-at = [-0.60, 0.88, -2.16]
+at = [-0.60, 0.77, -2.16]
 radius = 0.28

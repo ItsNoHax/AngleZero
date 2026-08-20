@@ -33,11 +33,16 @@ drop = ["Base_Geo_lodA_Base_Geo_lodA", "UnderLighting"]
 # and a headlight on the wrong side of a car is worse than no headlight at all. The FD's units sit
 # at the leading corners of a 4.43 m car whose nose is at z = 2.14, so these are measured off the
 # bodywork rather than guessed.
+# The heights are calibrated rather than guessed: across the 40 lamps in this fleet that the
+# converter measured off real lens geometry, headlights sit at about 44% of a car's height and
+# tail lights at about 57%. These were eyeballed higher than that at first, outside the range
+# every measured car falls in, which is the only cross-check available when a model gives you
+# no lens to measure.
 [lights.headlight_left]
-at = [0.62, 0.62, 1.98]
+at = [0.62, 0.55, 1.98]
 radius = 0.30
 [lights.headlight_right]
-at = [-0.62, 0.62, 1.98]
+at = [-0.62, 0.55, 1.98]
 radius = 0.30
 
 # The tail lamps need the same treatment and for the same reason — the candidates came out at
@@ -45,8 +50,8 @@ radius = 0.30
 # the back of it. The FD's rear lenses are a strip across the tail at about two thirds height,
 # with the car's rear at z = -2.29.
 [lights.tail_left]
-at = [0.58, 0.80, -2.16]
+at = [0.58, 0.70, -2.16]
 radius = 0.28
 [lights.tail_right]
-at = [-0.58, 0.80, -2.16]
+at = [-0.58, 0.70, -2.16]
 radius = 0.28
