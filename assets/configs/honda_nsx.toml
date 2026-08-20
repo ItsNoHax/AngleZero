@@ -1,0 +1,10 @@
+# Honda NSX with the Rocket Bunny kit.
+name = "Honda NSX"
+source = "2015_rocket_bunny_racing_honda_nsx.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["rim:", "Calliper", "Wheel1A"]

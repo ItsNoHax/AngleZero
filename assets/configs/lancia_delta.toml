@@ -1,0 +1,16 @@
+# Lancia Delta HF Integrale Evo 2.
+name = "Lancia Delta"
+source = "1994_lancia_delta_hf_integrale_evo_2.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["Wheel1A", "Rim_", "_Tyre"]
+
+[reduce]
+# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
+# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
+# body with it.
+drop = ["Base_Geo_lodA_Base_Geo_lodA"]

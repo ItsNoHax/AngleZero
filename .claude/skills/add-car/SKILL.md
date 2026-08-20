@@ -133,20 +133,47 @@ Two rules that were learned the expensive way and are worth obeying without re-d
   changes whether it blends, whether it is culled and how it is lit, and doing it on a guess
   produces a different fault that looks like progress.
 
-### Iterating
+### Converging on a fault
 
 Change **one thing**, rebuild that car, re-render, compare. A config change is cheap and a wrong
 diagnosis is not: two changes at once and you have learned nothing about either.
 
-Stop when the car reads correctly from both angles and the silhouette reads as the same car — not
-when it is perfect. These are 24,000 triangles seen from ten metres at night on a 480×272 screen,
-and there is a real cost to gold-plating: the budget spent making a badge crisp is budget taken off
-the bodywork.
+**Every pass must narrow the fault, not try another idea.** That distinction is the whole skill.
+Guessing at node names and rebuilding to see what happens can run all day without converging,
+because the search space is thousands of parts; narrowing halves it every time. When a car is
+wrong, work down this ladder — each rung is a measurement, and each one tells you which rung to
+stand on next:
 
-If **three passes** have not fixed something, stop and say so plainly, with the render and what you
-tried. Some faults are in the model rather than the config — `docs/cars.md` has a whole section on
-**When the model is wrong about a material** — and a car that needs source edits is a different job
-from a car that needs a config line.
+1. **Which category is it in?** `--only body`, `--only window`, `--only light`, and so on. One of
+   them contains the offending geometry. This is one command per category and it always works.
+2. **Where is it, and how big?** `azview` prints every compiled mesh with its centre and radius
+   before it draws. A part that does not belong to the car announces itself as a radius much
+   larger than the body's, or a centre far off the origin.
+3. **Which source part is that?** `inspect --deep` prints every part with its triangle count and
+   its bounding extent. Match on the numbers — the count and the extent are a fingerprint, and a
+   part whose extent is near the model's whole bounding box when no body panel is, is the thing
+   you are looking for. `inspect --material <name>` goes the other way, from a material to the
+   parts wearing it.
+4. **Confirm before fixing.** `--hide <fragment>` removes candidates from the render without a
+   rebuild. When the fault disappears, you have its name.
+
+The numbers in the conversion report are evidence, not decoration. A car reporting a length that is
+not the real car's length has something in it that is not the car. A category "losing its shape" is
+a budget problem. Wheels at an implausible radius mean the wheel patterns caught the wrong parts.
+Read them before rendering anything.
+
+Keep going until the car is right. A fault that resists three attempts is not a reason to stop; it
+is a sign that the attempts were guesses and the ladder above has not been climbed. Work it out.
+
+The only honest reason to stop short is a fault that **cannot be fixed from the config at all** —
+the model itself is broken or needs geometry edited, which `docs/cars.md` covers under **When the
+model is wrong about a material**. If that happens, say exactly which part, what is wrong with it,
+what you measured, and which rung of the ladder you got to. "I tried three things" is not that.
+
+Stopping *polishing*, though, is different and is worth doing early. Once the car reads correctly
+from both angles and the silhouette reads as the same car, it is done. These are 24,000 triangles
+seen from ten metres at night on a 480×272 screen, and the budget spent making a badge crisp is
+budget taken off the bodywork.
 
 ## 6. Land it
 

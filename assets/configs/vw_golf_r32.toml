@@ -1,0 +1,10 @@
+# Volkswagen Golf R32 Mk4.
+name = "VW Golf R32"
+source = "2002_volkswagen_golf_r32_mk4.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["SM_Brake", "SM_Hub", "SM_Tire", "SM_Wheel"]

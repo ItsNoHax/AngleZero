@@ -1,0 +1,16 @@
+# Honda Civic EJ coupe with the ViS Racing kit.
+name = "Honda Civic EJ"
+source = "1993_honda_civic_coupe_vis_racing_fast__furious.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["Wheel1A", "_Ca"]
+
+[reduce]
+# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
+# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
+# body with it.
+drop = ["Base_Geo_lodA_Base_Geo_lodA"]

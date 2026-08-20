@@ -1,0 +1,10 @@
+# Citroen Xsara WRC, Sebastien Loeb's.
+name = "Citroen Xsara"
+source = "2005_citroen_xsara_wrc_sebastien_loeb.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["Ani_Wheel", "Ani_Disc", "Ani_Tyre", "Ani_Tire"]

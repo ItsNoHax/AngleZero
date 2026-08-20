@@ -1,0 +1,10 @@
+# McLaren 720S with the LB-Works kit. CC-BY rather than non-commercial.
+name = "McLaren 720S"
+source = "2017_mclaren_720s_lbworks.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["TNRRims"]

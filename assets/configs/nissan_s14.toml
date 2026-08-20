@@ -1,0 +1,10 @@
+# Nissan Silvia S14 Kouki with the Vertex Ridge kit.
+name = "Nissan S14"
+source = "2018_vertex_ridge_s14_silvia_kouki.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["wheels_rb", "Wheel1A"]

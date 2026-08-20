@@ -1,16 +1,15 @@
 # Mazda RX-7 FD with the VeilSide C-II kit.
 #
-# NOT SHIPPED YET, and `scripts/cars.sh list` will say so by showing no compiled car beside it.
-# The model carries a shadow-catcher plane — a big flat rectangle with the car's shadow painted on
-# it — whose material blends, so the categoriser files it under `window` and the compiled car ends
-# up with a translucent slab lying under it. It is also what makes the car measure 6.00 m long and
-# 2.80 m wide against a real one's 4.29 by 1.75.
+# This car is why the parts list is worth reading to the *end*. It compiled at 6.00 m long and
+# 2.80 m wide against a real one's 4.29 by 1.75, with a translucent slab lying under it, and the
+# culprit is the last line of the file: `UnderLighting`, **four triangles**, the neon underglow
+# quad. Four triangles never appear in a "largest parts" list, so every search that sorted by size
+# walked straight past it — but it is six metres across, its material blends, and blending is what
+# sorts a part into `window`. So it set the car's bounds, its centre, and the lamp positions.
 #
-# The plinth below is a *different* part and dropping it did not fix this. Three passes went on
-# finding the plane's node name without success: it is not the `phong2` part (that is carbon trim),
-# no single part in the file has an extent anywhere near 6 m, and the window bucket's own numbers
-# do not separate cleanly. `azview --only window` shows it plainly, which is where to start again.
-# Everything else about this car is right, so it is one `drop` line away from shipping.
+# The lesson is about which measurement to search on. Triangle count says a part is expensive;
+# *extent* says whether it is part of the car. They are not the same question and this model
+# answers them oppositely.
 name = "Mazda RX-7"
 source = "1993_veilside_c-ii_mazda_rx-7_fast__furious.glb"
 
@@ -23,10 +22,31 @@ lods = [3000, 1200]
 match = ["Mazda_RX7F1_1993_Wh"]
 
 [reduce]
-# This model ships standing on a display plinth — `Base_Geo_lodA`, 1,732 triangles of flat slab
-# under the car. It is not part of the car and it is not harmless: the converter measures the car
-# off its geometry, so the RX-7 came out 6.00 m long and 2.80 m wide against a real one's 4.29 by
-# 1.75, and the lamp detector refused both headlights because the plinth had pulled the candidate
-# positions apart until they were no longer a mirrored pair. One line fixes all three, and it is
-# worth checking every model in this set for one.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+# Two parts that are not the car. `Base_Geo_lodA_Base_Geo_lodA` is the display plinth this
+# exporter stands its models on — the doubled name is what distinguishes it from bodywork, since a
+# panel's own mesh is `<Part>_Base_Geo_lodA` and a plain `Base_Geo` pattern would take the whole
+# body with it. `UnderLighting` is the four-triangle neon quad described at the top of this file.
+drop = ["Base_Geo_lodA_Base_Geo_lodA", "UnderLighting"]
+
+# Placed by hand because the detector will not guess them, and it is right not to: the candidate
+# lenses it finds are at (0.60, 0.54, 1.69) and (-0.47, 0.00, 2.89), which are not a mirrored pair,
+# and a headlight on the wrong side of a car is worse than no headlight at all. The FD's units sit
+# at the leading corners of a 4.43 m car whose nose is at z = 2.14, so these are measured off the
+# bodywork rather than guessed.
+[lights.headlight_left]
+at = [0.62, 0.62, 1.98]
+radius = 0.30
+[lights.headlight_right]
+at = [-0.62, 0.62, 1.98]
+radius = 0.30
+
+# The tail lamps need the same treatment and for the same reason — the candidates came out at
+# (0.60, 0.54, -1.94) and (-0.47, 0.00, -3.11), the second of which is below the car and behind
+# the back of it. The FD's rear lenses are a strip across the tail at about two thirds height,
+# with the car's rear at z = -2.29.
+[lights.tail_left]
+at = [0.58, 0.80, -2.16]
+radius = 0.28
+[lights.tail_right]
+at = [-0.58, 0.80, -2.16]
+radius = 0.28

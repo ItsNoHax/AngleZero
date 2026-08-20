@@ -1,0 +1,16 @@
+# Lamborghini Murcielago with the LB Silhouette Works kit.
+name = "Lamborghini Murcielago"
+source = "2024_lbsilhouette_works_murcielago_gt_evo.glb"
+
+scale = 100.0
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+match = ["Wheel1A", "wSw:"]
+
+[reduce]
+# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
+# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
+# body with it.
+drop = ["Base_Geo_lodA_Base_Geo_lodA"]
