@@ -1,0 +1,31 @@
+# Dodge Charger R/T, 1969. The first car here that is not a saloon or a coupé from the eighties
+# onwards, and the longest of them at 5.3 m — a foot longer than the E39, which is the next
+# biggest. Nothing about the pipeline objected to that, but it is worth knowing when the handling
+# is looked at, because the wheelbase is measured off the model.
+#
+# 50,005 source triangles, which is the smallest source model in the set by a wide margin: a sixth
+# of the S15's and a fifth of the AE86's. There is correspondingly little to throw away, so the
+# budget below is not the constraint it is on the scanned cars.
+
+name = "Dodge Charger"
+source = "1969_dodge_charger_rt.glb"
+
+# 0.053 units along Z, and a '69 Charger is 5.28 m long, so the model is in hundredths.
+scale = 100.0
+
+# The front is already at +Z: the grille and the front bumper sit at z = +0.02 and both rear
+# bumper meshes at z = -0.03, so no `[spawn] yaw` is needed. Every car here bar the E39 is
+# this way round.
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# Two patterns, because the tyre and the rim are named on different schemes. The tyres are four
+# `polySurface26*` nodes carrying `Dodge_WidebodyChargerF9_1968_Wheel`, which is the only thing
+# they have in common with each other and nothing else; the rim, badge and hardware are all under
+# `WheelFL6_Mesh_029`, which is one node name copied to all four corners rather than a name per
+# corner. The converter sorts them into corners by position, so that copied name is not a problem.
+#
+# `Wheel` on its own would be tempting and is wrong: it also takes `SteeringWheel1_Mesh_007`, and
+# a steering wheel welded into the front axle rotates the cabin with the road speed.
+match = ["ChargerF9_1968_Wheel", "WheelFL6_Mesh"]
