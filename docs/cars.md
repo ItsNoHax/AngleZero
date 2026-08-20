@@ -476,6 +476,32 @@ texels than it was, so a collapse that drags a decal across a panel costs the si
 it used to and it stops sooner. That is the right direction — the slide really is more visible now
 — but it means the triangle counts moved on every car without any budget changing.
 
+## Reversing lamps
+
+Twenty-two of the twenty-three cars never showed one, and the models all plainly have them. The
+reason is that they do not *have* them as geometry: on most of these the whole rear cluster — tail,
+indicator and reversing lens — is one painted part, and on the S15 every lamp on the car is a single
+mesh with the differences living in a texture. There is nothing to find. The lamp detector reads
+names and geometry, and the E39 is the only model in the set that names its lenses, which is exactly
+the one car that had them.
+
+Colour looked like the answer and is not. A reversing lamp is the white lens in a cluster of red
+ones, which is a fact about cars rather than a guess — but these lenses are textured, so their
+material's base colour is white whatever the lens looks like. Testing it marked the E36's
+uniformly red cluster as having a reversing lamp, and testing it *only* on untextured materials
+found nothing at all, on any car.
+
+So they are derived rather than detected. Where a car has tail lamps and no reversing lamps, the
+reversing lamps are placed from the tail lamps: at 0.85 of their distance from the centreline,
+level with them, 4 cm further back, four fifths the size. Those numbers are the E39's own — the one
+car that names its lenses, measured — and they generalise where a position would not, because a
+reversing lamp is inboard of the tail lamp on every car ever built. The report says `derived from
+the tail lamp` rather than `named in the model`, and anything in `[lights]` wins outright.
+
+Brake lenses are still never guessed, and the difference is worth stating. A brake lens is red like
+the tail lens beside it and sits in the same place; nothing but a name tells them apart, so there is
+nothing to derive from. The runtime lights the tail lamps harder under braking instead.
+
 ## Camber
 
 Eighteen of the twenty-three cars are stanced, and carry between one and five degrees of camber

@@ -182,6 +182,42 @@ pub fn identify(
         }
     }
 
+    // Almost no model separates its reversing lamp. On twenty-two of the twenty-three cars here the
+    // whole cluster — tail, indicator and reverse — is one painted lens, sometimes one mesh for the
+    // entire car, so there is no geometry to find and no name to read. The result was cars that
+    // never showed a reversing light, on a model that plainly has one.
+    //
+    // So where the tail lamps were found and the reverse lamps were not, they are derived from the
+    // tail lamps rather than guessed at. The ratio comes from the E39, which is the one car in the
+    // set whose model does name them: its reverse lenses sit at 0.85 of the tail lamp's distance
+    // from the centreline, at the same height, 4 cm further back, and about four fifths the size.
+    // A reversing lamp is inboard of the tail lamp on every car ever built, which is why a ratio
+    // taken off one car generalises where a position would not.
+    //
+    // Reported as derived, never as measured, and a config that places them wins outright.
+    if !found.lights.iter().any(|l| l.kind == LightKind::Reverse) {
+        let tails: Vec<LightDef> = found
+            .lights
+            .iter()
+            .filter(|l| l.kind == LightKind::Tail)
+            .cloned()
+            .collect();
+        for tail in tails {
+            let side = if tail.at[0] >= 0.0 { Side::Left } else { Side::Right };
+            let at = [tail.at[0] * 0.85, tail.at[1], tail.at[2] - 0.04];
+            found.lights.push(build(
+                LightKind::Reverse,
+                side,
+                at,
+                tail.radius * 0.8,
+                &NO_ANCHOR,
+                config,
+                strings,
+            ));
+            found.filled.push((LightKind::Reverse, side, "derived from the tail lamp"));
+        }
+    }
+
     // A lens in the middle of the car is a real lamp that this has no slot for — the high-level
     // brake lamp, most often. Said once, by name, because the alternative is a car that visibly has
     // one and an asset that says nothing about why it is dark.
@@ -764,10 +800,14 @@ mod tests {
 
         assert_eq!(only(&found, LightKind::Head).len(), 2);
         assert_eq!(only(&found, LightKind::Tail).len(), 2);
-        // Nothing named a brake or a reverse lens, so the car has neither. Guessing one out of the
-        // rear cluster is the mistake this whole module exists to avoid.
+        // Nothing named a brake lens, so the car has none: a brake lens is red like the tail lens
+        // beside it, nothing but a name tells them apart, and picking one anyway is the mistake
+        // this module exists to avoid.
         assert_eq!(only(&found, LightKind::Brake).len(), 0);
-        assert_eq!(only(&found, LightKind::Reverse).len(), 0);
+        // A reversing lamp is different — see the derivation in `identify`. Nothing named one, so
+        // it is placed from the tail lamps rather than left off, because almost no model separates
+        // it and a car with no reversing light at all is the worse answer.
+        assert_eq!(only(&found, LightKind::Reverse).len(), 2);
 
         for l in only(&found, LightKind::Head) {
             assert!(l.at[2] > 1.0, "a headlight is at the front: {:?}", l.at);
@@ -866,15 +906,36 @@ mod tests {
     /// A separate brake or reverse lens is only ever identified by name. Nothing about a rear
     /// cluster's geometry says which part of it comes on under braking.
     #[test]
-    fn brake_and_reverse_lenses_are_never_guessed_from_position() {
+    fn a_brake_lens_is_never_guessed_and_a_reverse_lamp_is_derived() {
         let model = car(&[
             ("cluster_L", [0.6, 0.9, -2.0], [0.3, 0.25, 0.1]),
             ("cluster_R", [-0.6, 0.9, -2.0], [0.3, 0.25, 0.1]),
         ]);
         let found = find(&model, &CarConfig::unconfigured("Test"));
         assert_eq!(only(&found, LightKind::Tail).len(), 2, "an unnamed rear lens is a tail light");
-        assert_eq!(only(&found, LightKind::Brake).len(), 0);
-        assert_eq!(only(&found, LightKind::Reverse).len(), 0);
+        assert_eq!(only(&found, LightKind::Brake).len(), 0, "and never a brake light");
+
+        // The reverse lamps are not read off the cluster — nothing in it says which part is one —
+        // but placed from the tail lamps: inboard, level with them, a little further back. The
+        // ratio is the E39's, which is the one model here that names its own.
+        let tails = only(&found, LightKind::Tail);
+        let reverses = only(&found, LightKind::Reverse);
+        assert_eq!(reverses.len(), 2);
+        for r in &reverses {
+            let tail = tails
+                .iter()
+                .find(|t| t.at[0].signum() == r.at[0].signum())
+                .expect("a tail lamp on the same side");
+            assert!(
+                r.at[0].abs() < tail.at[0].abs(),
+                "a reversing lamp is inboard of the tail lamp: {:?} against {:?}",
+                r.at,
+                tail.at
+            );
+            assert!((r.at[1] - tail.at[1]).abs() < 0.01, "and level with it");
+            assert!(r.at[2] < tail.at[2], "and no further forward");
+            assert_eq!(r.range, 0.0, "and throws no beam down the road");
+        }
 
         // Named, it is believed.
         let model = car(&[
@@ -884,6 +945,11 @@ mod tests {
         let found = find(&model, &CarConfig::unconfigured("Test"));
         assert_eq!(only(&found, LightKind::Reverse).len(), 2, "{:?}", found.warnings);
         assert_eq!(only(&found, LightKind::Tail).len(), 0, "and is not also a tail light");
+        // Named beats derived: with no tail lamps to derive from, and a lens that says what it is,
+        // these are the model's own positions rather than a ratio applied to something else.
+        for r in only(&found, LightKind::Reverse) {
+            assert!((r.at[0].abs() - 0.4).abs() < 0.05, "the lens's own x: {:?}", r.at);
+        }
     }
 
     #[test]
