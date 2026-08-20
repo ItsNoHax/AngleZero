@@ -29,6 +29,23 @@ week's model against this week's code looks exactly like a change that did nothi
 one conclusion this script must never produce by accident. Recompiling a car with
 `anglezero-asset convert` is therefore enough; nothing has to be copied by hand.
 
+Cars are offered in filename order and a run starts on the first of them. A burst taken over the
+title screen will catch a car still arriving — read a chunk per frame, standing as a flat near-black
+**silhouette** until the whole file has landed — which is correct behaviour rather than a car that
+failed to draw.
+
+This is also the right tool for looking at that transition, because a single screenshot cannot show
+it. `--hold '20 r'` presses right on a known frame and the frames either side say whether the swap
+is clean:
+
+```bash
+scripts/psp_glitch.py --burst 15 --frames 40 --hold '0 -' --hold '20 r' --label car-swap
+```
+
+That is how the one-frame gap in the first version of car streaming was found: on the frame the
+button was pressed, the old car had gone and the incoming silhouette had not been read yet, so the
+lay-by was empty for a sixtieth of a second. Nobody would have caught it by eye.
+
 ## Why runs are comparable
 
 `--features harness` (see `src/psp/harness.rs`) fixes the frame delta at 1/60 s, replays input from a

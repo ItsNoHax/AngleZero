@@ -69,7 +69,13 @@ memory-stick directory instead.
 | Look at the front of the car | △ (held) |
 | Pause menu | START |
 | Start run | ✕ |
+| Change car, on the title screen | D-pad Left/Right |
 | From the results: run again / change car | ✕ / □ |
+
+Changing car reads that car's file off the memory stick, which takes a moment: its silhouette
+stands in the lay-by with a progress bar under its name until the whole of it has arrived. Pressing
+✕ during that reads the rest at once and starts the run, so the wait is only ever paid by somebody
+who is still browsing.
 
 The pause menu offers Continue, Restart and Select another car; D-pad Up/Down choose and ✕ confirms,
 and START closes it again the way it opened it. Holding △ swings the chase camera round to look back

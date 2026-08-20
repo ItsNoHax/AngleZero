@@ -27,21 +27,25 @@ cargo run --release -p anglezero-asset -- convert \
     assets/source/your_car.glb assets/compiled/your_car.azcar \
     --config assets/configs/your_car.toml
 
-# 4. Put it on the stick. The game loads every .azcar it finds that fits in the arena.
+# 4. Put it on the stick. The game offers every .azcar it finds there.
 cp assets/compiled/*.azcar ~/.ppsspp/PSP/GAME/AngleZero/CARS/     # emulator
 ```
 
 Left and right on the title screen pick between them. That is the architectural test: the AE86 was
 added with a thirty-line TOML and no renderer change at all.
 
-There are twelve slots and a 6 MB arena behind them, so the limit anybody reaches is the arena —
-which is a number of bytes that can be measured, rather than a number of cars somebody picked. Seven
-cars at the budgets in this repo come to 5.45 MB, leaving room for about one more. A car that does
-not fit is refused by name on the title screen and the rest still load.
+**How many cars fit is now a question about the memory stick, not about the game.** Only one car is
+in memory at a time — the one on screen — so a directory with fifty in it costs what a directory
+with seven costs, and boot does not get slower for finding them. The list is sorted by filename and
+holds 128 entries, which is a number chosen to be unreachable rather than to be budgeted against.
 
-That margin used to be four cars, and it was spent deliberately — see
-[Where the budget goes](#where-the-budget-goes) for what 15,000 triangles was not enough to draw.
-The arena is the thing to raise when the eighth car arrives, not the budgets to lower.
+The limit that is left is per car: **1.25 MB a file**, which is what one residency slot is. The
+compiler refuses to write a car larger than that, so it is caught on a development machine by name
+rather than on a title screen by absence. Today's fleet runs from 725 KB to 940 KB.
+
+What that costs is time rather than space. Picking a car reads it, which is most of a megabyte off
+a memory stick, so the file arrives over the next few frames rather than instantly — see
+[Silhouettes](#silhouettes) for what is on screen while it does.
 
 ## What `inspect` is for
 
@@ -423,25 +427,27 @@ A car carries three copies of itself: LOD0 for the one being driven, LOD1 beyond
 carries one decimation's error and not three.
 
 With eight cars on screen this halves the vertex load for 0.05% of pixels differing at all. It costs
-file size: the E36 is 820 KB, of which 129 KB is the texture and the rest is geometry across three
-levels.
+file size: the E36 is 792 KB, of which 128 KB is the texture, 22 KB is the silhouette, and the rest
+is geometry across three levels.
 
 The coarse levels are 3,000 and 1,200 against LOD0's 24,000, and they were 4,500 and 1,800 against
 15,000. Cutting them while raising LOD0 is close to free and was what paid for the raise: at 4,500
 and 1,800 the two of them were 30% of every file, spent on a car that is eighteen metres away and a
 hundred pixels wide.
 
-That is what made the arena the binding limit. Seven cars run from the AE86's 704 KB to the R34's
-857 KB and come to 5.45 MB together — against an arena that was 1.5 MB, which is why the four slots
-next to it were never once reached: the third car was refused for want of bytes long before a
-fourth was asked for. The arena is 6 MB now and the slots are twelve, deliberately more than it can
-hold, so that the failure names the resource that actually ran out.
+That is what used to make the arena the binding limit. Seven cars run from the AE86's 725 KB to the
+R34's 940 KB and come to 5.7 MB together, against an arena of 6 MB — so the eighth car did not fit,
+and the answer was going to be another megabyte of `.bss` on a machine with 24 MB of it, bought to
+hold six cars nobody was looking at.
 
-5.45 MB is up from 5.05. Most of the difference is what the free-error fix bought — bodywork that
-was being flattened for nothing now spends the budget it had been allocated all along — and 125 KB
-of it is the E39 alone, which is the one car asking for 32,000 triangles rather than 24,000 and
-says why in its own config. It leaves about 558 KB, which is no longer a spare car. The arena is
-the thing to raise for the eighth.
+What was actually wrong is that residency was proportional to how many cars were on the *stick*
+when it only ever needed to be proportional to how many were on *screen*, which is one. So the
+arena is two slots now, the car being driven and the car arriving, and the fleet can be any size.
+The saving is real in both directions: a shipping build reserves 2.5 MB where it used to reserve 6,
+and the limit that replaced it — 1.25 MB for one file — is a number the compiler can enforce.
+
+A devtools build keeps five slots, at 6.25 MB, because `--mode 13` and `--mode 14` below exist to
+price a field of *different* models and one car drawn eight times prices none of it.
 
 It came down from 5.54 when the atlas grid was sized by the images rather than the materials, which
 is not a saving anybody asked for and is worth understanding rather than pocketing: `UV_WEIGHT`
@@ -450,10 +456,36 @@ texels than it was, so a collapse that drags a decal across a panel costs the si
 it used to and it stops sooner. That is the right direction — the slide really is more visible now
 — but it means the triangle counts moved on every car without any budget changing.
 
+## Silhouettes
+
+Picking a car reads its file, and a memory stick is not fast. Read whole, that stops the title
+screen dead for a fraction of a second on every press of L or R — on the one screen where L and R
+are pressed repeatedly. So the file arrives a chunk a frame instead, and what stands in the lay-by
+while it does is the car's own shape: a few hundred triangles, flat and near-black, culling off.
+
+That shape is a fourth copy of the car, and it is written **in front of every other section**, at
+byte 112, so the load's first chunk already holds it. The read is issued the moment the button is
+pressed rather than on the next frame, which is the difference between a car replaced by its shadow
+and a car that blinks out of the lay-by on its way to being one — that gap existed, and a scripted
+capture is what found it.
+
+The geometry is LOD2's, reused rather than decimated again: a level built to be recognisable at
+45 m is already a shape, it has been through the same whole-car simplification as everything else,
+and reusing it adds no new way for the bodywork to crack. It costs about 22 KB, near enough 3% of a
+file, to avoid a second seek into the middle of one.
+
+The header had no room left for the offset — `LIGHT_COUNT` ends at byte 110 of a 112-byte header —
+so it is stored in the two bytes that remain, **in 16-byte units**. Growing the header instead
+would have made every car already on a memory stick unreadable, which is the same reason the
+version has never been bumped for a new section. A car compiled before this reads as a car with no
+silhouette and pops in rather than fading in.
+
 ## Measuring
 
-`--mode 13` and `--mode 14` draw four and eight cars, alternating every asset on the stick, so that
-switching vertex buffers and material state between different cars is part of what is timed:
+`--mode 13` and `--mode 14` draw four and eight cars, alternating every car resident, so that
+switching vertex buffers and material state between different cars is part of what is timed.
+Entering either mode reads cars into the spare slots to have something to alternate between, which
+is a stall of a second or so on the button press and is why it is a devtools build that does it:
 
 ```bash
 scripts/psp_glitch.py --node 1200 --burst 60 --frames 12 --mode 14 --label eight-cars

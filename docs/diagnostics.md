@@ -35,6 +35,14 @@ silently dropped, and it turns red. `LST` is display-list bytes against the 1 MB
 they distinguish the two silent failure modes — an exhausted arena and an overrun list — which both
 look like flickering geometry rather than like an error.
 
+The title screen carries a line of its own, top-left, because it is the only screen that loads a
+car: `RD PK` is the longest a single chunk read has taken, in microseconds, and `ARENA` is how much
+of the residency slots hold a car. Press L or R and watch `RD PK`. That number is what
+`CHUNK_BYTES` in [`src/psp/car.rs`](../src/psp/car.rs) has to be chosen against, and it is the one
+measurement that **cannot** be taken under the emulator — headless reads a car off a host
+filesystem, so every chunk size looks free there. Anything past about 16,000 is a chunk that costs
+a frame.
+
 ## Headless screenshots
 
 `PPSSPPHeadless` boots a `.prx` and renders with a deterministic software rasteriser. No window, no

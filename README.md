@@ -25,7 +25,8 @@ PSP/GAME/AngleZero/CARS/*.azcar
 ```
 
 The cars are separate files rather than being built into the EBOOT, so adding one later is copying
-a file into `CARS/` — no rebuild, and the title screen offers it with L/R.
+a file into `CARS/` — no rebuild, and the title screen offers it with L/R. Put as many in there as
+the stick will hold: only the car on screen is in memory, and it is read in as you pick it.
 
 Then it appears under Game → Memory Stick.
 
@@ -73,7 +74,7 @@ Toolchain, emulator setup and controls are in [Building and running](docs/buildi
 src/            game core — no PSP dependency, runs and is tested on the host
 src/psp/        the shell: GU setup, rendering, audio, save data, diagnostics
 tools/          the car asset compiler — host-only, never built for the console
-tests/          288 tests, all host-side
+tests/          331 tests, all host-side
 scripts/        music encoding, the glitch hunt, pulling captures off a PSP
 assets/         XMB icon, background, music, and the car models in three stages
 docs/           everything above

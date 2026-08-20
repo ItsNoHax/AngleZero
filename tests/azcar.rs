@@ -14,7 +14,7 @@ use angle_zero::azcar::{
     LIGHT_BYTES, LIGHT_STEERS, MAGIC, MATERIAL_BLEND, MATERIAL_BYTES, MESH_BYTES, NO_CREDIT,
     NO_TEXTURE, NO_WHEEL, VERSION, VERTEX_TEX_F32_COLOR_8888_F32, WHEEL_BYTES, WHEEL_FRONT_LEFT,
 };
-use angle_zero::azcar::CarVertex;
+use angle_zero::azcar::{CarVertex, Silhouette};
 use angle_zero::vehicle::CarShape;
 
 /// A car with one body mesh and one wheel, laid out the way the writer lays one out.
@@ -31,6 +31,9 @@ struct Builder {
     vertex_format: u32,
     credit: u32,
     name: u32,
+    /// Positions and indices for the stand-in drawn while the file is still arriving. `None` for a
+    /// car compiled before there were any, which must still load.
+    silhouette: Option<(Vec<[f32; 3]>, Vec<u16>)>,
 }
 
 impl Builder {
@@ -106,11 +109,39 @@ impl Builder {
             vertex_format: VERTEX_TEX_F32_COLOR_8888_F32,
             credit: NO_CREDIT,
             name: NO_CREDIT,
+            silhouette: None,
         }
     }
 
     fn build(&self) -> Vec<u8> {
         let mut out = vec![0u8; HEADER_BYTES];
+
+        // First of everything, because the console draws it from the first chunk of a load that
+        // has not finished. Written by hand here, like the rest of this file, so the test states
+        // the layout rather than agreeing with the writer's idea of it.
+        let silhouette_at = match &self.silhouette {
+            None => 0,
+            Some((positions, indices)) => {
+                let at = align(&mut out);
+                out.extend_from_slice(&(positions.len() as u32).to_le_bytes());
+                out.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+                let arrays_at = out.len();
+                out.extend_from_slice(&[0u8; 8]);
+                let positions_at = align(&mut out);
+                for p in positions {
+                    for v in p {
+                        out.extend_from_slice(&v.to_le_bytes());
+                    }
+                }
+                let indices_at = align(&mut out);
+                for i in indices {
+                    out.extend_from_slice(&i.to_le_bytes());
+                }
+                put_u32(&mut out, arrays_at, (positions_at - at) as u32);
+                put_u32(&mut out, arrays_at + 4, (indices_at - at) as u32);
+                at
+            }
+        };
 
         let meshes_at = align(&mut out);
         for m in &self.meshes {
@@ -176,6 +207,12 @@ impl Builder {
         put_u32(&mut out, field::STRINGS_BYTES, self.strings.len() as u32);
         put_u32(&mut out, field::CREDIT, self.credit);
         put_u32(&mut out, field::NAME, self.name);
+        // In 16-byte units: the header had two bytes left and an offset needs four.
+        put_u16(
+            &mut out,
+            field::SILHOUETTE_AT_16,
+            (silhouette_at / 16) as u16,
+        );
         let total = out.len() as u32;
         put_u32(&mut out, field::LENGTH, total);
         out
@@ -608,4 +645,153 @@ fn a_light_count_without_a_section_is_no_lights_at_all() {
     let backing = aligned(&bytes);
     let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
     assert_eq!(Car::parse(view).unwrap().light_count(), 0);
+}
+
+/// A silhouette to stand in for a car: a triangle at each corner of nothing in particular. The
+/// shape does not matter here; where it is written and what it survives does.
+fn typical_silhouette() -> (Vec<[f32; 3]>, Vec<u16>) {
+    (
+        vec![
+            [-0.9, 0.0, -2.1],
+            [0.9, 0.0, -2.1],
+            [0.9, 1.3, 2.1],
+            [-0.9, 1.3, 2.1],
+        ],
+        vec![0, 1, 2, 0, 2, 3],
+    )
+}
+
+#[test]
+fn a_silhouette_reads_back_exactly_what_was_written() {
+    let mut b = Builder::typical();
+    let (positions, indices) = typical_silhouette();
+    b.silhouette = Some((positions.clone(), indices.clone()));
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+
+    let car = Car::parse(view).unwrap();
+    let sil = car.silhouette().expect("the car carries one");
+    assert_eq!(sil.vertex_count(), positions.len());
+    assert_eq!(sil.index_count(), indices.len());
+    assert_eq!(sil.triangle_count(), 2);
+    for (i, p) in positions.iter().enumerate() {
+        let v = sil.vertex(i);
+        assert_eq!([v.x, v.y, v.z], *p, "vertex {i}");
+    }
+}
+
+/// The whole reason the section is where it is: the console draws it out of a file it has only
+/// partly read, so it has to be found in a prefix — and refused, quietly, in a prefix that stops
+/// short of it.
+#[test]
+fn a_silhouette_is_readable_before_the_rest_of_the_car_has_arrived() {
+    let mut b = Builder::typical();
+    b.silhouette = Some(typical_silhouette());
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+
+    // Where the silhouette ends: everything from here on is a prefix that holds it.
+    let whole = Silhouette::parse(view).expect("the whole file certainly holds one");
+    let mut first_complete = None;
+    for n in 0..=view.len() {
+        let landed = Silhouette::parse(&view[..n]).is_some();
+        if landed && first_complete.is_none() {
+            first_complete = Some(n);
+        }
+        // Once it is readable it stays readable: a load only ever adds bytes.
+        if let Some(at) = first_complete {
+            assert_eq!(landed, n >= at, "at {n} bytes");
+        }
+    }
+    let first_complete = first_complete.expect("a prefix reads it");
+    assert!(
+        first_complete < view.len(),
+        "the silhouette must arrive before the file does, or it is worth nothing"
+    );
+    // And what a prefix reads is what the whole file reads.
+    let early = Silhouette::parse(&view[..first_complete]).unwrap();
+    assert_eq!(early.vertex_count(), whole.vertex_count());
+    assert_eq!(early.index_count(), whole.index_count());
+}
+
+/// It is written in front of every other section, which is what makes the prefix above short.
+#[test]
+fn the_silhouette_comes_before_everything_else_in_the_file() {
+    let mut b = Builder::typical();
+    b.silhouette = Some(typical_silhouette());
+    let bytes = b.build();
+    let at = u16::from_le_bytes(
+        bytes[field::SILHOUETTE_AT_16..field::SILHOUETTE_AT_16 + 2]
+            .try_into()
+            .unwrap(),
+    ) as usize
+        * 16;
+    assert_eq!(at, HEADER_BYTES, "there is nothing to put in front of it");
+    for field_at in [
+        field::MESHES_AT,
+        field::MATERIALS_AT,
+        field::WHEELS_AT,
+        field::VERTICES_AT,
+        field::INDICES_AT,
+        field::STRINGS_AT,
+    ] {
+        let section =
+            u32::from_le_bytes(bytes[field_at..field_at + 4].try_into().unwrap()) as usize;
+        assert!(section > at, "section at {field_at} should follow it");
+    }
+}
+
+/// A car compiled before silhouettes existed is a car with no silhouette, not a car that fails.
+/// The two spare header bytes were zero in every file that predates the field, which is exactly
+/// what makes reading them safe.
+#[test]
+fn a_car_from_before_there_were_silhouettes_still_loads() {
+    let bytes = Builder::typical().build();
+    assert_eq!(bytes[field::SILHOUETTE_AT_16], 0);
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).unwrap();
+    assert!(car.silhouette().is_none());
+    assert!(Silhouette::parse(view).is_none());
+}
+
+/// A silhouette that does not check out costs the player a stand-in, not the car. It is an
+/// additive section: refusing the whole file over it would be refusing a car that draws perfectly
+/// well for the sake of something nobody sees for half a second.
+#[test]
+fn a_broken_silhouette_is_dropped_and_the_car_still_loads() {
+    let mut b = Builder::typical();
+    b.silhouette = Some(typical_silhouette());
+
+    // An index that points past the positions — the GE would fetch a vertex from outside the car.
+    let mut bytes = b.build();
+    let at = HEADER_BYTES;
+    let indices_at = at + u32::from_le_bytes(bytes[at + 12..at + 16].try_into().unwrap()) as usize;
+    put_u16(&mut bytes, indices_at, 9999);
+    assert_silhouette_dropped(&bytes);
+
+    // An offset that runs off the end of the file.
+    let mut bytes = b.build();
+    put_u16(&mut bytes, field::SILHOUETTE_AT_16, 60_000);
+    assert_silhouette_dropped(&bytes);
+
+    // A count of triangles that is not a whole number of them.
+    let mut bytes = b.build();
+    put_u32(&mut bytes, at + 4, 7);
+    assert_silhouette_dropped(&bytes);
+
+    // Arrays the GE could not fetch by DMA, being off a 16-byte line.
+    let mut bytes = b.build();
+    let positions_at = u32::from_le_bytes(bytes[at + 8..at + 12].try_into().unwrap());
+    put_u32(&mut bytes, at + 8, positions_at + 4);
+    assert_silhouette_dropped(&bytes);
+}
+
+fn assert_silhouette_dropped(bytes: &[u8]) {
+    let backing = aligned(bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).expect("the car itself is untouched and still loads");
+    assert!(car.silhouette().is_none(), "the silhouette should be dropped");
 }

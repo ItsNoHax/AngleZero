@@ -42,12 +42,9 @@ static mut LIST: psp::Align16<[u32; 262144]> = psp::Align16([0; 262144]);
 static mut TRACK: Track = Track::EMPTY;
 static mut GAME: Game = Game::new();
 
-/// Why there is no car, if there is no car. Read by the title screen.
-static mut CAR_LOAD: Option<car::LoadError> = None;
-
 /// The car asset's loading fault, or `None` if it loaded.
 pub fn car_fault() -> Option<car::LoadError> {
-    unsafe { CAR_LOAD }
+    car::fault()
 }
 
 /// Takes the vehicle's proportions and its handling off whichever car it is now driving.
@@ -58,7 +55,7 @@ pub fn car_fault() -> Option<car::LoadError> {
 /// beside the geometry — but it changes at the same moment and for the same reason, so it is taken
 /// here too. A car that carries neither gets the numbers the game was tuned with.
 fn refresh_car(game: &mut Game) {
-    if let Some(car) = car::get(game.vehicle.model) {
+    if let Some(car) = car::current() {
         game.vehicle.shape = car.shape();
         game.vehicle.handling = car.handling();
     }
@@ -168,9 +165,11 @@ pub fn psp_main() {
         let track = &mut *(&raw mut TRACK);
         Track::generate(track);
         scratch::init();
-        // Every car on the stick, whatever they are called. A car that fails to load is not fatal
-        // — the game runs, and the title screen says why there is no car.
-        CAR_LOAD = car::load_all();
+        // What cars are on the stick, whatever they are called — a list, not the cars themselves.
+        // No file is opened here, so a stick with fifty cars boots as fast as one with seven, and
+        // an empty `CARS/` is not fatal: the game runs, and the title screen says why there is no
+        // car to look at.
+        car::scan();
         render::init(track);
         text::init();
         hud::init_minimap(track);
@@ -187,7 +186,12 @@ pub fn psp_main() {
         let game = &mut *(&raw mut GAME);
         game.record = storage::load();
         game.car_count = car::count().max(1);
-        refresh_car(game);
+        // The first car starts arriving now and lands a few frames into the title screen, which is
+        // the same thing that happens every time the player picks a different one. Nothing waits
+        // for it: the loop below reads a chunk a frame.
+        if car::count() > 0 && car::begin(game.vehicle.model).unwrap_or(false) {
+            refresh_car(game);
+        }
         game.enter_title(track);
 
         // The scripted run, loaded before the first frame so frame 0 already has its buttons.
@@ -195,6 +199,11 @@ pub fn psp_main() {
         {
             harness::init();
             render::set_debug_mode(harness::mode());
+            if harness::mode() == render::MODE_FOUR_CARS
+                || harness::mode() == render::MODE_EIGHT_CARS
+            {
+                car::fill_spare_slots();
+            }
         }
 
         let pad = &mut SceCtrlData::default();
@@ -280,6 +289,14 @@ pub fn psp_main() {
                 if l_edge {
                     debug_mode = (debug_mode + 1) % render::DEBUG_MODES;
                     render::set_debug_mode(debug_mode);
+                    // A field of cars needs cars to field. Only one is resident in the ordinary
+                    // way of things, so entering the benchmark reads the rest in — which stalls
+                    // for as long as it stalls, on a press, in a build nobody ships.
+                    if debug_mode == render::MODE_FOUR_CARS
+                        || debug_mode == render::MODE_EIGHT_CARS
+                    {
+                        car::fill_spare_slots();
+                    }
                 }
                 if select_edge {
                     burst = 0;
@@ -304,11 +321,28 @@ pub fn psp_main() {
 
             #[cfg(feature = "devtools")]
             let work_start = sys::sceKernelGetSystemTimeLow();
+
+            // A car arrives a chunk a frame, so the title screen keeps running while it does.
+            // X is the exception: a player who has pressed start is no longer browsing, so the
+            // rest of the file is read at once and the run begins on this frame rather than half a
+            // second later. Read as held rather than as an edge because the edge belongs to the
+            // core's own input handling below, and a button cannot have two.
+            if car::is_loading() {
+                let arrived = if buttons.cross {
+                    car::hurry()
+                } else {
+                    car::step()
+                };
+                if arrived {
+                    refresh_car(game);
+                }
+            }
             let driving = game.vehicle.model;
             game.update(track, buttons, dt);
-            // The title screen can swap the car. Re-measure only when it actually changed, rather
-            // than every frame for a value that almost never moves.
-            if game.vehicle.model != driving {
+            // The title screen can swap the car, and a different car is a different file. It
+            // starts arriving now; `refresh_car` waits until there is something to measure, unless
+            // the car was still resident from earlier and is simply put back on screen.
+            if game.vehicle.model != driving && car::begin(game.vehicle.model).unwrap_or(false) {
                 refresh_car(game);
             }
             if game.take_record_dirty() {

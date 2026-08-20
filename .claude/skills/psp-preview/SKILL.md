@@ -38,10 +38,11 @@ Each emit overwrites the file, so the saved image is whatever state the *last* e
 
 ## The car is a file, and it is not in the build
 
-The car is a compiled asset. The guest loads every `.azcar` in `ms0:/PSP/GAME/AngleZero/CARS/`,
-which under headless is **always** `~/.ppsspp/PSP/GAME/AngleZero/CARS/`. Install them before
-capturing, and **again after every `anglezero-asset convert`**: rebuilding the game does not update
-them, and the emulator goes on showing the car you compiled an hour ago.
+The car is a compiled asset. The guest lists every `.azcar` in `ms0:/PSP/GAME/AngleZero/CARS/` and
+reads in whichever one is selected — under headless that directory is **always**
+`~/.ppsspp/PSP/GAME/AngleZero/CARS/`. Install them before capturing, and **again after every
+`anglezero-asset convert`**: rebuilding the game does not update them, and the emulator goes on
+showing the car you compiled an hour ago.
 
 ```bash
 CARS="$HOME/.ppsspp/PSP/GAME/AngleZero/CARS"
@@ -55,9 +56,11 @@ UMD and stops the run booting if it is pointed at a memory stick. Setting `PPSSP
 emulator does nothing at all: the run silently reads the default stick, which looks exactly like a
 capture of the wrong car, and cost a wasted round here before it was noticed.
 
-To capture one car in isolation — which is the reliable way to tell which car is which, since
-counting button presses to cycle the title screen drifts — swap the directory's contents around a
-serial run:
+Cars are offered in **filename order**, and the title screen boots on the first of them, so which
+car a capture gets is decided by the directory rather than by counting button presses. Renaming a
+copy so that it sorts first is enough to choose one.
+
+To capture one car in isolation, swap the directory's contents around a serial run:
 
 ```bash
 CARS="$HOME/.ppsspp/PSP/GAME/AngleZero/CARS"
@@ -84,6 +87,21 @@ reinstalls every car in `assets/compiled/` on each run, so it will overwrite a s
 With nothing there the game still runs. The title screen says `car asset not found on the memory
 stick` and the road is simply empty where the car should be — which looks exactly like a renderer
 that has stopped drawing it. Check the directory before debugging the renderer.
+
+## A car takes a few frames to arrive
+
+A car is not resident at boot: it is read a chunk per frame, about thirty of them, and what stands
+in the lay-by meanwhile is its **silhouette** — the car's outline in flat near-black, with a
+progress bar under its name. That is working correctly, not a car that has failed to draw.
+
+It matters here because capture is on a timer. The first emit is at frame 30, which is roughly when
+the first car finishes arriving, so an early capture can legitimately catch the shadow. If a
+silhouette is not what you wanted, capture later — `--timeout` headroom is cheap — or press X,
+which reads the rest of the file at once.
+
+The same is true after any press of L or R: the car under the name is the one arriving, and it
+takes a moment. `scripts/psp_glitch.py` is the tool for looking at that transition frame by frame,
+since a single overwritten screenshot cannot show it.
 
 ## Idle capture
 

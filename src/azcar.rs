@@ -32,6 +32,17 @@ pub const VERSION: u16 = 1;
 /// Bytes before the first section. A multiple of 16, so section offsets stay aligned.
 pub const HEADER_BYTES: usize = 112;
 
+/// The most one compiled car may be.
+///
+/// The console reads a car into a fixed slot — there is no allocator — so this is a real ceiling
+/// rather than advice, and it is here rather than in the console's loader so that the compiler can
+/// refuse a car nobody could load. That is the whole trade behind it: a limit that is checked on a
+/// development machine, by name, before the file is ever copied, instead of one discovered on a
+/// title screen when a car declines to appear.
+///
+/// 1.25 MB against the largest car this repo compiles at 920 KB.
+pub const MAX_CAR_BYTES: usize = 1280 * 1024;
+
 pub const MESH_BYTES: usize = 32;
 pub const MATERIAL_BYTES: usize = 16;
 pub const WHEEL_BYTES: usize = 32;
@@ -73,6 +84,21 @@ pub struct CarVertex {
 pub const TEXTURE_5650: u16 = 0;
 /// Width, height, format, flags, then the pixels.
 pub const TEXTURE_HEADER_BYTES: usize = 16;
+
+/// The silhouette section's own header: two counts and where its two arrays start, relative to the
+/// section. Self-describing, so the arrays can be padded into alignment without the reader having
+/// to know how much padding the writer chose.
+pub const SILHOUETTE_HEADER_BYTES: usize = 16;
+
+/// A silhouette vertex. A position, and deliberately nothing else — no colour, no texture
+/// coordinate, because the thing is drawn in one flat colour and would only be throwing them away.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SilhouetteVertex {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
 
 /// Which corner a wheel is, in the order the writer emits them.
 pub const WHEEL_FRONT_LEFT: u8 = 0;
@@ -475,6 +501,19 @@ pub mod field {
     pub const LIGHTS_AT: usize = 104;
     /// How many lamps that section holds. In the header, where every other array's count is.
     pub const LIGHT_COUNT: usize = 108;
+    /// Where the silhouette is, **in 16-byte units**, or zero for a car that carries none.
+    ///
+    /// The odd unit is the price of the header being full: `LIGHT_COUNT` ends at 110 and the
+    /// header is 112, so there were two bytes left and an offset needs four. Growing the header
+    /// was not an option — a reader that expected 128 bytes would refuse every car already on a
+    /// memory stick, because their first section starts at 112 — and neither was a version bump,
+    /// for the same reason spelled out at `LIGHTS_AT`. Sixteen-byte units reach a megabyte, every
+    /// section is 16-byte aligned anyway, and the silhouette is written first, at 112, so seven is
+    /// the number that actually goes in here.
+    ///
+    /// Its counts live in the section rather than beside this, which is what the level table
+    /// already does and for the same reason: there was nowhere left to put them.
+    pub const SILHOUETTE_AT_16: usize = 110;
 }
 
 /// The car carries no attribution line.
@@ -505,6 +544,122 @@ pub struct Car<'a> {
     /// Offset of the level table and how many levels it holds, or `(0, 0)` for a car with one.
     lods: (usize, usize),
     bounds: [f32; 6],
+}
+
+/// The shape of a car, with none of the detail: what stands in while the rest of it is read.
+///
+/// A car is the better part of a megabyte and arrives over a handful of frames. This is the part
+/// that arrives first — a few hundred triangles, positions only, written at the very front of the
+/// file so that the load's first chunk already holds it. Drawn flat and dark, it is the car's
+/// outline, which is enough to answer a press of L or R on the frame it happened instead of when
+/// the read finishes.
+///
+/// It is a copy of geometry the file already contains, and that duplication is the whole trade: a
+/// second seek to the middle of a file, on a memory stick, costs more than the fifteen kilobytes
+/// this spends.
+#[derive(Clone, Copy, Debug)]
+pub struct Silhouette<'a> {
+    bytes: &'a [u8],
+    vertices_at: usize,
+    indices_at: usize,
+    vertex_count: usize,
+    index_count: usize,
+}
+
+impl<'a> Silhouette<'a> {
+    /// Finds the silhouette in however much of a file has been read so far.
+    ///
+    /// `bytes` is a *prefix*: the front of the file, not the whole of it. That is the point — this
+    /// is asked before the car exists, and everything it reads has to be checked against what has
+    /// actually landed rather than against what the header says the file will be. `None` covers
+    /// both "this car has no silhouette" and "not enough of it is here yet", because the caller
+    /// does the same thing either way and asks again next frame.
+    pub fn parse(bytes: &'a [u8]) -> Option<Silhouette<'a>> {
+        if bytes.len() < HEADER_BYTES {
+            return None;
+        }
+        let at = le_u16(bytes, field::SILHOUETTE_AT_16) as usize * 16;
+        if at < HEADER_BYTES || at + SILHOUETTE_HEADER_BYTES > bytes.len() {
+            return None;
+        }
+
+        let vertex_count = le_u32(bytes, at) as usize;
+        let index_count = le_u32(bytes, at + 4) as usize;
+        let vertices_at = at + le_u32(bytes, at + 8) as usize;
+        let indices_at = at + le_u32(bytes, at + 12) as usize;
+        if vertex_count == 0 || index_count == 0 || index_count % 3 != 0 {
+            return None;
+        }
+        // Indices are 16-bit, as they are for the car proper.
+        if vertex_count > u16::MAX as usize + 1 {
+            return None;
+        }
+
+        for (start, len, aligned) in [
+            (
+                vertices_at,
+                vertex_count * core::mem::size_of::<SilhouetteVertex>(),
+                true,
+            ),
+            (indices_at, index_count * 2, true),
+        ] {
+            if start < at || start > bytes.len() || bytes.len() - start < len {
+                return None;
+            }
+            // The GE fetches both of these by DMA out of the buffer the file was read into.
+            if aligned && start % 16 != 0 {
+                return None;
+            }
+        }
+
+        // Every index has to be inside the vertex array, checked here rather than trusted, because
+        // the alternative is the GE fetching a vertex from beyond the end of the car.
+        for i in 0..index_count {
+            if le_u16(bytes, indices_at + i * 2) as usize >= vertex_count {
+                return None;
+            }
+        }
+
+        Some(Silhouette {
+            bytes,
+            vertices_at,
+            indices_at,
+            vertex_count,
+            index_count,
+        })
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        self.vertex_count
+    }
+
+    pub fn index_count(&self) -> usize {
+        self.index_count
+    }
+
+    pub fn triangle_count(&self) -> usize {
+        self.index_count / 3
+    }
+
+    /// One vertex, decoded. For anything that wants to look at the shape rather than draw it.
+    pub fn vertex(&self, i: usize) -> SilhouetteVertex {
+        let at = self.vertices_at + i * core::mem::size_of::<SilhouetteVertex>();
+        SilhouetteVertex {
+            x: le_f32(self.bytes, at),
+            y: le_f32(self.bytes, at + 4),
+            z: le_f32(self.bytes, at + 8),
+        }
+    }
+
+    /// Raw pointer to the positions, for handing to the GE.
+    pub fn vertices_ptr(&self) -> *const u8 {
+        // Safety: `parse` checked the section lies inside the buffer.
+        unsafe { self.bytes.as_ptr().add(self.vertices_at) }
+    }
+
+    pub fn indices_ptr(&self) -> *const u8 {
+        unsafe { self.bytes.as_ptr().add(self.indices_at) }
+    }
 }
 
 /// A car's texture, borrowed from the loaded file.
@@ -714,6 +869,11 @@ impl<'a> Car<'a> {
         Ok(car)
     }
 
+    /// How many bytes the file is, which is how much of a slot it occupies on the console.
+    pub fn byte_len(&self) -> usize {
+        self.bytes.len()
+    }
+
     pub fn vertex_count(&self) -> usize {
         self.vertex_count
     }
@@ -884,6 +1044,16 @@ impl<'a> Car<'a> {
             format: le_u16(self.bytes, at + 4),
             pixels: &self.bytes[at + TEXTURE_HEADER_BYTES..at + TEXTURE_HEADER_BYTES + width * height * 2],
         })
+    }
+
+    /// The car's silhouette, if it carries one.
+    ///
+    /// Checked here rather than in `parse`, and by the same code that checks it mid-load: the
+    /// section is additive, so a car whose silhouette does not check out is a car with no
+    /// silhouette, not a car that cannot be drawn. Refusing the whole file over a stand-in nobody
+    /// sees for half a second would be the wrong trade entirely.
+    pub fn silhouette(&self) -> Option<Silhouette<'a>> {
+        Silhouette::parse(self.bytes)
     }
 
     /// How many levels of detail the car carries. One means only the meshes `mesh_count` covers.

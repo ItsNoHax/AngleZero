@@ -8,7 +8,7 @@ The crate is split so that almost all of the game can be tested on a normal mach
 
 | Path | What it is |
 |---|---|
-| `src/*.rs` | `no_std`, target-agnostic game core — track, physics, scoring, camera, screen flow, HUD numbers, mesh building. No PSP dependency. |
+| `src/*.rs` | `no_std`, target-agnostic game core — track, physics, scoring, camera, screen flow, HUD numbers, mesh building, and the car format, catalogue and load arithmetic. No PSP dependency. |
 | `src/psp/` | The PSP shell: GU bring-up, controller, renderer, 2D overlay. Only compiled for `target_os = "psp"`. |
 | `tools/anglezero-asset/` | The car asset compiler. A workspace member, and the game is the only default member, so `cargo psp` never tries to build glTF parsing for mipsel. See [Cars](cars.md). |
 | `tests/` | Host tests. Everything in `src/*.rs` is exercised here. |
@@ -30,6 +30,12 @@ format all have their own suite. The two worth knowing about are `tests/track_qu
 covers the nearest-node queries that containment, gravity and scoring all go through, and
 `tests/stability.rs`, which drives the car hard enough to catch a model that blows up rather than
 one that merely handles badly.
+
+Loading a car is split along the same line. `src/catalogue.rs` decides what cars exist and in what
+order they are offered, `src/stream.rs` counts the chunks a load arrives in, and `src/psp/car.rs` is
+left holding nothing but the file handle and the arena. The first two are tested on the host with no
+memory stick anywhere near them, which is how the sort order, the naming and the last-chunk
+arithmetic are checked at all.
 
 `src/lights.rs` is the clearest example of why the split is drawn where it is. Vehicle lighting looks
 like a rendering feature, but almost none of it is: whether the tail lamps are hard on, whether the

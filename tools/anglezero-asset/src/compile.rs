@@ -610,19 +610,36 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         })
         .collect();
 
-    // The car's own bounds, which is not the bounds of the vertex array: wheel vertices are stored
-    // about their hubs, so a tyre's lowest vertex is at -0.29 in its own space and on the road in
-    // the car's. Adding the hub back is what makes this the box the car actually occupies.
-    let mut bounds = Bounds::EMPTY;
-    for b in &buckets {
-        let origin = b
-            .wheel
+    // Wheel vertices are stored about their hubs, so a tyre's lowest vertex is at -0.29 in its own
+    // space and on the road in the car's. Adding the hub back is what puts a bucket where the car
+    // actually is, which both the bounds and the silhouette below need.
+    let origin_of = |wheel: Option<u8>| -> [f32; 3] {
+        wheel
             .and_then(|c| found.wheels.iter().position(|w| w.corner == c))
             .map(|i| hubs[i])
-            .unwrap_or([0.0; 3]);
+            .unwrap_or([0.0; 3])
+    };
+
+    // The car's own bounds, which is not the bounds of the vertex array.
+    let mut bounds = Bounds::EMPTY;
+    for b in &buckets {
+        let origin = origin_of(b.wheel);
         for v in &b.vertices {
             bounds.add([v.x + origin[0], v.y + origin[1], v.z + origin[2]]);
         }
+    }
+
+    // The stand-in the console draws while the rest of this file is still being read.
+    //
+    // It is the coarsest level's geometry rather than a decimation of its own, and that is a
+    // deliberate refusal to add a fourth budget: a level built to be recognisable at eighteen
+    // metres is already a shape, it has been through the same whole-car simplification every other
+    // level has, and reusing it means no new way for the bodywork to crack. Wheels are baked in at
+    // their hubs, standing straight, so the whole thing draws under one transform — a stand-in has
+    // no steering to do.
+    let silhouette = build_silhouette(levels.last().unwrap_or(&buckets), origin_of);
+    if silhouette.1.is_empty() {
+        report.warn("no silhouette could be built; the car will pop in rather than fade in".into());
     }
 
     // LOD0's slice, not the whole array: "Compiled: 9,540 triangles" has to mean the car that is
@@ -656,8 +673,23 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         handling,
         &level_ranges,
         bounds,
+        &silhouette,
     );
     report.note_size(&bytes);
+
+    // The console reads a car into a fixed slot, so this is a wall rather than a warning. Refused
+    // here, on a development machine, naming the file and the number to lower — the alternative is
+    // discovering it on a title screen as a car that declines to appear.
+    if bytes.len() > azcar::MAX_CAR_BYTES {
+        return Err(format!(
+            "the compiled car is {} KB and the console reads one into a {} KB slot. Lower \
+             `triangles`, or the `lods` after it, and compile again.",
+            bytes.len() / 1024,
+            azcar::MAX_CAR_BYTES / 1024
+        )
+        .into());
+    }
+
     Ok(Compiled {
         bytes,
         report,
@@ -1030,6 +1062,39 @@ impl Strings {
     }
 }
 
+/// Flattens a level's buckets into one positions-only array in car space.
+///
+/// Everything that made these buckets separate — category, material, which wheel they belong to,
+/// whether they are two-sided — is thrown away here, because a silhouette is drawn in one colour
+/// with culling off and none of it would change a pixel.
+///
+/// A level that needs more than 65,536 vertices produces no silhouette rather than a truncated one:
+/// indices are 16-bit, and half a car is worse than none. No level this pipeline builds comes near
+/// it, which is exactly why the case is worth refusing outright rather than handling.
+fn build_silhouette(
+    group: &[Bucket],
+    origin_of: impl Fn(Option<u8>) -> [f32; 3],
+) -> (Vec<[f32; 3]>, Vec<u16>) {
+    let total: usize = group.iter().map(|b| b.vertices.len()).sum();
+    if total == 0 || total > u16::MAX as usize + 1 {
+        return (Vec::new(), Vec::new());
+    }
+
+    let mut positions = Vec::with_capacity(total);
+    let mut indices = Vec::new();
+    for b in group {
+        let base = positions.len() as u16;
+        let origin = origin_of(b.wheel);
+        positions.extend(
+            b.vertices
+                .iter()
+                .map(|v| [v.x + origin[0], v.y + origin[1], v.z + origin[2]]),
+        );
+        indices.extend(b.indices.iter().map(|i| base + *i as u16));
+    }
+    (positions, indices)
+}
+
 /// Lays the sections out with every one of them 16-byte aligned.
 fn write(
     vertices: &[Vertex],
@@ -1046,8 +1111,39 @@ fn write(
     handling: angle_zero::vehicle::CarHandling,
     levels: &[(u32, u16, usize)],
     bounds: Bounds,
+    silhouette: &(Vec<[f32; 3]>, Vec<u16>),
 ) -> Vec<u8> {
     let mut out = vec![0u8; HEADER_BYTES];
+
+    // First of every section, and that position is the whole point of it. The console reads a car
+    // in chunks and draws this one as soon as the first chunk lands, so anything in front of it is
+    // a delay before the player sees the shape they asked for. Written at 112, which is where the
+    // header ends — there is nothing to put in front of it.
+    let silhouette_at = if silhouette.1.is_empty() {
+        0
+    } else {
+        let at = pad(&mut out);
+        let (positions, indices) = silhouette;
+        out.extend_from_slice(&(positions.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(indices.len() as u32).to_le_bytes());
+        // The two arrays' offsets are written after they are laid out, since where they land
+        // depends on padding this has not done yet.
+        let arrays_at = out.len();
+        out.extend_from_slice(&[0u8; 8]);
+        let positions_at = pad(&mut out);
+        for p in positions {
+            for v in p {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        let indices_at = pad(&mut out);
+        for i in indices {
+            out.extend_from_slice(&i.to_le_bytes());
+        }
+        put_u32(&mut out, arrays_at, (positions_at - at) as u32);
+        put_u32(&mut out, arrays_at + 4, (indices_at - at) as u32);
+        at
+    };
 
     let meshes_at = pad(&mut out);
     for m in meshes {
@@ -1173,6 +1269,14 @@ fn write(
     put_u32(&mut out, f::CREDIT, credit);
     put_u32(&mut out, f::NAME, name);
     put_u32(&mut out, f::HANDLING_AT, handling_at as u32);
+    // In 16-byte units, because the two bytes left in the header cannot hold an offset. See
+    // `field::SILHOUETTE_AT_16` — and note that `pad` has already made this a multiple of 16, so
+    // nothing is being rounded away here.
+    put_u16(
+        &mut out,
+        f::SILHOUETTE_AT_16,
+        (silhouette_at / 16).try_into().unwrap_or(0),
+    );
     let total = out.len() as u32;
     put_u32(&mut out, f::LENGTH, total);
     out

@@ -152,6 +152,23 @@ const CAR_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
     VERTEX_FORMAT.bits() | VertexType::TEXTURE_32BITF.bits() | VertexType::INDEX_16BIT.bits(),
 );
 
+/// A silhouette's vertices: a position and nothing else, indexed.
+///
+/// No colour component, which is what `sceGuColor` is for — the whole thing is one flat tone, and a
+/// colour per vertex would be four bytes a vertex spent saying the same word twice.
+const SILHOUETTE_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
+    VertexType::VERTEX_32BITF.bits()
+        | VertexType::INDEX_16BIT.bits()
+        | VertexType::TRANSFORM_3D.bits(),
+);
+
+/// What a car looks like before it has arrived. ABGR, like every colour the GE takes.
+///
+/// Not black. The sky behind it is a very dark blue and a pure black car would read as a hole cut
+/// in the scenery rather than as a car — this is a shade above it, dark enough to be a shadow and
+/// light enough to have an edge.
+const SILHOUETTE_COLOR: u32 = 0xFF18_1410;
+
 /// Render-state overrides for diagnosing hardware-only faults, cycled with the L trigger.
 ///
 /// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
@@ -1493,12 +1510,23 @@ pub fn draw_world(camera: &Camera) {
 /// Two passes rather than one, in the order the depth buffer needs: everything opaque, then
 /// everything that blends. Glass drawn before the seats behind it would blend against the sky.
 pub fn draw_car(vehicle: &Vehicle, track: &Track) {
-    let Some(car) = super::car::get(vehicle.model) else {
-        return;
-    };
     let st: &CarState = &vehicle.state;
     let pitch = vehicle.body_pitch(track);
     let roll = vehicle.roll();
+
+    // A car that is still being read stands as its own shadow. This is the only moment the game
+    // draws something that is not the car — and it is drawn instead of the last one rather than
+    // beside it, because two cars in the same lay-by is not a thing that happens.
+    if super::car::is_loading() {
+        if let Some(sil) = super::car::loading_silhouette() {
+            unsafe { draw_silhouette(&sil, [st.x, st.y, st.z], st.yaw, pitch, roll) };
+        }
+        return;
+    }
+
+    let Some(car) = player_car() else {
+        return;
+    };
 
     unsafe {
         bind_car_texture(car);
@@ -1519,6 +1547,74 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 
         sys::sceGuDisable(GuState::Texture2D);
     }
+}
+
+/// The car to draw, which is nothing while one is arriving.
+///
+/// The car that was on screen is still resident then — it has to be, or a load that fails would
+/// leave the player with nothing — but it is not the car the title screen is talking about any
+/// more. Its silhouette is.
+fn player_car() -> Option<&'static azcar::Car<'static>> {
+    if super::car::is_loading() {
+        return None;
+    }
+    super::car::current()
+}
+
+/// A car's shape, flat and dark, standing in for the car while its file is read.
+///
+/// Culling off, deliberately. The geometry is the coarsest level the compiler built, and a
+/// decimation that far down leaves seams a closed shell would not have; culled, those show as
+/// slivers of sky through the middle of the car. With back faces drawn, the far side of the shell
+/// fills them, and since every triangle is the same flat colour there is nothing to give away
+/// which side of it is being looked at.
+///
+/// No texture, no lighting, no blending: the point is an outline, and everything that makes a car
+/// look like a car is in the megabyte that has not arrived yet.
+unsafe fn draw_silhouette(
+    sil: &azcar::Silhouette<'static>,
+    at: [f32; 3],
+    yaw: f32,
+    pitch: f32,
+    roll: f32,
+) {
+    STATS.cars = STATS.cars.saturating_add(1);
+    STATS.verts = STATS.verts.saturating_add(sil.index_count() as u32);
+
+    sys::sceGuDisable(GuState::Texture2D);
+    sys::sceGuDisable(GuState::CullFace);
+    // The vertices carry no colour of their own, so this is the colour of every one of them.
+    sys::sceGuColor(SILHOUETTE_COLOR);
+
+    sys::sceGumMatrixMode(MatrixMode::Model);
+    sys::sceGumLoadIdentity();
+    sys::sceGumTranslate(&ScePspFVector3 {
+        x: at[0],
+        y: at[1],
+        z: at[2],
+    });
+    sys::sceGumRotateY(yaw);
+    sys::sceGumRotateX(pitch);
+    sys::sceGumRotateZ(roll);
+
+    let mut drawn = 0u32;
+    let total = sil.index_count() as u32;
+    while drawn < total {
+        let run = (total - drawn).min(MAX_DRAW_INDICES);
+        sys::sceGumDrawArray(
+            GuPrimitive::Triangles,
+            SILHOUETTE_VERTEX_FORMAT,
+            run as i32,
+            sil.indices_ptr().add(drawn as usize * 2) as *const c_void,
+            sil.vertices_ptr() as *const c_void,
+        );
+        drawn += run;
+    }
+
+    // Back to what the rest of the frame expects: white, so a later draw with no colour component
+    // is not tinted by this one, and culling on, which is the world's default.
+    sys::sceGuColor(0xFFFF_FFFF);
+    sys::sceGuEnable(GuState::CullFace);
 }
 
 /// Points the hardware at a car's atlas.
@@ -1567,8 +1663,10 @@ unsafe fn bind_car_texture(car: &azcar::Car<'static>) {
 /// Their height is the player's rather than the road's — on a 7% slope the furthest is most of a
 /// metre off the surface — because this measures what the renderer costs, and a car in the air
 /// costs what one on the road does.
-/// Which car each copy takes is `i % count`, so a field is a mix of every car on the stick rather
-/// than one model repeated — material and vertex-buffer switching is part of what is being timed.
+/// Which car each copy takes is `i % slots`, so a field is a mix of every car that is resident
+/// rather than one model repeated — material and vertex-buffer switching is part of what is being
+/// timed. Resident, not on the stick: only one car is read at a time now, and a devtools build
+/// keeps extra slots precisely so this measurement still has more than one model to field.
 ///
 /// A counter advanced per draw did this before, and it had two faults that only mattered once the
 /// lamps arrived. It never wrapped — it was clamped to the last slot, so after a few frames every
@@ -1582,7 +1680,7 @@ fn bench_field(st: CarState) -> impl Iterator<Item = (usize, [f32; 3], f32)> {
         MODE_EIGHT_CARS => 7,
         _ => 0,
     };
-    let count = super::car::count().max(1);
+    let count = super::car::slot_count();
     let (s, c) = (sin(st.yaw), cos(st.yaw));
     (0..extras).map(move |i| {
         // Alternating sides, receding: 3.2 m out and 9 m further up the road each pair.
@@ -2038,7 +2136,9 @@ fn lit_cars<'a>(
 ) -> impl Iterator<Item = (&'static azcar::Car<'static>, lights::Pose)> + 'a {
     let st = vehicle.state;
     let pose = lights::Pose::of(&st, vehicle.body_pitch(track), vehicle.roll());
-    let player = super::car::get(vehicle.model).map(|car| (car, pose));
+    // Nothing while a car is arriving: a silhouette has no lamps, and the lamps of the car it
+    // replaced would hang in the air in front of it.
+    let player = player_car().map(|car| (car, pose));
 
     #[cfg(feature = "devtools")]
     let others = bench_field(st).filter_map(move |(slot, at, yaw)| {

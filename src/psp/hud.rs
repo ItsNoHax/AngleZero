@@ -375,10 +375,20 @@ fn draw_title(game: &Game) {
     text::draw_centered(b"SEKIRA DESCENT", SCREEN_W * 0.5, 58.0, 1.0, DIM);
     text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
     draw_best(game, 250.0);
+    #[cfg(all(feature = "devtools", not(feature = "harness")))]
+    draw_car_diagnostics();
 
     // Which car, and its credit. Both come out of the asset rather than out of this file, so both
     // stay true when the car is swapped — and neither needs a table of cars in the game.
-    if let Some(car) = super::car::get(game.vehicle.model) {
+    //
+    // Except while one is arriving, which is the one moment there is no asset to ask. Then the
+    // filename stands in, so a press of L or R is answered on the frame it happened rather than
+    // when the read finishes.
+    if let Some((index, progress)) = super::car::loading() {
+        let name = super::car::display_name(index);
+        text::draw_centered(name.as_bytes(), SCREEN_W * 0.5, 202.0, 1.0, TEXT);
+        loading_bar(214.0, progress.fraction());
+    } else if let Some(car) = super::car::current() {
         let name = car.name_of_car();
         if !name.is_empty() {
             text::draw_centered(name, SCREEN_W * 0.5, 202.0, 1.0, TEXT);
@@ -395,16 +405,70 @@ fn draw_title(game: &Game) {
     // The car is a file on the memory stick, and a file can be missing, stale, or half-copied. The
     // game still runs without it — but silently driving an invisible car would send anyone who hit
     // it looking at the renderer, so say what actually happened, where it will be read.
+    //
+    // A car that is on screen and a fault to report at the same time is a car that failed to load
+    // over one that did: the player keeps the car they had, and the line says why the one they
+    // asked for is not there. Only when there is no car at all is it worth spending a second line
+    // on where cars are looked for.
     if let Some(fault) = super::car_fault() {
-        text::draw_centered(fault.message().as_bytes(), SCREEN_W * 0.5, 200.0, 1.0, WARN);
-        text::draw_centered(
-            super::car::DIR.as_bytes(),
-            SCREEN_W * 0.5,
-            212.0,
-            1.0,
-            DIM,
-        );
+        let has_car = super::car::current().is_some();
+        let y = if has_car { 226.0 } else { 200.0 };
+        text::draw_centered(fault.message().as_bytes(), SCREEN_W * 0.5, y, 1.0, WARN);
+        if !has_car {
+            text::draw_centered(super::car::DIR.as_bytes(), SCREEN_W * 0.5, 212.0, 1.0, DIM);
+        }
     }
+}
+
+/// What loading a car costs, on the one screen where cars are loaded.
+///
+/// Off the debug overlay's line, which is full and already at the width of the screen, and here
+/// instead because this is where it can be read while doing the thing it measures: press L or R,
+/// watch what a chunk cost. `PK` is the number `CHUNK_BYTES` is chosen against and the only one
+/// that has to come off a real memory stick — under the emulator these bytes come from an SSD and
+/// every chunk size looks free.
+///
+/// Left out of a harness build like the rest of the overlay: that run's frames are compared pixel
+/// by pixel, and a counter that ticks is a difference to be explained.
+#[cfg(all(feature = "devtools", not(feature = "harness")))]
+fn draw_car_diagnostics() {
+    let mut l = [0u8; 64];
+    let mut w = 0usize;
+    let mut b = [0u8; 12];
+    let mut field = |l: &mut [u8; 64], w: &mut usize, name: &[u8], v: u32| {
+        for &c in name {
+            l[*w] = c;
+            *w += 1;
+        }
+        for &c in digits(&mut b, v) {
+            l[*w] = c;
+            *w += 1;
+        }
+    };
+    field(&mut l, &mut w, b"RD PK ", super::car::peak_read_us());
+    field(&mut l, &mut w, b"US  ARENA ", (super::car::used_bytes() / 1024) as u32);
+    field(&mut l, &mut w, b"/", (super::car::arena_bytes() / 1024) as u32);
+    for &c in b"KB" {
+        l[w] = c;
+        w += 1;
+    }
+    text::draw_shadowed(&l[..w], 4.0, 4.0, 1.0, DIM);
+}
+
+/// How far through the car being read this is, as a bar rather than a number.
+///
+/// It sits where `< L/R TO CHANGE CAR >` sits, because it is answering the press that line invited
+/// and the two never need to be read at once. A bar rather than a percentage: what it is there to
+/// say is "this is going to happen", and the exact figure is nobody's business at a title screen.
+fn loading_bar(y: f32, fraction: f32) {
+    const W: f32 = 96.0;
+    const H: f32 = 3.0;
+    let x = SCREEN_W * 0.5 - W * 0.5;
+    fill_rect(x, y, W, H, rgba(0x9F, 0xB0, 0xBD, 0x40));
+    fill_rect(x, y, W * fraction, H, GREEN);
+    // The font is bound by the caller and `fill_rect` unbinds it, so put it back for whatever
+    // draws next.
+    text::bind();
 }
 
 /// The stored record, shown once there is one to show.
