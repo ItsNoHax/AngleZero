@@ -19,3 +19,26 @@ match = ["Wheel1A", "Calliper"]
 # exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
 # body with it.
 drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+
+# Every lamp on this car is one part. `Light_Geo_lodA` is a single 12,108-triangle mesh holding the
+# headlights and the tail lights together, centred on the car's origin, and `LightEmissive_Geo` is
+# another just like it. The detector splits a lamp part into left and right by which side of the
+# centreline each half falls on, which cannot separate front from rear — so with nothing to go on it
+# fell back to position and put all four lamps within half a metre of the middle of the car, on a
+# car that runs from z = -2.31 to +2.20.
+#
+# There is no node to name that means "the front half of the light mesh", so these are placed by
+# hand. Measured off the bodywork: the nose is at +2.20 and the tail at -2.31, and an EJ coupé
+# carries its headlights low and its tail lights high.
+[lights.headlight_left]
+at = [0.62, 0.66, 2.02]
+radius = 0.30
+[lights.headlight_right]
+at = [-0.62, 0.66, 2.02]
+radius = 0.30
+[lights.tail_left]
+at = [0.60, 0.88, -2.16]
+radius = 0.28
+[lights.tail_right]
+at = [-0.60, 0.88, -2.16]
+radius = 0.28

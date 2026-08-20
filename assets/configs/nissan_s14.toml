@@ -8,3 +8,29 @@ lods = [3000, 1200]
 
 [wheels]
 match = ["wheels_rb", "Wheel1A"]
+
+# This model names nothing. Every one of its twenty-two materials is a Maya default —
+# `SILVIAphong2SG1`, `SILVIAphong6SG1` and so on — so the category guesser, which works from names,
+# had nothing to sort on and put no part in the `light` category at all. The car compiled with no
+# headlights and no tail lights, which in a game that is entirely set at night is not a small thing.
+#
+# Identifying which phong is the lens would mean rendering all twenty-two and looking at them, and
+# it is not needed for the lamps to work: the runtime draws a lamp at the anchor it is given. So
+# these are placed by hand off the bodywork — the nose is at z = +2.26 and the tail at -2.30, and
+# an S14 Kouki carries slim headlights low at the corners and tall tail lights.
+#
+# What this does not buy is the lens *geometry* lighting up, only the glow in front of it. If this
+# car ever looks like it is projecting light from nowhere, the fix is `[materials] light` naming the
+# right phong, which someone will have to find by rendering them one at a time.
+[lights.headlight_left]
+at = [0.66, 0.63, 2.10]
+radius = 0.30
+[lights.headlight_right]
+at = [-0.66, 0.63, 2.10]
+radius = 0.30
+[lights.tail_left]
+at = [0.66, 0.80, -2.18]
+radius = 0.28
+[lights.tail_right]
+at = [-0.66, 0.80, -2.18]
+radius = 0.28

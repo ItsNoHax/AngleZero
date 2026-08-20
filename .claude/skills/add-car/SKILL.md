@@ -193,6 +193,13 @@ budget taken off the bodywork.
 
 ## 6. Land it
 
+- `scripts/lights_check.py` and `scripts/silhouette_check.py` — both check every car, both are
+  quick, and both catch things that are invisible in a still render. The lamp one exists because
+  the Golf R32 shipped with its tail lights under the driver's elbow: the detector falls back to
+  position when a model does not name its lenses, and what it finds can be the dashboard lighting
+  or one merged mesh holding every lamp on the car. That is fixed with `[lights.tail_left]` and
+  friends — `node` to point at the real lens, `at` to place it by hand when there is no separate
+  lens to point at.
 - `cargo test --workspace` — the asset tests run the compiler over its own output.
 - Add the model to the licence table at the bottom of `docs/cars.md`. The credit is a licence
   condition, not a courtesy.

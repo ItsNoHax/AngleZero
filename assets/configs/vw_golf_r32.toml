@@ -8,3 +8,35 @@ lods = [3000, 1200]
 
 [wheels]
 match = ["SM_Brake", "SM_Hub", "SM_Tire", "SM_Wheel"]
+
+# The tail lamps have to be named because the detector guessed, and guessed the interior.
+#
+# Three parts wear this model's `Lights` material: the front kit at `Base_021_Lights` (3,564
+# triangles, the headlights, which the detector found by name and placed correctly), the rear kit
+# at `Base_042_Lights` (1,482, the actual tail lenses), and 98 triangles of interior lighting at
+# `Base_039_Lights`. With no name to go on the detector fell back to position and took the interior
+# part, which sits in the middle of the car — so the tail lights landed at z = -0.57 and -0.45 on a
+# car whose tail is at z = -2.01, roughly under the driver's elbow, and were not even a mirrored
+# pair.
+#
+# `Base_042_Lights` is unique to the rear lens, and naming it lets the position be measured off the
+# lens itself rather than guessed by me. Both sides name the same part; the converter splits it by
+# which side of the centreline each half falls on.
+[lights.tail_left]
+node = "Base_042_Lights"
+[lights.tail_right]
+node = "Base_042_Lights"
+
+[reduce]
+# `TARMAC_TYRE_WALL` and `TARMAC_TYRE_TREAD` are not tyres and not the car: they are a pair of
+# 2 x 3 m props — a patch of tarmac with tyre marks on it — that the model is posed on. They cost
+# more than their 1,360 triangles.
+#
+# The car is grounded on its wheels, because a wheel touches the road by definition. These sit
+# 7.7 cm *below* the wheels, which no part of a real car does, so the compiled car reached
+# y = -0.08 and the game would have sunk it into the road by that much. They also carry `TYRE` in
+# their names, so they sorted into the tyre category and were drawn as though they were wheels.
+#
+# This is the other half of why the wheels measured small. The rolling radius is now taken from the
+# hub's height above the ground, and the ground was 8 cm out.
+drop = ["TARMAC_TYRE"]
