@@ -312,6 +312,17 @@ pub struct WheelDef {
     pub hub: [f32; 3],
     pub radius: f32,
     pub width: f32,
+    /// Camber, in radians about the car's Z axis: how far the top of the wheel leans in.
+    ///
+    /// The geometry is stored *upright*, with its axle along X, and this is the tilt to put back
+    /// when it is drawn. That split is the whole point of the field. A wheel is spun by rotating it
+    /// about its axle, and if the axle is baked into the vertices at an angle then rotating about X
+    /// sweeps it round a cone instead — the wheel wobbles rather than turns. Several of these cars
+    /// are stanced and carry five or six degrees of it, which is very visible once the wheel moves.
+    ///
+    /// Zero for a car compiled before this existed, which is exactly the old behaviour: no tilt
+    /// applied to geometry that still has the tilt baked in.
+    pub camber: f32,
 }
 
 impl WheelDef {
@@ -323,6 +334,7 @@ impl WheelDef {
             hub: [le_f32(b, 4), le_f32(b, 8), le_f32(b, 12)],
             radius: le_f32(b, 16),
             width: le_f32(b, 20),
+            camber: le_f32(b, 24),
         }
     }
 
@@ -336,6 +348,7 @@ impl WheelDef {
         }
         o[16..20].copy_from_slice(&self.radius.to_le_bytes());
         o[20..24].copy_from_slice(&self.width.to_le_bytes());
+        o[24..28].copy_from_slice(&self.camber.to_le_bytes());
         o
     }
 }

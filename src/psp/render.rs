@@ -1804,6 +1804,19 @@ unsafe fn draw_one_car(
                 if wheel.steers {
                     sys::sceGumRotateY(st.steer);
                 }
+                // Camber goes on before the spin and steering goes on before that, which is the
+                // order the parts actually move in: the whole assembly turns about the steering
+                // axis, it sits on the hub at a lean, and the wheel turns about its own axle.
+                //
+                // The lean has to be a transform rather than something baked into the vertices,
+                // because the spin below is a rotation about X and the two cannot both be baked.
+                // A stanced car carries five or six degrees of camber, and a wheel spun about X
+                // with that angle in its geometry does not turn — it sweeps a cone, once per
+                // revolution, which reads as a buckled wheel. The compiler stores these upright
+                // and hands the angle over here for exactly this.
+                if wheel.camber != 0.0 {
+                    sys::sceGumRotateZ(wheel.camber);
+                }
                 sys::sceGumRotateX(st.wheel_spin);
                 draw_car_mesh(car, &mesh);
             }

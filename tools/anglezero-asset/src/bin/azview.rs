@@ -327,11 +327,23 @@ fn draw(car: &Car, o: &Options) -> Vec<u8> {
                     continue;
                 }
             }
-            // Wheels are stored about their own hub; put them back on the car.
-            let offset = if mesh.wheel == azcar::NO_WHEEL {
-                [0.0; 3]
+            // Wheels are stored about their own hub and upright, with their lean carried in
+            // `WheelDef::camber` for the renderer to put back — see `draw_one_car`. Put both back
+            // here, or this viewer draws a stanced car standing straight and stops agreeing with
+            // the console about the one thing it exists to show.
+            let (offset, camber) = if mesh.wheel == azcar::NO_WHEEL {
+                ([0.0; 3], 0.0)
             } else {
-                car.wheel(mesh.wheel as usize).hub
+                let w = car.wheel(mesh.wheel as usize);
+                (w.hub, w.camber)
+            };
+            let (cs, cc) = camber.sin_cos();
+            let place = |p: [f32; 3]| {
+                [
+                    p[0] * cc - p[1] * cs + offset[0],
+                    p[0] * cs + p[1] * cc + offset[1],
+                    p[2] + offset[2],
+                ]
             };
             let flat = o.by_mesh.then(|| tint(i));
 
@@ -344,11 +356,7 @@ fn draw(car: &Car, o: &Options) -> Vec<u8> {
                 let mut ok = true;
                 for (k, idx) in tri.iter().enumerate() {
                     let v = &verts[*idx as usize];
-                    let (w, z) = project([
-                        v.x + offset[0],
-                        v.y + offset[1],
-                        v.z + offset[2],
-                    ]);
+                    let (w, z) = project(place([v.x, v.y, v.z]));
                     if z <= NEAR {
                         ok = false;
                     }

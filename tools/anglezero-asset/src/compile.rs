@@ -256,6 +256,11 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         }
         let category = assignment.categories[i];
         let wheel = found.corner_of(i);
+        // Only wheel geometry is untilted, and only by its own wheel's camber.
+        let camber = wheel
+            .and_then(|c| found.wheels.iter().find(|w| w.corner == c))
+            .map(|w| w.camber)
+            .unwrap_or(0.0);
         // Wheel geometry is stored about its own hub, so the runtime can rotate it in place.
         let origin = wheel
             .map(|c| hubs[found.wheels.iter().position(|w| w.corner == c).unwrap()])
@@ -344,12 +349,18 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                 }
                 colour = pack(c);
             }
-            vertices.push(Vertex::new(
-                v[0] - origin[0],
-                v[1] - origin[1],
-                v[2] - origin[2],
-                colour,
-            ));
+            // Hub-relative, and then untilted: a wheel is stored upright with its axle along X,
+            // and `WheelDef::camber` carries the lean for the renderer to put back. Doing it here
+            // rather than there is what lets the console spin a wheel with one rotation about X
+            // and have it turn in its own plane instead of sweeping a cone.
+            let local = [v[0] - origin[0], v[1] - origin[1], v[2] - origin[2]];
+            let local = if camber != 0.0 {
+                let (s, c) = (-camber).sin_cos();
+                [local[0] * c - local[1] * s, local[0] * s + local[1] * c, local[2]]
+            } else {
+                local
+            };
+            vertices.push(Vertex::new(local[0], local[1], local[2], colour));
             attrs.push(Attr {
                 light: light_at(*n, category),
                 uv: tile.map(shifted),
@@ -628,6 +639,11 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                 .wheels
                 .radius
                 .unwrap_or_else(|| (w.radius * placement.scale).max(hub[1])),
+            // Measured off the source tyre and stored so the renderer can put it back. The wheel's
+            // vertices are written upright below, with the tilt taken out of them, because a wheel
+            // is spun by rotating about its axle and an axle baked in at an angle turns that spin
+            // into a wobble.
+            camber: w.camber,
             width: w.width * placement.scale,
         })
         .collect();
@@ -1222,17 +1238,22 @@ fn silhouette_wheels(
     for w in wheels {
         let base = positions.len() as u32;
         let half = w.width * 0.5;
-        // The axle is the car's X axis, so the two rims lie in planes either side of the hub.
+        // The axle is the car's X axis, leaned over by the wheel's camber — the silhouette is a
+        // stand-in for the car as it stands, and a stanced car's wheels visibly lean.
+        let (cs, cc) = w.camber.sin_cos();
+        let place = |x: f32, y: f32, z: f32| {
+            [w.hub[0] + x * cc - y * cs, w.hub[1] + x * cs + y * cc, w.hub[2] + z]
+        };
         for side in 0..2u32 {
-            let x = w.hub[0] + if side == 0 { -half } else { half };
+            let x = if side == 0 { -half } else { half };
             for i in 0..WHEEL_SEGMENTS {
                 let a = i as f32 / WHEEL_SEGMENTS as f32 * std::f32::consts::TAU;
-                positions.push([x, w.hub[1] + w.radius * a.sin(), w.hub[2] + w.radius * a.cos()]);
+                positions.push(place(x, w.radius * a.sin(), w.radius * a.cos()));
             }
         }
         // Then the two hub centres, for the faces to fan around.
-        positions.push([w.hub[0] - half, w.hub[1], w.hub[2]]);
-        positions.push([w.hub[0] + half, w.hub[1], w.hub[2]]);
+        positions.push(place(-half, 0.0, 0.0));
+        positions.push(place(half, 0.0, 0.0));
         let n = WHEEL_SEGMENTS as u32;
         let centres = [base + 2 * n, base + 2 * n + 1];
 

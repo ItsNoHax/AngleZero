@@ -102,6 +102,7 @@ impl Builder {
                 hub: [-0.73, 0.29, 1.36],
                 radius: 0.29,
                 width: 0.2,
+                camber: 0.0,
             }],
             lights: Vec::new(),
             strings,
@@ -454,6 +455,7 @@ fn the_simulation_measures_the_car_it_was_given() {
             hub: [0.73, 0.29, 1.30],
             radius: 0.29,
             width: 0.2,
+            camber: 0.0,
         },
         WheelDef {
             corner: 2,
@@ -462,6 +464,7 @@ fn the_simulation_measures_the_car_it_was_given() {
             hub: [0.71, 0.29, -1.28],
             radius: 0.29,
             width: 0.2,
+            camber: 0.0,
         },
         WheelDef {
             corner: 3,
@@ -470,6 +473,7 @@ fn the_simulation_measures_the_car_it_was_given() {
             hub: [-0.75, 0.29, -1.30],
             radius: 0.29,
             width: 0.2,
+            camber: 0.0,
         },
     ];
     let bytes = b.build();
@@ -794,4 +798,30 @@ fn assert_silhouette_dropped(bytes: &[u8]) {
     let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
     let car = Car::parse(view).expect("the car itself is untouched and still loads");
     assert!(car.silhouette().is_none(), "the silhouette should be dropped");
+}
+
+/// Camber is stored so the console can put back a lean the compiler took out of the vertices, and
+/// a field that silently read as zero would be a wheel that spins upright on a car that does not
+/// sit upright. It lives in the eight bytes the wheel record had spare, so a car from before it
+/// existed reads as no lean at all — which is what such a car wants, since its geometry still has
+/// the lean baked in.
+#[test]
+fn a_wheel_carries_its_camber() {
+    let mut b = Builder::typical();
+    b.wheels[0].camber = -0.0942;
+    let bytes = b.build();
+    let backing = aligned(&bytes);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, bytes.len()) };
+    let car = Car::parse(view).unwrap();
+    assert!((car.wheel(0).camber - -0.0942).abs() < 1.0e-6);
+
+    // Zeroing those bytes is what an older file looks like, and it must read as upright.
+    let mut older = b.build();
+    let at = u32::from_le_bytes(
+        older[field::WHEELS_AT..field::WHEELS_AT + 4].try_into().unwrap(),
+    ) as usize;
+    older[at + 24..at + 28].fill(0);
+    let backing = aligned(&older);
+    let view = unsafe { core::slice::from_raw_parts(backing.as_ptr() as *const u8, older.len()) };
+    assert_eq!(Car::parse(view).unwrap().wheel(0).camber, 0.0);
 }

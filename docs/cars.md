@@ -102,6 +102,7 @@ centring, which of 57 materials is glass — the converter works out.
 | `lods` | Coarser budgets, nearest first, e.g. `[4500, 1800]`. |
 | `silhouette` | The stand-in's budget, default 1,000. Raise it for a long or awkwardly shaped car — the number sizes a *grid*, so a 5 m saloon needs more of it than a hatchback. |
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
+| `[wheels] radius` | Override the measured rolling radius. Rarely — it is taken from the hub's height above the road, which cannot be wrong on a car standing on its wheels. |
 | `[materials]` | The category guesser does not speak this model's language. |
 | `[reduce]` | A category deserves more or less of the budget than its screen area suggests. |
 | `[reduce.parts]` | One *part* deserves more or less than the others in its category. |
@@ -474,6 +475,32 @@ prices a unit of texture slide against a metre of geometry, and a unit of atlas 
 texels than it was, so a collapse that drags a decal across a panel costs the simplifier more than
 it used to and it stops sooner. That is the right direction — the slide really is more visible now
 — but it means the triangle counts moved on every car without any budget changing.
+
+## Camber
+
+Eighteen of the twenty-three cars are stanced, and carry between one and five degrees of camber
+modelled into their wheels. The E36 is the extreme at 5.0 degrees on all four corners.
+
+That is a problem for the one thing the renderer does to a wheel, which is spin it: a wheel is
+turned by one rotation about the car's X axis, and a wheel whose axle is baked into its vertices at
+an angle does not turn under that — it sweeps a cone once per revolution, which reads as a buckled
+rim. It is invisible standing still, which is why it survived until somebody drove one.
+
+So the axle is measured off the source tyre, the wheel's vertices are stored **upright**, and the
+angle goes in `WheelDef::camber` for the renderer to put back with a rotation about Z, applied
+after the steering and before the spin. Wheel, hub and lean each move in the order the real parts
+do.
+
+Measuring it is a small piece of linear algebra rather than a guess. A tyre is a disc — about
+0.28 m through and 0.58 m across — so the direction it varies least in is its axle, which is the
+smallest eigenvector of the vertex covariance, found by inverse iteration. It is taken on the source
+part before decimation, because a coarse level makes a lopsided disc and the axis wanders with it:
+the same measurement on a 280-triangle LOD gives answers off by tens of degrees. The check that it
+worked is that left and right come out mirrored to a tenth of a degree on every car, which a broken
+estimator does not do by accident.
+
+`azview` applies it too. It has to: a viewer that drew a stanced car standing straight would stop
+agreeing with the console about the one thing it is for.
 
 ## Silhouettes
 

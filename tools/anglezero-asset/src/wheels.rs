@@ -28,6 +28,12 @@ pub struct Wheel {
     pub parts: Vec<usize>,
     /// The heaviest part of the assembly, which on every model seen so far is the tyre.
     pub tyre: Option<usize>,
+    /// How far the wheel leans, in radians about the model's Z axis, measured off the tyre.
+    ///
+    /// Several of these cars are stanced and carry five or six degrees of it. It has to be
+    /// measured rather than assumed away, because the renderer spins a wheel about its axle and a
+    /// wheel whose axle is baked in at an angle sweeps a cone instead of turning.
+    pub camber: f32,
 }
 
 #[derive(Default)]
@@ -282,9 +288,94 @@ fn measure(model: &SourceModel, corner: u8, parts: Vec<usize>) -> Wheel {
         hub: centre(&all),
         radius,
         width: all.size()[0],
+        camber: tyre.map(|i| camber_of(&model.parts[i])).unwrap_or(0.0),
         parts,
         tyre,
     }
+}
+
+/// Which way the tyre's axle points, as an angle about Z.
+///
+/// A tyre is a disc: wide across its face and thin through it, so the direction it varies least in
+/// is its axle. That is the smallest eigenvector of the points' covariance, and on these models it
+/// is unambiguous — the tyre is about 0.28 m through and 0.58 m across, so the two are not close
+/// enough to confuse. Measured on the source part, before any decimation, because a coarse level
+/// makes a lopsided disc and the axis wanders with it.
+fn camber_of(part: &Part) -> f32 {
+    let n = part.positions.len();
+    if n < 32 {
+        return 0.0;
+    }
+    let mut mean = [0.0f64; 3];
+    for v in &part.positions {
+        for (m, c) in mean.iter_mut().zip(*v) {
+            *m += c as f64;
+        }
+    }
+    for m in &mut mean {
+        *m /= n as f64;
+    }
+    let mut cov = [[0.0f64; 3]; 3];
+    for v in &part.positions {
+        let d = [v[0] as f64 - mean[0], v[1] as f64 - mean[1], v[2] as f64 - mean[2]];
+        for i in 0..3 {
+            for j in 0..3 {
+                cov[i][j] += d[i] * d[j];
+            }
+        }
+    }
+    // The axle by inverse iteration: repeatedly solving `cov x = b` pulls a vector towards the
+    // smallest eigenvector, and three-by-three is small enough to do by elimination. A handful of
+    // rounds is plenty when the eigenvalues are a factor of four apart, as they are on a tyre.
+    let mut x = [1.0f64, 0.0, 0.0];
+    for _ in 0..24 {
+        let Some(next) = solve3(cov, x) else { return 0.0 };
+        let len = (next[0] * next[0] + next[1] * next[1] + next[2] * next[2]).sqrt();
+        if !len.is_finite() || len < 1.0e-12 {
+            return 0.0;
+        }
+        x = [next[0] / len, next[1] / len, next[2] / len];
+    }
+    // Point it along +X so left and right report the same sign convention, then read the tilt.
+    if x[0] < 0.0 {
+        x = [-x[0], -x[1], -x[2]];
+    }
+    let camber = x[1].atan2(x[0].abs()) as f32;
+    // A wheel leaning more than this is not a wheel leaning: it is a measurement that has failed,
+    // and applying it would be worse than applying nothing.
+    if camber.abs() > 25.0f32.to_radians() {
+        0.0
+    } else {
+        camber
+    }
+}
+
+/// Solves a 3x3 system by Gaussian elimination with partial pivoting. `None` if it is singular.
+fn solve3(a: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+    let mut m = [
+        [a[0][0], a[0][1], a[0][2], b[0]],
+        [a[1][0], a[1][1], a[1][2], b[1]],
+        [a[2][0], a[2][1], a[2][2], b[2]],
+    ];
+    for col in 0..3 {
+        let pivot = (col..3).max_by(|&i, &j| {
+            m[i][col].abs().partial_cmp(&m[j][col].abs()).unwrap_or(core::cmp::Ordering::Equal)
+        })?;
+        m.swap(col, pivot);
+        if m[col][col].abs() < 1.0e-18 {
+            return None;
+        }
+        for row in 0..3 {
+            if row == col {
+                continue;
+            }
+            let f = m[row][col] / m[col][col];
+            for k in col..4 {
+                m[row][k] -= f * m[col][k];
+            }
+        }
+    }
+    Some([m[0][3] / m[0][0], m[1][3] / m[1][1], m[2][3] / m[2][2]])
 }
 
 fn centre(b: &Bounds) -> [f32; 3] {
