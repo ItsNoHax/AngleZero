@@ -7,6 +7,7 @@
 # is the one car whose part list is worth having read before trusting a triangle count.
 
 name = "Nissan R34 GT-R"
+source = "2002_nissan_skyline_gt-r_v-spec_ii_nur_r34.glb"
 
 # Same odd units as the Golf and the S15: 0.046 across the box, 4.60 m at 100x, which is a real
 # R34's length to the centimetre.

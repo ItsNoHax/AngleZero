@@ -9,6 +9,7 @@
 # each `Object_N`, which is how these were read off.
 
 name = "Mercedes 190E"
+source = "1982_mercedes_w201.glb"
 
 # 4.43 m across the bounding box against a real W201's 4.42 m. Already life size in metres.
 

@@ -6,6 +6,7 @@
 # something like their shape without being argued over.
 
 name = "Nissan S15"
+source = "2010_vertex_edge_nissan_s15_silvia.glb"
 
 # 0.045 units across the box, 4.50 m at 100x. A stock S15 is 4.45 m and the Vertex kit adds a
 # front lip and a rear diffuser, so 4.50 is the right answer rather than a rounding error.

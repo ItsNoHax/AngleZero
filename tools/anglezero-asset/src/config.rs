@@ -65,6 +65,21 @@ pub struct CarConfig {
     /// records.
     #[serde(default)]
     pub silhouette: Option<usize>,
+
+    /// The source model this car is compiled from, as a filename inside `assets/source/`.
+    ///
+    /// The models are tens of megabytes and are not in git, so this is the only record anywhere of
+    /// which `.glb` a car came from — the compiled asset does not say, and the names do not match:
+    /// `bmw_e36.toml` is built from `bmw_3-series_e36.glb`. Without it, "which of these models has
+    /// nobody converted yet" is a question that cannot be answered, which is the question anyone
+    /// adding a car starts with.
+    ///
+    /// Optional, because a config found beside its model does not need to say. `convert` checks it
+    /// when both are present: a config that names a different model than the one being compiled is
+    /// either the wrong config or a stale line, and both are worth hearing about before spending a
+    /// minute on the conversion.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 /// How the car drives, as distinct from what it looks like.
@@ -677,6 +692,7 @@ impl CarConfig {
             lights: Lights::default(),
             lods: Vec::new(),
             silhouette: None,
+            source: None,
         }
     }
 

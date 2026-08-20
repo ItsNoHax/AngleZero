@@ -8,6 +8,7 @@
 # `anglezero-asset inspect --deep assets/source/bmw_3-series_e36.glb` is how these were found.
 
 name = "BMW E36"
+source = "bmw_3-series_e36.glb"
 
 # The bodywork saturates at about 3,600 triangles. Sweeping the budget from 5,000 to 40,000 moves
 # it from 2,616 to 4,876 and no further, because past that point the converter can already draw

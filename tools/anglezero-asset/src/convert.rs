@@ -31,6 +31,24 @@ pub fn run(options: &Options) -> Result<()> {
     };
     let budget = options.triangles.unwrap_or(config.triangles);
 
+    // A config that names a different model than the one being compiled is either the wrong config
+    // or a line that has gone stale, and both produce a car that is not what anybody asked for.
+    // Refused rather than warned about: the conversion takes a minute, and every check downstream
+    // of here is about the model rather than about whether it is the right model.
+    if let Some(named) = &config.source {
+        let given = options
+            .input
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if named != &given {
+            return Err(format!(
+                "the config says this car is built from `{named}`, but `{given}` was passed. \
+                 Either the wrong config, or `source` needs updating."
+            ));
+        }
+    }
+
     let mut model = extract::load(&options.input)?;
     let mut compiled = compile::compile(&mut model, &config, budget)?;
     if let Some(path) = &options.atlas {

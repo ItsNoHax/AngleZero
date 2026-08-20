@@ -8,6 +8,7 @@
 # Everything below is a name. No Rust changed to add this car.
 
 name = "Toyota AE86"
+source = "toyota_ae86_trueno.glb"
 
 # The model is 3.49 m long and a Trueno is 4.18 m, uniformly 0.835 of life size.
 scale = 1.2

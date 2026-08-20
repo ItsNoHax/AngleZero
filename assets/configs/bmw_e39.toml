@@ -7,6 +7,7 @@
 # all (`Scene_-_Root`, `.005`), including the one the alloys wear.
 
 name = "BMW E39"
+source = "bmw_e39_free.glb"
 
 # 4.77 m across the box against a real E39's 4.775 m. Life size in metres.
 

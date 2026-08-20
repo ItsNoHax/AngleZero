@@ -7,6 +7,7 @@
 # same site from the same kind of source.
 
 name = "VW Golf R"
+source = "2019_volkswagen_golf_r.glb"
 
 scale = 100.0
 

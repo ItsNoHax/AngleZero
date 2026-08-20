@@ -17,19 +17,36 @@ assets/compiled/bmw_e36.azcar          the build artifact, committed, copied to 
 ## Adding a car
 
 ```bash
-# 1. Look at what you have. Nothing is converted; this only reports.
+# 1. What is already done, and what is sitting in assets/source/ with no config yet.
+scripts/cars.sh list
+
+# 2. Look at the model you picked. Nothing is converted; this only reports.
 cargo run --release -p anglezero-asset -- inspect assets/source/your_car.glb
 cargo run --release -p anglezero-asset -- inspect --deep assets/source/your_car.glb
 
-# 2. Write assets/configs/your_car.toml. Start with a name; add only what the report says you must.
-# 3. Compile.
-cargo run --release -p anglezero-asset -- convert \
-    assets/source/your_car.glb assets/compiled/your_car.azcar \
-    --config assets/configs/your_car.toml
+# 3. Write assets/configs/your_car.toml. Start with a name and the `source` line; add only what
+#    the report says you must.
+# 4. Compile, and read the report rather than just the file size.
+scripts/cars.sh build your_car
 
-# 4. Put it on the stick. The game offers every .azcar it finds there.
+# 5. Look at what you got, which is the step nobody should skip.
+cargo run --release -p anglezero-asset --bin azview -- \
+    assets/compiled/your_car.azcar /tmp/car.png --yaw 210 --pitch 14 --dist 6
+cargo run --release -p anglezero-asset --bin azview -- \
+    assets/compiled/your_car.azcar /tmp/sil.png --silhouette --yaw 270 --pitch 6
+
+# 6. Put it on the stick. The game offers every .azcar it finds there.
 cp assets/compiled/*.azcar ~/.ppsspp/PSP/GAME/AngleZero/CARS/     # emulator
 ```
+
+`source = "your_car.glb"` in the config is the only record of which model a car came from — the
+names do not match, and the models are not in git — and it is what lets step 1 answer its question.
+`convert` refuses to run if it disagrees with the file it was handed.
+
+Steps 2 to 5 are a loop rather than a list, because a source model off a scanning site is usually
+wrong in at least one way that only a render shows. The **`/add-car`** skill drives that loop: it
+picks up the unconverted models, reads the report, writes the smallest config that could work, and
+then renders the car and its silhouette and judges them against the failure modes below.
 
 Left and right on the title screen pick between them. That is the architectural test: the AE86 was
 added with a thirty-line TOML and no renderer change at all.
@@ -41,7 +58,7 @@ holds 128 entries, which is a number chosen to be unreachable rather than to be 
 
 The limit that is left is per car: **1.25 MB a file**, which is what one residency slot is. The
 compiler refuses to write a car larger than that, so it is caught on a development machine by name
-rather than on a title screen by absence. Today's fleet runs from 725 KB to 940 KB.
+rather than on a title screen by absence. Today's fleet runs from 716 KB to 905 KB.
 
 What that costs is time rather than space. Picking a car reads it, which is most of a megabyte off
 a memory stick, so the file arrives over the next few frames rather than instantly — see
@@ -78,10 +95,12 @@ centring, which of 57 materials is glass — the converter works out.
 | Key | When you need it |
 |---|---|
 | `name` | Always. Shown on the title screen, folded to uppercase because the font has no lowercase. |
+| `source` | Always. The model's filename in `assets/source/`; the only record of which one a car came from, and what `scripts/cars.sh` reads to tell converted models from unconverted. |
 | `scale` | The model is not in metres, or not life size. |
 | `[spawn] yaw` | Degrees about Y, for a model that does not face +Z. The E39 needs 180. |
 | `triangles` | The budget for LOD0. Default 10,000. |
 | `lods` | Coarser budgets, nearest first, e.g. `[4500, 1800]`. |
+| `silhouette` | The stand-in's budget, default 600. Raise it for a car whose shape is in details that few triangles cannot hold. |
 | `[wheels] match` | Node-name fragments identifying wheel parts. Almost always needed. |
 | `[materials]` | The category guesser does not speak this model's language. |
 | `[reduce]` | A category deserves more or less of the budget than its screen area suggests. |
