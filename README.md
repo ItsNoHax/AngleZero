@@ -15,7 +15,7 @@ Sekira Pass after dark. Sideways the whole way down.
 
 ## Install
 
-Download `AngleZero.0.2.0.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases) and
+Download `AngleZero.0.3.0.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases) and
 unzip it at the root of the memory stick. That is the whole installation — everything in the
 archive is already in the place it belongs:
 
@@ -25,7 +25,7 @@ PSP/GAME/AngleZero/CARS/*.azcar
 ```
 
 The cars are separate files rather than being built into the EBOOT, so adding one later is copying
-a file into `CARS/` — no rebuild, and the title screen offers it with L/R. Put as many in there as
+a file into `CARS/` — no rebuild, and the title screen offers it with D-pad Left/Right. Put as many in there as
 the stick will hold: only the car on screen is in memory, and it is read in as you pick it.
 
 Then it appears under Game → Memory Stick.
@@ -91,7 +91,7 @@ model, a config file and a conversion — no renderer code. See [Cars](docs/cars
 
 ## Credits
 
-The car models are other people's work, under licences that require attribution — four of the seven
-are non-commercial. Each car's credit is read out of its compiled asset and drawn on the title
+The car models are other people's work, under licences that require attribution — twenty of the
+twenty-seven are non-commercial. Each car's credit is read out of its compiled asset and drawn on the title
 screen, so the attribution ships with the car rather than with this file. The models, their authors
 and what each licence allows are in [Cars](docs/cars.md#licences).
