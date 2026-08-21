@@ -1,0 +1,63 @@
+# Lada 2109 Sputnik, a stanced Instagram build rather than a showroom car — aftermarket ADVAN RG4
+# rims, and the ride height to match.
+#
+# By a wide margin the heaviest source in the fleet: 1,435,963 triangles, against the RAV4's 558,862
+# and the M5's 389,100. About 995,000 of those are the four wheels alone — the tyres are 432,624,
+# the lug nuts 297,000 and the *tyre valve stems* 55,152, which is more than some cars here spend on
+# their whole body. The budget throws away 98% of this model.
+
+name = "Lada 2109"
+source = "lada_2109_sputnik__instagram.glb"
+
+# Measured off the wheelbase, which is the one dimension the bounding box cannot lie about here.
+# Axles sit at z = -3.93 and z = +2.56, so 6.49 units against a real 2109's 2.46 m gives 0.379.
+#
+# The bounding box needs ignoring rather than trusting: it reads 12.16 units long and dips to
+# y = -1.82, well under the road, while the raw vertices only span 10.68 and never go below zero.
+# That gap is node transforms inflating the box, not geometry lying outside the car — there is no
+# ground plane or backdrop in this model, every part is car. The proportions confirm it: wheelbase
+# over length comes to 0.608 against the real car's 0.614.
+scale = 0.379
+
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# The names to match on are not the obvious ones. This model came out of Cinema 4D with a `Symmetry`
+# object, so the hierarchy is `Symmetry` → `Null` → `WHEEL_LF` → `TYRE_LF` → `ADVAN_Neova_TIRE` →
+# the part. The matcher reads a part's own name and its parent, which means the word `WHEEL` is two
+# levels too high to ever be seen — matching on it finds nothing at all.
+#
+# `ADVAN` is what the parts are actually called: it takes the rims, the lug nuts, the valve stems,
+# the centre caps and the tyres. `GEO_brake` takes the discs and calipers.
+#
+# `ADVAN` and not `RIMS`: there is a `Logo_2_RIMS_0` part sitting at z = -5.74, behind the rear
+# bumper, which wears the rim material but is a badge and not a wheel.
+match = ["ADVAN", "GEO_brake"]
+
+[reduce]
+# The tyres came out of the first build at 437 triangles a corner carrying 45% error, and rendered
+# close they were not a tyre at all — the sidewall had collapsed into black wedges sticking out past
+# the rim. Meanwhile the rims next to them held 1,476 triangles each at 2%.
+#
+# That is the pairing docs/cars.md calls out: the rim, the lug nuts and the valve stems all sit in
+# `chrome` while the tyre has only `tyre`, so on a car whose rims are this heavy the tyre loses the
+# share every time. The tell that it was budget and not a broken model is a *low* triangle count
+# with a high error; a model fault shows as high error that will not move when given more.
+#
+# 4.5 rather than 3.0, and the difference between them is worth recording because it is a cliff and
+# not a slope. At 3.0 the four corners came out at 826-849 triangles carrying 4%, 4%, 17% and 21% —
+# the same count on each corner and five times the error on one side, which reads like broken
+# geometry on the left of the car. It is not. At 4.5 all four land at 1,125-1,130 triangles and
+# 1.8-2.3%, level across the car, and every "losing its shape" warning disappears. Three hundred
+# triangles a corner was the whole difference between mirrored halves agreeing and disagreeing.
+tyre = 4.5
+
+# 164,790 source triangles of cabin reaching 251 is 14% error, and an interior is not a part that can
+# be ignored — it is behind glass for the whole descent. The R34 is the precedent for the number.
+#
+# This is what forced `tyre` up. Weighting the cabin alone fixed it (14% down to 3.9%) and paid for
+# it out of the tyres, pushing them over the cliff above — so the pair has to be set together, not
+# one and then the other.
+interior = 2.0
+

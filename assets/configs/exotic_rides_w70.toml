@@ -1,0 +1,36 @@
+# Exotic Rides W70, 2016. A mid-engined supercar, and the lightest source model in the fleet at
+# 76,748 triangles — it arrives already decimated to someone else's LOD2, which is why every node
+# name carries a `_LOD2_` in it.
+
+name = "Exotic Rides W70"
+source = "2016_exotic_rides_w70.glb"
+
+# Same author and the same odd units as the Mini, so 100 was the starting guess again, and the
+# report agrees: 4.40 m long, 2.01 wide and 1.08 tall, which is the right shape for a mid-engined
+# supercar — wider than it is tall by a factor of two.
+scale = 100.0
+
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# `wheelF` and `wheelB`, not `wheel`: this model has a `steering_wheel_details` part, and the bare
+# word would pull the steering wheel out of the cabin and hang it off a hub. Front and back prefixes
+# catch all twelve wheel parts — tyre, rim and caliper for each corner — and nothing else.
+#
+# Worth knowing the rim is 3,714 triangles against the tyre's 670, so the tyre is the thin one here.
+# It still has to be in: without it the car stands on bare rims and sits a sidewall too low.
+match = ["wheelF", "wheelB"]
+
+# One oddity to save the next person a diagnosis. The report labels this car's wheel parts the wrong
+# way round: the category called `tyre` holds 3,714 triangles and the one called `chrome` holds
+# 1,001, which are the rim's and the tyre-plus-caliper's counts respectively. The sorter picks the
+# tyre as "the largest part of a wheel", and on this model the rim is the larger — so the names are
+# swapped.
+#
+# It is left alone deliberately. Rendered close and on its own the wheel is correct: black rubber,
+# pale spokes, red caliper, none of it turned metallic by the label. The rolling radius comes from
+# the hub's height above the road rather than from the category, and measured 0.345 m — 0.078 of the
+# car's length, mid-range for the fleet. Recategorising to make a report read tidily would change
+# how these parts blend, cull and light for no gain on screen.
+

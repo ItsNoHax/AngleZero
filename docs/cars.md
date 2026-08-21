@@ -959,10 +959,13 @@ file name each one is expected to have is in `assets/configs/`, beside the confi
 | Lamborghini Murcielago (LB Silhouette Works) | [Sketchfab](https://sketchfab.com/3d-models/2024-lbsilhouette-works-murcielago-gt-evo-64f859d01c9345429874513cf561ec12) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 | BMW M5 Sedan | [Sketchfab](https://sketchfab.com/3d-models/2025-bmw-m5-sedan-4ab34c43bada482b8e467be97ebaeba3) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
 | Toyota RAV4 (2010) | [Sketchfab](https://sketchfab.com/3d-models/2010-rav4-limited-edition-450e36f0992c4ae09bd6c8d509a51a77) | [Teddy168](https://sketchfab.com/Teddy168) | CC-BY-4.0 |
+| Mini Cooper S (F56) | [Sketchfab](https://sketchfab.com/3d-models/2014-mini-cooper-s-f56-bec89391257c426d824a8b0434bbcf6b) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Exotic Rides W70 (2016) | [Sketchfab](https://sketchfab.com/3d-models/2016-exotic-rides-w70-9c2b97cd6e104671a2f90992c64cc849) | [Ddiaz Design](https://sketchfab.com/ddiaz-design) | CC-BY-NC-SA-4.0 |
+| Lada 2109 Sputnik | [Sketchfab](https://sketchfab.com/3d-models/lada-2109-sputnik-instagram-404b8c9d153b4e99a24eb16601ce7397) | [Bogdan Styopin](https://sketchfab.com/boom.dam) | CC-BY-4.0 |
 
-**Eighteen of the twenty-four are non-commercial, and seventeen of those are also share-alike.** Fine for a
-hobby build; a paid release could ship the E36, the E39, the 190E, the Pandem E30, the 720S and the
-RAV4, and nothing else. `ShareAlike` is the
+**Twenty of the twenty-seven are non-commercial, and nineteen of those are also share-alike.** Fine for a
+hobby build; a paid release could ship the E36, the E39, the 190E, the Pandem E30, the 720S, the
+RAV4 and the Lada 2109, and nothing else. `ShareAlike` is the
 stricter half of that — it reaches the derivative, which is the compiled `.azcar` and arguably the
 screenshots of it, not merely the sale.
 

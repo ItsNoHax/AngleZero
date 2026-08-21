@@ -1,0 +1,20 @@
+# Mini Cooper S, F56, 2014. The shortest car in the fleet at 3.8 m — a hatchback among saloons and
+# coupes, so it should look small on the grid rather than look wrong.
+
+name = "Mini Cooper S"
+source = "2014_mini_cooper_s_f56.glb"
+
+# The model is 0.039 units long — no unit anyone would name, so 100 was a guess off the bounding box
+# and the conversion report settled it: 3.86 m against a real F56's 3.821, and wheels measured at
+# 0.312 m against the 0.308 a 205/45 R17 actually stands at. Both inside 1%, so the guess was right
+# and there is nothing to correct.
+scale = 100.0
+
+triangles = 24000
+lods = [3000, 1200]
+
+[wheels]
+# Four parents named `3DWheel Front L` and so on, each holding one part with rim and tyre together.
+# `3DWheel` rather than `Wheel`, which would also take `Wheel1A_3D_00` — the group node above all
+# four — and the two words are not the same thing even where the result would be.
+match = ["3DWheel"]
