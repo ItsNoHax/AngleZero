@@ -18,3 +18,21 @@ lods = [3000, 1200]
 # `3DWheel` rather than `Wheel`, which would also take `Wheel1A_3D_00` — the group node above all
 # four — and the two words are not the same thing even where the result would be.
 match = ["3DWheel"]
+
+# The reversing lamps, placed rather than derived.
+#
+# Nothing in the model names them, so they would otherwise be inferred from the tail lamps: inboard
+# of them, level with them, a little further back. That is the E39's layout and it is wrong for this
+# car. The F56 puts its reversing lamp in the Union Jack cluster itself, as the small clear notch
+# across the bottom of the lens — and the model has it, as a separate piece of clear glass at
+# y = 0.717..0.736 on the back face of the red lens, 12 cm wide.
+#
+# Given as positions rather than as `node`, because a node fragment names a whole part and this one
+# is a scrap of the car's window mesh: the fragment would match the windscreen too.
+[lights.reverse_left]
+at = [0.634, 0.727, -1.690]
+radius = 0.11
+
+[lights.reverse_right]
+at = [-0.634, 0.727, -1.690]
+radius = 0.11

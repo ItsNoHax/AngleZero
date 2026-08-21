@@ -101,6 +101,9 @@ struct Candidate {
     at: [f32; 3],
     /// Half the larger of the lens's width and height: the size its glow should be.
     radius: f32,
+    /// How much geometry the lens is made of, which is how [`resolve`] picks the lamp out of the
+    /// several lenses a corner of a car holds.
+    verts: usize,
     /// What its name says it is for, if anything.
     named: Option<LightKind>,
     /// Whether this half of the lens sits *on* the car's centreline rather than at a corner.
@@ -307,18 +310,18 @@ fn candidates(
 
         for side in [Side::Left, Side::Right] {
             for front in [true, false] {
-                let Some((at, spread)) = measure(part, side, front) else {
-                    continue;
-                };
-                out.push(Candidate {
-                    names: names.clone(),
-                    at,
-                    // The glow stands in for the lens, so it is the size of the lens as seen from
-                    // in front — its width or its height, whichever is larger.
-                    radius: LENS_HALF_WIDTH * spread[0].max(spread[1]),
-                    named,
-                    centred: at[0].abs() < band,
-                });
+                for (at, spread, n) in measure(part, side, front) {
+                    out.push(Candidate {
+                        names: names.clone(),
+                        at,
+                        // The glow stands in for the lens, so it is the size of the lens as seen
+                        // from in front — its width or its height, whichever is larger.
+                        radius: LENS_HALF_WIDTH * spread[0].max(spread[1]),
+                        verts: n,
+                        named,
+                        centred: at[0].abs() < band,
+                    });
+                }
             }
         }
     }
@@ -450,16 +453,24 @@ fn resolve(
         "found by where it sits"
     };
 
-    // One lamp per slot, out of however many parts a cluster is modelled as: the largest lens, and
-    // not the middle of all of them.
+    // One lamp per slot, out of however many lenses the corner holds: the one the model spends the
+    // most geometry on, and not the middle of all of them.
     //
-    // The E36 is why. Its front corner is a headlight lens, a pair of indicator lenses and a
-    // foglight in the bumper below, and averaging the four puts the "headlight" 10 cm too low and
-    // 6 cm too far back — between the lamps rather than on one. The biggest lens is the one that
-    // reads as the lamp from any distance the car is seen at, and it is where the light comes from.
+    // The E36 is why there is a choice to make at all. Its front corner is a headlight lens, a pair
+    // of indicator lenses and a foglight in the bumper below, and averaging the four puts the
+    // "headlight" 10 cm too low and 6 cm too far back — between the lamps rather than on one.
+    //
+    // Vertex count is a strange way to say "the biggest lens" and it is the one that survives contact
+    // with these models. The obvious measure is the lens's own size, and a size here can only be read
+    // as the spread of its vertices, which flatters exactly the things that are not lamps: a bumper
+    // reflector is a wide thin strip and spreads further than the 350Z's tail lamp above it, and
+    // thirteen vertices of glass scattered inside the NSX's cabin spread further than either. Both
+    // won their corner when the choice was made on spread, and both are beaten by a real lamp that
+    // has two thousand vertices in it. What a modeller spends detail on is what they consider the
+    // lamp, and they are right.
     let lens = matched
         .iter()
-        .max_by(|a, b| a.radius.total_cmp(&b.radius))
+        .max_by_key(|c| c.verts)
         .expect("matched is not empty");
     let (at, radius) = (lens.at, lens.radius);
 
@@ -489,7 +500,7 @@ static NO_ANCHOR: Anchor = Anchor {
     intensity: None,
 };
 
-/// Where one quadrant of a lens is, and how far its geometry is spread about that point.
+/// Where each lens in one quadrant is, and how far its geometry is spread about that point.
 ///
 /// Both answers are taken from where the vertices *are* rather than from the box that contains them,
 /// and that is the difference between a lamp on the cluster and a lamp up on the boot lid. A bounding
@@ -504,32 +515,161 @@ static NO_ANCHOR: Anchor = Anchor {
 /// seven cars were pinned at the maximum radius the compiler allows, drawing a glow a metre across
 /// for a lamp a fifth of that.
 ///
-/// Returns `None` for a quadrant with no geometry in it, which is three quadrants out of four for a
+/// But a mean is only the middle of a lamp while the quadrant holds *one*, and a corner of a car
+/// routinely holds several: the tail lamp, the high-level lamp above the window, the number-plate
+/// lamps beside it, the reflector in the bumper. Averaged together they give a point in the empty
+/// bodywork between them. The Mini is the case that found this — its rear glass holds the tail lamp
+/// cover and the high-level lamp forty vertices apart, and their average was a glow on the boot lid
+/// beside the number plate, a quarter of a metre inboard of the lens it was supposed to be lighting.
+///
+/// So the quadrant is split into its separate lenses first, and each is measured on its own. Nothing
+/// here decides which of them is the lamp — that is [`resolve`]'s job, and it can only do it once
+/// the lenses are separate things to choose between.
+///
+/// Returns nothing for a quadrant with no geometry in it, which is three quadrants out of four for a
 /// lens that was modelled as its own part.
-fn measure(part: &crate::model::Part, side: Side, front: bool) -> Option<([f32; 3], [f32; 2])> {
-    let mut n = 0.0f32;
-    let mut sum = [0.0f32; 3];
-    let mut squares = [0.0f32; 2];
-    for p in part
+fn measure(part: &crate::model::Part, side: Side, front: bool) -> Vec<([f32; 3], [f32; 2], usize)> {
+    let here: Vec<bool> = part
         .positions
         .iter()
-        .filter(|p| Side::of(p[0]) == side && (p[2] > 0.0) == front)
-    {
-        n += 1.0;
-        for k in 0..3 {
-            sum[k] += p[k];
+        .map(|p| Side::of(p[0]) == side && (p[2] > 0.0) == front)
+        .collect();
+    if !here.iter().any(|&b| b) {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for group in lenses(part, &here) {
+        // Two vertices are not a lens. A stray vertex left behind by a modeller measures nothing and
+        // would only ever be discarded later; leaving it out here keeps it out of the warnings too.
+        if group.len() < 3 {
+            continue;
         }
-        squares[0] += p[0] * p[0];
-        squares[1] += p[1] * p[1];
+        let n = group.len() as f32;
+        let mut sum = [0.0f32; 3];
+        let mut squares = [0.0f32; 2];
+        for &i in &group {
+            let p = part.positions[i];
+            for k in 0..3 {
+                sum[k] += p[k];
+            }
+            squares[0] += p[0] * p[0];
+            squares[1] += p[1] * p[1];
+        }
+        let at = [sum[0] / n, sum[1] / n, sum[2] / n];
+        // Guarded against the rounding that can leave this fractionally negative when every vertex is
+        // at the same place, which is what a lens modelled as a flat decal looks like from one axis.
+        let deviation = |k: usize| (squares[k] / n - at[k] * at[k]).max(0.0).sqrt();
+        out.push((at, [deviation(0), deviation(1)], group.len()));
     }
-    if n == 0.0 {
-        return None;
+    out
+}
+
+/// How far apart two pieces of geometry have to be before they are two lamps rather than one.
+///
+/// Only ever asked of geometry the mesh has already said is *not* joined, so the question is narrow:
+/// how close do two separate surfaces have to be before they are the same lamp. A lens's own shells —
+/// the glass, the reflector behind it, the chrome ring around it — are modelled millimetres apart and
+/// separated by a lamp's width from anything else, so five centimetres has room on both sides.
+const LENS_GAP: f32 = 0.05;
+
+/// Splits one quadrant of a part into the separate lenses it holds.
+///
+/// Two vertices are the same lens when the mesh joins them — a shared triangle — or when they are
+/// within [`LENS_GAP`] of each other. The first of those does the work and the second only tidies up
+/// after it.
+///
+/// Following the triangles rather than measuring distances is what makes this hold up across models
+/// built to wildly different densities. A distance threshold has to be larger than the gaps *inside*
+/// a lens and smaller than the gaps *between* lamps, and those two ranges overlap: the Charger's rear
+/// bar is one lamp modelled as six coarse segments with 15 cm between their vertices, while the Mini
+/// carries a separate lamp 30 cm from its tail lens. No single distance separates those two cars, and
+/// tuning one to fit put the Charger's tail lamps a quarter of a metre inboard of where they had been.
+/// Connectivity has no such threshold in it: the segments of the Charger's bar are one surface and the
+/// Mini's two lamps are two, at any density either is modelled at.
+///
+/// Single-linkage on top of that, so a lens shaped like an L or wrapped around the corner of a wing
+/// stays one thing; what it cannot do is separate two lamps that a strip of trim joins, and nothing
+/// that works on geometry alone could.
+fn lenses(part: &crate::model::Part, here: &[bool]) -> Vec<Vec<usize>> {
+    let mut parent: Vec<usize> = (0..part.positions.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
     }
-    let at = [sum[0] / n, sum[1] / n, sum[2] / n];
-    // Guarded against the rounding that can leave this fractionally negative when every vertex is at
-    // the same place, which is what a lens modelled as a flat decal looks like from one axis.
-    let deviation = |k: usize| (squares[k] / n - at[k] * at[k]).max(0.0).sqrt();
-    Some((at, [deviation(0), deviation(1)]))
+    let join = |parent: &mut Vec<usize>, i: usize, j: usize| {
+        let (a, b) = (root(parent, i), root(parent, j));
+        parent[a] = b;
+    };
+
+    // What the mesh itself says. Only within the quadrant: a lens cut in half by the centreline is
+    // two lamps, and joining its halves back together here would undo the cut that finds them.
+    for tri in part.indices.chunks_exact(3) {
+        let [a, b, c] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+        if here[a] && here[b] {
+            join(&mut parent, a, b);
+        }
+        if here[b] && here[c] {
+            join(&mut parent, b, c);
+        }
+    }
+
+    // And the surfaces that sit against each other without sharing a vertex, which is most of them:
+    // a lens is glass over a reflector, and glTF splits a mesh wherever the UVs do. Bucketed into a
+    // grid of `LENS_GAP` cells so each vertex only asks about its own cell and the twenty-six around
+    // it — the merged lamp meshes run to thousands of vertices, and the R34 models every lamp it has
+    // as one part.
+    let cell = |p: [f32; 3]| {
+        [
+            (p[0] / LENS_GAP).floor() as i32,
+            (p[1] / LENS_GAP).floor() as i32,
+            (p[2] / LENS_GAP).floor() as i32,
+        ]
+    };
+    let mut grid: std::collections::HashMap<[i32; 3], Vec<usize>> = std::collections::HashMap::new();
+    for (i, &p) in part.positions.iter().enumerate() {
+        if here[i] {
+            grid.entry(cell(p)).or_default().push(i);
+        }
+    }
+    let gap2 = LENS_GAP * LENS_GAP;
+    for (i, &p) in part.positions.iter().enumerate() {
+        if !here[i] {
+            continue;
+        }
+        let c = cell(p);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(near) = grid.get(&[c[0] + dx, c[1] + dy, c[2] + dz]) else {
+                        continue;
+                    };
+                    for &j in near {
+                        if j <= i {
+                            continue;
+                        }
+                        let q = part.positions[j];
+                        let d2 = (0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f32>();
+                        if d2 <= gap2 {
+                            join(&mut parent, i, j);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+    for i in 0..part.positions.len() {
+        if here[i] {
+            let r = root(&mut parent, i);
+            groups.entry(r).or_default().push(i);
+        }
+    }
+    groups.into_values().collect()
 }
 
 /// Half-width of a lens, as a multiple of the standard deviation of its vertices.
@@ -855,6 +995,88 @@ mod tests {
         assert_eq!(only(&found, LightKind::Tail).len(), 2);
         for l in &found.lights {
             assert!(l.at[0].abs() > 0.4, "a lamp landed on the centreline: {:?}", l.at);
+        }
+    }
+
+    /// The Mini: one rear glass part holding the tail lamp at the corner *and* the high-level lamp
+    /// up by the window. Measured as one quadrant those average to a point on the boot lid between
+    /// them, which is where the Mini's tail lamps sat for a release — a quarter of a metre inboard of
+    /// the lens, beside the number plate.
+    #[test]
+    fn two_lamps_in_one_corner_are_not_averaged_into_the_bodywork_between_them() {
+        let mut merged = box_part("rear_lamps", [0.62, 0.85, -2.0], [0.28, 0.30, 0.08], 4);
+        for (at, size, detail) in [
+            ([-0.62f32, 0.85, -2.0], [0.28f32, 0.30, 0.08], 4),
+            // Inboard and higher, and modelled nearly as finely, so an average of the two lands
+            // well clear of either.
+            ([0.25, 1.25, -1.7], [0.16, 0.08, 0.06], 3),
+            ([-0.25, 1.25, -1.7], [0.16, 0.08, 0.06], 3),
+        ] {
+            let other = box_part("rear_lamps", at, size, detail);
+            let base = merged.positions.len() as u32;
+            merged.positions.extend_from_slice(&other.positions);
+            merged.normals.extend_from_slice(&other.normals);
+            merged.indices.extend(other.indices.iter().map(|i| i + base));
+        }
+        merged.material = 1;
+
+        let mut model = car(&[("unused", [0.0, 9.0, 0.0], [0.1, 0.1, 0.1])]);
+        model.parts.pop();
+        model.parts.push(merged);
+        // Headlights so the car is a car; they are not what this is about.
+        model.parts.push({
+            let mut p = box_part("headlights", [0.6, 0.7, 1.9], [0.3, 0.2, 0.1], 2);
+            let other = box_part("headlights", [-0.6, 0.7, 1.9], [0.3, 0.2, 0.1], 2);
+            let base = p.positions.len() as u32;
+            p.positions.extend_from_slice(&other.positions);
+            p.normals.extend_from_slice(&other.normals);
+            p.indices.extend(other.indices.iter().map(|i| i + base));
+            p.material = 1;
+            p
+        });
+
+        let found = find(&model, &CarConfig::unconfigured("Test"));
+        let tails = only(&found, LightKind::Tail);
+        assert_eq!(tails.len(), 2, "{:?}", found.warnings);
+        for l in tails {
+            assert!(
+                (l.at[0].abs() - 0.62).abs() < 0.05 && (l.at[1] - 0.85).abs() < 0.05,
+                "the tail lamp is on the corner lens, not between the two: {:?}",
+                l.at
+            );
+        }
+    }
+
+    /// The 350Z: a wide thin reflector strip in the bumper, below a tail lamp with ten times the
+    /// geometry in it. The strip is the more *spread out* of the two and so measures larger, which
+    /// is what makes size-by-spread the wrong way to pick the lamp out of a corner.
+    #[test]
+    fn a_wide_reflector_does_not_outmeasure_the_lamp_above_it() {
+        let mut model = car(&[("unused", [0.0, 9.0, 0.0], [0.1, 0.1, 0.1])]);
+        model.parts.pop();
+        // Nothing here is named for what it is, so the choice is made on the geometry alone — which
+        // is the case this is about, and the case most of these models are.
+        for (name, at, size, detail) in [
+            ("cluster_L", [0.55f32, 0.85, -2.0], [0.26f32, 0.24, 0.08], 5),
+            ("cluster_R", [-0.55, 0.85, -2.0], [0.26, 0.24, 0.08], 5),
+            ("strip_L", [0.50, 0.45, -2.05], [0.55, 0.05, 0.04], 1),
+            ("strip_R", [-0.50, 0.45, -2.05], [0.55, 0.05, 0.04], 1),
+        ] {
+            let mut p = box_part(name, at, size, detail);
+            p.material = model.materials.len();
+            model.materials.push(lens_material("lamp_glass"));
+            model.parts.push(p);
+        }
+
+        let found = find(&model, &CarConfig::unconfigured("Test"));
+        let tails = only(&found, LightKind::Tail);
+        assert_eq!(tails.len(), 2, "{:?}", found.warnings);
+        for l in tails {
+            assert!(
+                (l.at[1] - 0.85).abs() < 0.05,
+                "the tail lamp is the lamp, not the reflector under it: {:?}",
+                l.at
+            );
         }
     }
 

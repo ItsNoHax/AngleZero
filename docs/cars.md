@@ -313,7 +313,15 @@ says whether it comes on under braking — so the kind comes from the part's nam
 clear, from which end of the car it is on where it is not, and from the config where neither will
 do.
 
-Six of the seven cars here need no `[lights]` table at all.
+A mean is only the middle of a lamp while there is one lamp to be the middle of, and a corner of a
+car holds several: the tail lamp, the high-level lamp above the window, the number-plate lamps, the
+reflector in the bumper, often all in the same mesh. So each corner is first split into the separate
+lenses it holds — by following the mesh's own triangles, which no threshold in metres can replace —
+and the lamp is the lens the model spends the most geometry on. Both halves of that were the Mini's
+tail lights, which spent a release averaged onto the boot lid beside the number plate because the
+tail lens and the high-level lamp were measured as one thing.
+
+Twenty of the twenty-seven cars here need no `[lights]` table at all.
 
 ### What it refuses, and why
 
