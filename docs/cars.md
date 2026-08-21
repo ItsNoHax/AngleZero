@@ -485,6 +485,13 @@ mesh with the differences living in a texture. There is nothing to find. The lam
 names and geometry, and the E39 is the only model in the set that names its lenses, which is exactly
 the one car that had them.
 
+The models are not being misread, which is the first thing to rule out. Searching all twenty-three
+source files for `reverse`, `reversing`, `backup` or `rueckfahr` finds the word in exactly one:
+`bmw_e39_free`, as `reverse_light_lod0`, which is the one car whose lamps come out measured. The
+E36 contains `backlight`, and that is a trap rather than a miss — it is
+`E36_coupe_backlight_BMWE36_glass_0`, the rear *window*, which is what a backlight is on a car.
+Adding it to the word list would turn a rear screen into a reversing lamp.
+
 Colour looked like the answer and is not. A reversing lamp is the white lens in a cluster of red
 ones, which is a fact about cars rather than a guess — but these lenses are textured, so their
 material's base colour is white whatever the lens looks like. Testing it marked the E36's
@@ -493,9 +500,17 @@ found nothing at all, on any car.
 
 So they are derived rather than detected. Where a car has tail lamps and no reversing lamps, the
 reversing lamps are placed from the tail lamps: at 0.85 of their distance from the centreline,
-level with them, 4 cm further back, four fifths the size. Those numbers are the E39's own — the one
-car that names its lenses, measured — and they generalise where a position would not, because a
-reversing lamp is inboard of the tail lamp on every car ever built. The report says `derived from
+level with them, 4 cm further back. Those numbers are the E39's own — the one car that names its
+lenses, measured — and they generalise where a position would not, because a reversing lamp is
+inboard of the tail lamp on every car ever built.
+
+The *size* is not derived, and that is worth saying because the obvious thing does not work. A tail
+lamp's radius is the `[0.15, 0.35]` clamp's ceiling on seventeen of the twenty-three cars, because a
+measured quadrant holds a whole cluster rather than one lens — so scaling it just returns the
+ceiling, and the first attempt produced glows twice the width of the E39's real reversing lamp,
+hanging off the corners of the car. A number that is saturated carries no information. The derived
+lamps are given 0.16 m outright, which is the E39's measured 0.150 rounded up, and a reversing lens
+is small on every car. The report says `derived from
 the tail lamp` rather than `named in the model`, and anything in `[lights]` wins outright.
 
 Brake lenses are still never guessed, and the difference is worth stating. A brake lens is red like

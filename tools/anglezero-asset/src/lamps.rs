@@ -205,12 +205,22 @@ pub fn identify(
         for tail in tails {
             let side = if tail.at[0] >= 0.0 { Side::Left } else { Side::Right };
             let at = [tail.at[0] * 0.85, tail.at[1], tail.at[2] - 0.04];
+            // Given outright rather than scaled off the tail lamp, and the tail lamp is why: its
+            // radius is the [0.15, 0.35] clamp's ceiling on seventeen of twenty-three cars, because
+            // a measured quadrant holds the whole cluster rather than one lens. A number that is
+            // saturated carries no size, so scaling it just produced the ceiling again — a glow
+            // twice the width of the E39's real reversing lamp, hanging off the corner of the car.
+            //
+            // 0.16 is that real lamp, near enough: the E39's measures 0.150. A reversing lens is
+            // small on every car, so a fixed size is both simpler and better evidence than a
+            // fraction of something unmeasured.
+            let anchor = Anchor { radius: Some(0.16), ..Anchor::default() };
             found.lights.push(build(
                 LightKind::Reverse,
                 side,
                 at,
-                tail.radius * 0.8,
-                &NO_ANCHOR,
+                0.16,
+                &anchor,
                 config,
                 strings,
             ));

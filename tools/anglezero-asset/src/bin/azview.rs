@@ -65,10 +65,23 @@ struct Options {
     /// What the camera orbits, in car space. Defaults to the middle of the car's bounds.
     look: Option<[f32; 3]>,
     background: [u8; 3],
+    /// Draw the car's lamps as the game lights them: an additive glow at each anchor, in the
+    /// lamp's own colour and at its own size. `Some(kind)` shows one kind alone, which is the only
+    /// way to see where a reversing lamp actually sits — on the car they are lit alongside the tail
+    /// lamps and swamped by them.
+    lamps: Option<Option<String>>,
     /// Draw the silhouette section instead of the car — the stand-in the console shows while the
     /// rest of the file is still being read. Flat, culling off, exactly as `draw_silhouette` does
     /// it, because the whole question about a silhouette is what its outline looks like.
     silhouette: bool,
+}
+
+impl Options {
+    fn lamp_kind_arg(&mut self, arg: Option<&str>) -> Result<(), String> {
+        let kind = arg.ok_or("--lamp needs a kind: headlight, tail, brake or reverse")?;
+        self.lamps = Some(Some(kind.to_ascii_lowercase()));
+        Ok(())
+    }
 }
 
 fn run(args: &[&str]) -> Result<(), String> {
@@ -92,6 +105,7 @@ fn run(args: &[&str]) -> Result<(), String> {
         look: None,
         background: [24, 24, 32],
         silhouette: false,
+        lamps: None,
     };
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -117,6 +131,8 @@ fn run(args: &[&str]) -> Result<(), String> {
             "--hide" => o.hide = Some(it.next().ok_or("--hide needs a name")?.to_string()),
             "--by-mesh" => o.by_mesh = true,
             "--silhouette" => o.silhouette = true,
+            "--lamps" => o.lamps = Some(None),
+            "--lamp" => o.lamp_kind_arg(it.next().copied())?,
             "--no-cull" => o.no_cull = true,
             "--no-tex" => o.no_tex = true,
             "--mesh" => o.mesh.push(number("--mesh")? as usize),
@@ -400,6 +416,69 @@ fn draw(car: &Car, o: &Options) -> Vec<u8> {
             }
         }
     }
+    // The lamps, over the car, the way the game lights them: additive, so a glow brightens what is
+    // behind it rather than replacing it, and depth-tested at the anchor so a lamp on the far side
+    // of the car does not shine through the bodywork.
+    if let Some(want) = &o.lamps {
+        let tan_scale = o.width as f32 / (2.0 * tan * aspect);
+        for lamp in car.lights() {
+            let name = azcar::LightKind::name(lamp.kind);
+            if let Some(want) = want {
+                if !name.contains(want.as_str()) {
+                    continue;
+                }
+            }
+            let (win, z) = project(lamp.at);
+            if z <= NEAR {
+                continue;
+            }
+            // A lamp points the way its end of the car does. One facing away from the camera is
+            // behind the car from here and does not show — the game does the same, for the same
+            // reason: a glow is a billboard with no depth of its own.
+            let facing = if lamp.at[2] >= 0.0 { 1.0 } else { -1.0 };
+            if dot(f, [0.0, 0.0, facing]) > 0.0 {
+                continue;
+            }
+            let (cx, cy) = (win[0], win[1]);
+            let r_px = (lamp.radius / z * tan_scale).max(2.0);
+            // ABGR, with the alpha carrying how bright the lamp burns.
+            let (lr, lg, lb) = (
+                (lamp.color & 0xFF) as f32 / 255.0,
+                ((lamp.color >> 8) & 0xFF) as f32 / 255.0,
+                ((lamp.color >> 16) & 0xFF) as f32 / 255.0,
+            );
+            let intensity = ((lamp.color >> 24) & 0xFF) as f32 / 255.0;
+            let x0 = (cx - r_px).floor().max(0.0) as usize;
+            let x1 = (cx + r_px).ceil().min(o.width as f32 - 1.0) as usize;
+            let y0 = (cy - r_px).floor().max(0.0) as usize;
+            let y1 = (cy + r_px).ceil().min(o.height as f32 - 1.0) as usize;
+            if cx < 0.0 || cy < 0.0 || cx >= o.width as f32 || cy >= o.height as f32 {
+                continue;
+            }
+            // No depth test. One was here, sampling the single pixel at the anchor, and it threw
+            // away the lamps on a third of the cars: an anchor sits *inside* the lens it belongs
+            // to, so the bodywork is genuinely in front of it and a strict test hides every lamp
+            // that is doing its job. The facing test above is what keeps a rear lamp from shining
+            // through the front of the car, and it is the test that means something — this view
+            // exists to show where a lamp is, so a lamp it cannot show is worse than useless.
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let d = (((x as f32 - cx).powi(2) + (y as f32 - cy).powi(2)).sqrt()) / r_px;
+                    if d > 1.0 {
+                        continue;
+                    }
+                    // Smooth falloff, brightest in the middle, as a glow sprite is.
+                    let a = (1.0 - d) * (1.0 - d) * intensity;
+                    let p = (y * o.width + x) * 3;
+                    for (k, ch) in [lr, lg, lb].iter().enumerate() {
+                        let v = colour[p + k] as f32 + ch * a * 255.0;
+                        colour[p + k] = v.min(255.0) as u8;
+                    }
+                }
+            }
+        }
+    }
+
     colour
 }
 
