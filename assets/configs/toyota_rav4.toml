@@ -1,0 +1,51 @@
+# Toyota RAV4, 2010. The only thing in the fleet that is not a car — a small SUV, taller than
+# everything else and with the ride height to match, which is worth knowing before its handling is
+# looked at.
+#
+# The heaviest source model here by a distance: 558,862 triangles against the M5's 389,100, so the
+# budget below throws away 96% of it rather than the usual 90.
+#
+# CC-BY, which matters beyond the credit line: it is one of the few cars here a paid release could
+# ship. See the licence table in docs/cars.md.
+
+name = "Toyota RAV4"
+source = "2010_rav4_limited_edition.glb"
+
+# The model is in no unit anyone would name. Three measurements agree on 0.545: the wheelbase is
+# 4.88 units against a real RAV4's 2.66 m, the body is 8.375 long against 4.56 m, and the height is
+# 3.15 against 1.72. `inspect` declines to guess and says so, which is the right answer from a
+# bounding box alone.
+scale = 0.545
+
+# 24,000 as everywhere else, and worth saying that leaving it out is not harmless: the default is
+# 10,000, and at that budget this car's body came out at 2,970 triangles carrying 8.9% error — the
+# report says "it is losing its shape" and it means it. At 24,000 the same body is 13,173 triangles
+# at 0.27%. A 558,862-triangle source has that much further to fall than the others.
+triangles = 24000
+lods = [3000, 1200]
+
+[spawn]
+# It faces the wrong way. The `Head` material — 25,022 triangles, all of it on one part — sits at
+# z = -3.30, which is the far end from +Z, and the convention here is headlights at +Z. Only the
+# E39 needed this before. Get it wrong and the car drives the whole descent backwards: invisible on
+# the title screen, obvious from the chase camera.
+yaw = 180.0
+
+[wheels]
+# Nothing in this model is named except its parents, and they are named well: `Wheel.Ft.L`,
+# `Wheel.Bk.R` and so on hold the tyre and rim, `WheelBrake.Ft.L` and friends hold the disc and
+# caliper. The matcher reads a part's parent as well as its own name, so the parents are enough.
+#
+# `Wheel.` with the dot, not `Wheel`: the bare word would also take the four `WheelBrake` groups,
+# which is harmless here but stops meaning what it says. There is no steering wheel in this model
+# to fall into, which is the usual trap.
+match = ["Wheel.", "WheelBrake"]
+
+[materials]
+# Nothing here is named for a lamp in a way the sorter recognises, so the car compiled with no
+# lights at all — no headlights on a night track.
+#
+# `Head` is 25,022 triangles on one part sitting at the very front, which is the headlight
+# assembly. `r_glass` is at the other end, 0.78 m up: too low to be the rear screen, which on an
+# SUV is well above a metre, and exactly where a tail lamp lives.
+light = ["Head", "r_glass"]
