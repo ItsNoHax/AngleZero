@@ -101,13 +101,15 @@ const EDGE_RIGHT: [Station; 2] = [
     Station::new(5.05, 0.05, EDGE_COLOR),
 ];
 
+// Built on the same line containment stops the car at, so what the player hits and what the player
+// sees cannot drift apart.
 const RAIL_LEFT: [Station; 2] = [
-    Station::new(-7.5, 0.55, rgb(0x4E, 0x54, 0x5B)),
-    Station::new(-7.5, 0.95, RAIL_COLOR),
+    Station::new(-angle_zero::track::RAIL_LIMIT, 0.55, rgb(0x4E, 0x54, 0x5B)),
+    Station::new(-angle_zero::track::RAIL_LIMIT, 0.95, RAIL_COLOR),
 ];
 const RAIL_RIGHT: [Station; 2] = [
-    Station::new(7.5, 0.55, rgb(0x4E, 0x54, 0x5B)),
-    Station::new(7.5, 0.95, RAIL_COLOR),
+    Station::new(angle_zero::track::RAIL_LIMIT, 0.55, rgb(0x4E, 0x54, 0x5B)),
+    Station::new(angle_zero::track::RAIL_LIMIT, 0.95, RAIL_COLOR),
 ];
 
 const ROAD_CAP: usize = ribbon_capacity(5);

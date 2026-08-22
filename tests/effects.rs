@@ -14,6 +14,7 @@ fn shape() -> CarShape {
         wheel_radius: 0.29,
         rear_hub_x: 0.73,
         rear_hub_z: -1.29,
+        ..CarShape::DEFAULT
     }
 }
 

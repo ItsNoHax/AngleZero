@@ -1018,9 +1018,10 @@ impl<'a> Car<'a> {
     /// What the simulation needs to know about this car's proportions.
     ///
     /// Presenting the asset to the rest of the game is this module's job, and this is the only
-    /// part of it the physics and the effects care about: how fast the wheels should turn, and
-    /// where the back ones are. A car with no wheels in it falls back to a default rather than to
-    /// zeroes, which would stop the wheels dead and pile every tyre mark on the car's origin.
+    /// part of it the physics and the effects care about: how fast the wheels should turn, where
+    /// the back ones are, and how much car there is around them. A car with no wheels in it falls
+    /// back to a default rather than to zeroes, which would stop the wheels dead and pile every
+    /// tyre mark on the car's origin.
     pub fn shape(&self) -> crate::vehicle::CarShape {
         let mut rear = [[0.0f32; 3]; 4];
         let mut rear_count = 0;
@@ -1041,7 +1042,7 @@ impl<'a> Car<'a> {
         if wheels == 0 {
             return crate::vehicle::CarShape::DEFAULT;
         }
-        crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count])
+        crate::vehicle::CarShape::measure(radius / wheels as f32, &rear[..rear_count], self.bounds)
     }
 
     /// The car's texture: size, format, and the pixels, ready for `sceGuTexImage`.

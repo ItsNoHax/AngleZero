@@ -104,6 +104,13 @@ fn a_car_with_numbers_that_would_break_the_simulation_is_not_sane() {
 }
 
 /// The point of the feature: a lighter car with more grip corners harder.
+///
+/// Measured over two thirds of a second, which is as long as full lock at 22 m/s takes to carry
+/// either car from the centreline to the rail. Run any longer and both cars are pinned against the
+/// barrier, every wall tap cuts the yaw rate to a third, and what the test compares is which car
+/// last bounced rather than which car turns — a difference that came out the wrong way round as
+/// soon as containment started stopping the bodywork instead of the origin. The assertion that
+/// neither car touched anything is what keeps it a handling test.
 #[test]
 fn a_lighter_grippier_car_holds_a_tighter_line() {
     let track = track();
@@ -112,7 +119,7 @@ fn a_lighter_grippier_car_holds_a_tighter_line() {
         v.handling = handling;
         v.place_at_node(&track, 200);
         v.state.vx = 22.0;
-        for _ in 0..240 {
+        for _ in 0..80 {
             v.step(
                 &track,
                 Input {
@@ -123,6 +130,11 @@ fn a_lighter_grippier_car_holds_a_tighter_line() {
                 FIXED_DT,
             );
         }
+        assert_eq!(
+            v.wall_timer, 0.0,
+            "the car reached the rail inside the measuring window, so this is no longer a \
+             comparison of how the two corner"
+        );
         v.state.yaw_rate.abs()
     };
 
@@ -334,6 +346,34 @@ fn lifting_off_mid_slide_recovers_grip() {
 
 // ---------------------------------------------------------------- containment
 
+/// How far the car's outermost corner is from the centreline, in the same units as `query.lat`.
+///
+/// The rail is a flat vertical plane on the `RAIL_LIMIT` line, so this is the whole of what has to
+/// stay inside it. Worked out here from the pose rather than read off the vehicle, so that a
+/// containment that quietly went back to measuring the origin has nothing to hide behind.
+fn body_reach(t: &Track, v: &Vehicle) -> f32 {
+    let n = t.nodes[v.query.index];
+    let (s, c) = (v.state.yaw.sin(), v.state.yaw.cos());
+    let fwd = s * n.nrm.x + c * n.nrm.z;
+    let side = c * n.nrm.x - s * n.nrm.z;
+    let corner = |mx: f32, mz: f32| v.query.lat + mx * side + mz * fwd;
+    let (hw, hl, cz) = (v.shape.half_width, v.shape.half_length, v.shape.centre_z);
+    [
+        corner(hw, cz + hl),
+        corner(hw, cz - hl),
+        corner(-hw, cz + hl),
+        corner(-hw, cz - hl),
+    ]
+    .iter()
+    .fold(0.0f32, |worst, c| worst.max(c.abs()))
+}
+
+/// The car is a car and not a point, and a guard rail has to stop all of it.
+///
+/// The origin used to be the only thing containment knew about, held 35 cm inside a rail drawn at
+/// 7.5 m. That is less than half the width of every car in the game, so a car pinned against the
+/// barrier had its flank through it, and one that arrived sideways — which, on a pass driven
+/// sideways, is how a car usually arrives — put most of its nose through instead.
 #[test]
 fn the_car_cannot_be_pushed_through_the_guard_rails() {
     let t = track();
@@ -342,6 +382,7 @@ fn the_car_cannot_be_pushed_through_the_guard_rails() {
     v.place_at_node(&t, 600);
     v.state.vx = 30.0;
 
+    let mut worst = 0.0f32;
     for _ in 0..(6.0 / FIXED_DT) as usize {
         v.step(
             &t,
@@ -352,12 +393,83 @@ fn the_car_cannot_be_pushed_through_the_guard_rails() {
             },
             FIXED_DT,
         );
+        worst = worst.max(body_reach(&t, &v));
         assert!(
-            v.query.lat.abs() <= RAIL_LIMIT + 0.01,
-            "car escaped to lat {}",
-            v.query.lat
+            worst <= RAIL_LIMIT + 0.01,
+            "bodywork reached {worst} m, {} m through a rail at {RAIL_LIMIT}",
+            worst - RAIL_LIMIT
         );
     }
+
+    // And it did press against the rail rather than never getting there, or the loop above proves
+    // nothing at all.
+    assert!(
+        worst > RAIL_LIMIT - 0.1,
+        "the car never reached the rail; it only got to {worst} m"
+    );
+}
+
+/// A wider car has to stop further out from the centreline than a narrow one, and a car that
+/// arrives sideways further out still.
+///
+/// This is the part a bounding circle would get wrong: sized to hold the nose, it would keep a car
+/// driving straight past a rail a full metre off it.
+#[test]
+fn a_bigger_car_is_stopped_sooner_than_a_smaller_one() {
+    let t = track();
+    // How far out the origin gets before the rail stops it. Taken as the furthest the car ever
+    // reached rather than where it ended up, because leaning on a rail for a second and a half
+    // respawns the car on the centreline and would make every size look the same.
+    let settle = |shape: CarShape, yaw_offset: f32| {
+        let mut v = at_start(&t);
+        v.shape = shape;
+        v.place_at_node(&t, 600);
+        v.state.vx = 24.0;
+        v.state.yaw += yaw_offset;
+        let mut furthest = 0.0f32;
+        for _ in 0..(4.0 / FIXED_DT) as usize {
+            let out = v.step(
+                &t,
+                Input {
+                    throttle: 1.0,
+                    steer_in: 1.0,
+                    ..Input::default()
+                },
+                FIXED_DT,
+            );
+            if out.respawned {
+                break;
+            }
+            furthest = furthest.max(v.query.lat.abs());
+        }
+        furthest
+    };
+
+    let kei = CarShape {
+        half_width: 0.70,
+        half_length: 1.70,
+        ..CarShape::DEFAULT
+    };
+    let limo = CarShape {
+        half_width: 1.10,
+        half_length: 2.70,
+        ..CarShape::DEFAULT
+    };
+
+    let (small, large) = (settle(kei, 0.0), settle(limo, 0.0));
+    assert!(
+        small - large > 0.3,
+        "a car 0.4 m wider each side stopped only {:.2} m sooner",
+        small - large
+    );
+
+    // Turned across the road, it is the length that has to clear the rail, not the width.
+    let sideways = settle(kei, 0.9);
+    assert!(
+        small - sideways > 0.5,
+        "the same car crossed up stopped only {:.2} m sooner than square on",
+        small - sideways
+    );
 }
 
 #[test]

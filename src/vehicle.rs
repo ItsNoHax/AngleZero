@@ -21,10 +21,10 @@ pub const MAX_FRAME_DT: f32 = 0.25;
 
 /// The measurements the simulation takes off whatever car is loaded.
 ///
-/// Only three numbers, and none of them affect handling: the physics is a bicycle model with its
-/// own wheelbase and mass, and it drives every car the same. What these decide is whether what is
-/// drawn agrees with it — wheels that roll at the speed the car is going rather than scrubbing,
-/// and tyre marks laid under the tyres rather than near them.
+/// None of them affect handling: the physics is a bicycle model with its own wheelbase and mass,
+/// and it drives every car the same. What they decide is whether what is drawn agrees with it —
+/// wheels that roll at the speed the car is going rather than scrubbing, tyre marks laid under the
+/// tyres rather than near them, and bodywork that stops at a guard rail rather than inside one.
 ///
 /// Kept as data on the vehicle rather than as constants because the car is a file now. The
 /// defaults are a mid-size saloon, used when no car loaded.
@@ -36,6 +36,15 @@ pub struct CarShape {
     pub rear_hub_x: f32,
     /// How far behind the origin the rear axle is. Negative.
     pub rear_hub_z: f32,
+    /// Half the width of the body at its widest, arches and mirrors included.
+    pub half_width: f32,
+    /// Half the length of the body, nose to tail.
+    pub half_length: f32,
+    /// Where the middle of that length sits relative to the origin.
+    ///
+    /// Rarely quite zero. A model's origin sits between its axles, and a car with a long boot and
+    /// a short nose has more of itself behind that point than in front of it.
+    pub centre_z: f32,
 }
 
 impl CarShape {
@@ -43,26 +52,68 @@ impl CarShape {
         wheel_radius: 0.32,
         rear_hub_x: 0.78,
         rear_hub_z: -1.30,
+        half_width: 0.97,
+        half_length: 2.24,
+        centre_z: 0.0,
     };
 
-    /// Takes the shape off a compiled car's rear hubs.
+    /// Takes the shape off a compiled car's rear hubs and bounding box.
     ///
-    /// Averaged over both of them, and the track is taken as the mean of their distances from the
-    /// centreline rather than from one side, because a scanned model is rarely exactly symmetric
-    /// and marks that are 2 cm out on one side and 2 cm in on the other look like the car is
-    /// crabbing.
-    pub fn measure(wheel_radius: f32, rear_hubs: &[[f32; 3]]) -> CarShape {
+    /// The hubs are averaged over both of them, and the track is taken as the mean of their
+    /// distances from the centreline rather than from one side, because a scanned model is rarely
+    /// exactly symmetric and marks that are 2 cm out on one side and 2 cm in on the other look
+    /// like the car is crabbing.
+    ///
+    /// The footprint comes off the box rather than off the wheels, because what a rail has to stop
+    /// is the bodywork: an arch or a mirror stands out past the tyre under it, and it is the part
+    /// the player watches disappear into the barrier. `bounds` is min xyz then max xyz, as the
+    /// asset stores it; the width is taken as the wider side rather than as half the span, because
+    /// everything else here treats the model's origin as the car's centreline.
+    pub fn measure(wheel_radius: f32, rear_hubs: &[[f32; 3]], bounds: [f32; 6]) -> CarShape {
         if rear_hubs.is_empty() || !(wheel_radius > 0.0) {
             return CarShape::DEFAULT;
         }
         let n = rear_hubs.len() as f32;
         let x = rear_hubs.iter().map(|h| abs(h[0])).sum::<f32>() / n;
         let z = rear_hubs.iter().map(|h| h[2]).sum::<f32>() / n;
-        CarShape {
+        let mut shape = CarShape {
             wheel_radius,
             rear_hub_x: x,
             rear_hub_z: z,
+            ..CarShape::DEFAULT
+        };
+
+        let half_width = crate::math::max(abs(bounds[0]), abs(bounds[3]));
+        let half_length = (bounds[5] - bounds[2]) * 0.5;
+        // A box that is empty or inside out says nothing about the car, and the default outline is
+        // a better answer than a car that either stops a car's width short of every rail or drives
+        // through them as if it were a point.
+        if half_width > 0.1 && half_length > 0.1 {
+            shape.half_width = half_width;
+            shape.half_length = half_length;
+            shape.centre_z = (bounds[5] + bounds[2]) * 0.5;
         }
+        shape
+    }
+
+    /// How far the bodywork reaches either side of the origin, measured along a road normal.
+    ///
+    /// `fwd` and `side` are that normal resolved onto the car's own axes: how much of it lies
+    /// along the way the car points, and how much across. Returns `(bias, reach)` — the middle of
+    /// the footprint sits `bias` metres out along the normal from the origin, and its corners
+    /// reach `reach` metres either side of that.
+    ///
+    /// This is the exact projection of the footprint rectangle onto one axis, and it costs no
+    /// trigonometry: the two dot products the caller already has are the whole of it. A bounding
+    /// circle would be easier and wrong by most of a metre — half the length of a 4.5 m car is
+    /// 2.25 m, so a circle would hold the car that far off a rail it is driving straight past, on
+    /// a road only 14 m wide.
+    #[inline]
+    pub fn lateral_span(&self, fwd: f32, side: f32) -> (f32, f32) {
+        (
+            self.centre_z * fwd,
+            self.half_width * abs(side) + self.half_length * abs(fwd),
+        )
     }
 }
 
@@ -407,14 +458,36 @@ impl Vehicle {
         st.x += (st.vx * s + st.vy * c) * dt;
         st.z += (st.vx * c - st.vy * s) * dt;
         self.state = st;
-        let st = &mut self.state;
 
         // --- containment ---------------------------------------------------------------
-        let q = self.locator.nearest(track, st.x, st.z);
+        let q = self.locator.nearest(track, self.state.x, self.state.z);
         let node = track.nodes[q.index];
-        let in_bay = q.index > BAY_FROM && q.index < BAY_TO && signum(q.lat) == BAY_SIDE;
-        let lim = if in_bay { BAY_LIMIT } else { RAIL_LIMIT };
 
+        // What has to clear the rail is the car, not the point it is steered from. The road normal
+        // resolved onto the car's own axes gives the footprint's projection onto `lat`: `(s, c)` is
+        // the way the car points and `(c, -s)` its right-hand side, both already unit vectors.
+        let fwd = s * node.nrm.x + c * node.nrm.z;
+        let side = c * node.nrm.x - s * node.nrm.z;
+        let (bias, reach) = self.shape.lateral_span(fwd, side);
+        // Where the middle of the bodywork sits, and where its two flanks end.
+        let middle = q.lat + bias;
+        // Both limits, rather than the one the origin happens to be nearest: the pull-off leaves
+        // one side of these nodes open and the other railed, and they are 24 m apart.
+        let (lim_pos, lim_neg) = (
+            self.containment_limit(q.index, 1.0),
+            self.containment_limit(q.index, -1.0),
+        );
+        // Which flank is through a rail, and by how much. Only ever one of them: the longest car
+        // here reaches 2.7 m and the rails are 15 m apart.
+        let contact = if middle + reach > lim_pos {
+            Some((1.0, middle + reach - lim_pos))
+        } else if middle - reach < -lim_neg {
+            Some((-1.0, -lim_neg - (middle - reach)))
+        } else {
+            None
+        };
+
+        let st = &mut self.state;
         if q.over < -1.0 {
             // Driven back off the start line: hold it at the line.
             let push = -q.over - 1.0;
@@ -424,9 +497,7 @@ impl Vehicle {
                 st.vx *= 0.2;
             }
             self.wall_timer += dt;
-        } else if abs(q.lat) > lim {
-            let sgn = signum(q.lat);
-            let push = abs(q.lat) - lim;
+        } else if let Some((sgn, push)) = contact {
             st.x -= node.nrm.x * sgn * push;
             st.z -= node.nrm.z * sgn * push;
             st.vy *= -0.25;

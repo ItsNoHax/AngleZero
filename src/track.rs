@@ -220,8 +220,13 @@ pub fn bay_shelf_blend(node: usize) -> f32 {
 /// be there and not at the end of the road, or the player crosses it after the fact.
 pub const FINISH_NODE: usize = (NODE_COUNT - 1) * 985 / 1000;
 
-/// Lateral distance at which the guard rail stops the car.
-pub const RAIL_LIMIT: f32 = 7.15;
+/// Where the guard rail stands, and so where the car's bodywork has to stop.
+///
+/// This is the rail's own face and not a margin inside it: the renderer builds the rail ribbon on
+/// this line, and containment measures the car's outermost corner against it, so the two agree by
+/// construction. It used to be 7.15 against a rail drawn at 7.5 — a 35 cm allowance that stood in
+/// for the car having a width, and that a car half a metre wider than it simply drove through.
+pub const RAIL_LIMIT: f32 = 7.5;
 /// The rail is missing across the bay, so containment opens up to the far edge of the pull-off.
 pub const BAY_LIMIT: f32 = 16.5;
 /// Beyond this lateral offset the car is off the tarmac and on to loose surface.
