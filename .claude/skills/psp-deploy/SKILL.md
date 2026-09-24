@@ -47,7 +47,9 @@ cp assets/compiled/*.azcar "$STICK/PSP/GAME/AngleZero/CARS/"
 
 One directory under the release slot, read by **both** builds: the path is absolute in
 `src/psp/car.rs`, so `AngleZeroDev` reads the same files and there is never a second copy to keep in
-step. The game loads every `.azcar` it finds there, so adding a car to the console is copying a file
+step. That holds for any EBOOT `cargo psp` wrote. An EBOOT out of `scripts/release.sh` is different:
+it carries every car packed inside it and never reads `CARS/`, so a car copied there does not
+change a release build — install the plain `cargo psp --release` output when testing cars. The game loads every `.azcar` it finds there, so adding a car to the console is copying a file
 — no rebuild, and the title screen offers it with D-pad Left/Right.
 
 Push them whenever `anglezero-asset convert` has run, which is not the same occasion as a code

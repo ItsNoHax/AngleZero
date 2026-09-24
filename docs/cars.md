@@ -35,7 +35,8 @@ cargo run --release -p anglezero-asset --bin azview -- \
 cargo run --release -p anglezero-asset --bin azview -- \
     assets/compiled/your_car.azcar /tmp/sil.png --silhouette --yaw 270 --pitch 6
 
-# 6. Put it on the stick. The game offers every .azcar it finds there.
+# 6. Put it on the stick. A development build offers every .azcar it finds there; a release
+#    carries its cars inside the EBOOT, packed by scripts/release.sh.
 cp assets/compiled/*.azcar ~/.ppsspp/PSP/GAME/AngleZero/CARS/     # emulator
 ```
 

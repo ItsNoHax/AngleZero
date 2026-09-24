@@ -8,11 +8,13 @@
 //! ```text
 //! anglezero-asset inspect assets/source/bmw_3-series_e36.glb
 //! anglezero-asset convert assets/source/bmw_3-series_e36.glb assets/compiled/bmw_e36.azcar
+//! anglezero-asset bundle angle-zero.EBOOT.PBP EBOOT.PBP assets/compiled/*.azcar
 //! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+mod bundle;
 mod categorise;
 mod compile;
 mod config;
@@ -40,6 +42,7 @@ fn main() -> ExitCode {
     let outcome = match refs.split_first() {
         Some((&"inspect", rest)) => run_inspect(rest),
         Some((&"convert", rest)) => run_convert(rest),
+        Some((&"bundle", rest)) => run_bundle(rest),
         Some((&"help", _)) | Some((&"--help", _)) | Some((&"-h", _)) | None => {
             usage();
             return ExitCode::SUCCESS;
@@ -71,6 +74,31 @@ fn usage() {
     println!("      --triangles <n>       triangle budget, overriding the config's");
     println!("      --quiet               write the file and print nothing");
     println!("      --atlas <out.png>     also write the car's texture out, to look at");
+    println!();
+    println!("  anglezero-asset bundle <in.PBP> <out.PBP> <car.azcar>... [--quiet]");
+    println!("      Pack cars into an EBOOT, for a release that needs no CARS/ folder.");
+    println!("      A build with cars packed in reads only those; one without reads CARS/.");
+}
+
+fn run_bundle(args: &[&str]) -> Result<()> {
+    let quiet = args.contains(&"--quiet");
+    if let Some(other) = args.iter().find(|a| a.starts_with("--") && **a != "--quiet") {
+        return Err(format!("unknown option `{other}`"));
+    }
+    let paths: Vec<PathBuf> = args
+        .iter()
+        .filter(|a| !a.starts_with("--"))
+        .map(PathBuf::from)
+        .collect();
+    let [eboot, output, cars @ ..] = &paths[..] else {
+        return Err("bundle needs an EBOOT, an output path, and the cars to pack".into());
+    };
+    bundle::run(&bundle::Options {
+        eboot: eboot.clone(),
+        output: output.clone(),
+        cars: cars.to_vec(),
+        quiet,
+    })
 }
 
 fn run_convert(args: &[&str]) -> Result<()> {

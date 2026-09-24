@@ -21,23 +21,39 @@
 //! 16-byte aligned. That alignment is not a nicety: the vertex arrays are read in place by the GE,
 //! which fetches them by DMA.
 //!
+//! Where the file is depends on the build. A release carries its cars packed into its own EBOOT
+//! (see `angle_zero::bundle`), so it is one folder that works wherever a player puts it; any other
+//! build reads loose files out of `DIR`, so a recompiled car is one file copied and no rebuild.
+//! Which of the two it is gets decided once, at `scan`, by whether the EBOOT has cars in it — and
+//! after that a car is a name, a handle, an offset and a size, whichever place it came from.
+//!
 //! Every failure is reported rather than worked around. A missing or stale car is a car that
 //! cannot be drawn, and the alternative to saying so is a race that starts with an invisible
 //! vehicle.
 
 use angle_zero::azcar::{self, Car, Silhouette};
+use angle_zero::bundle::{self, Index};
 use angle_zero::catalogue::{self, Catalogue, DisplayName};
 use angle_zero::stream::Progress;
 use psp::sys::{self, IoOpenFlags, IoStatMode, IoWhence, SceUid};
 
-/// Where compiled cars live on the stick.
+/// Where a build with no cars packed into it reads them from.
 ///
-/// One absolute path for every build rather than one relative to whichever slot is running, so the
-/// release build and the devtools build in `AngleZeroDev` read the same files and there is only
-/// ever one copy of a car on the stick. It is under the release slot because that is where
-/// unzipping the release archive puts it, and `ms0:/ANGLEZERO/` is already spoken for: that is the
-/// diagnostics dump, and the release check refuses to package a build that mentions it.
+/// That is every build but a release: `cargo psp` output, with or without devtools, on hardware or
+/// under the emulator. One absolute path for all of them rather than one relative to whichever slot
+/// is running, so the plain build in `AngleZero` and the devtools build in `AngleZeroDev` read the
+/// same files and there is only ever one copy of a car on a development stick. `ms0:/ANGLEZERO/` is
+/// already spoken for: that is the diagnostics dump, and the release check refuses to package a
+/// build that mentions it.
 pub const DIR: &str = "ms0:/PSP/GAME/AngleZero/CARS/";
+
+/// The running EBOOT, which a release carries its cars inside.
+///
+/// Relative, because the path the EBOOT was launched from is not fixed — a category plugin puts it
+/// in `PSP/GAME/<category>/AngleZero/`, a PSP Go on `ef0:` — and because it does not need to be: the
+/// `psp` crate changes into the EBOOT's own directory before `psp_main` runs, and every car is read
+/// on that same thread.
+const EBOOT: &[u8] = b"EBOOT.PBP\0";
 
 /// The most one car may be.
 ///
@@ -80,6 +96,7 @@ const SLOTS: usize = if cfg!(feature = "devtools") { 5 } else { 2 };
 const CHUNK_BYTES: usize = 32 * 1024;
 
 /// Longest path this will assemble, including the NUL. `DIR` plus `catalogue::NAME_MAX` plus one.
+/// A bundled car has no path of its own: it is read out of `EBOOT`.
 const PATH_MAX: usize = 96;
 
 #[repr(C, align(16))]
@@ -113,6 +130,11 @@ static mut RESIDENT: [Option<Resident>; SLOTS] = [const { None }; SLOTS];
 /// Which slot holds the car the game is drawing, if any has been loaded yet.
 static mut CURRENT: Option<usize> = None;
 static mut CATALOGUE: Catalogue = Catalogue::EMPTY;
+/// Where the catalogue's cars are read from, decided once by `scan`.
+static mut SOURCE: Source = Source::Dir;
+/// A bundle's index, as read off the stick, when `SOURCE` is a bundle. Read once and kept, so that
+/// finding a car's place in the EBOOT is a lookup rather than a read.
+static mut INDEX: [u8; bundle::INDEX_MAX] = [0; bundle::INDEX_MAX];
 static mut LOADING: Option<Load> = None;
 /// The last thing that went wrong, cleared by the next load that goes right.
 static mut FAULT: Option<LoadError> = None;
@@ -130,6 +152,16 @@ static mut SCAN_FAULT: Option<LoadError> = None;
 #[cfg(all(feature = "devtools", not(feature = "harness")))]
 static mut PEAK_READ_US: u32 = 0;
 
+/// Where cars come from in this build.
+#[derive(Clone, Copy)]
+enum Source {
+    /// Loose files in `DIR`.
+    Dir,
+    /// Packed into the EBOOT: `psar` is where the bundle starts in it, `len` how long it is, and
+    /// `index` how much of `INDEX` is the index.
+    Bundle { psar: usize, len: usize, index: usize },
+}
+
 /// Why a car could not be loaded. All of these end with no car rather than a wrong one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LoadError {
@@ -146,6 +178,9 @@ pub enum LoadError {
     NameTooLong,
     /// It is a file, but not one this build can draw.
     Format(azcar::Error),
+    /// The cars packed into the EBOOT cannot be read: it was cut short copying, or it was packed by
+    /// a different version of the game.
+    Damaged,
 }
 
 impl LoadError {
@@ -161,21 +196,93 @@ impl LoadError {
             LoadError::TooMany => "more cars on the stick than the list holds",
             LoadError::NameTooLong => "car asset name is too long",
             LoadError::Format(e) => e.message(),
+            LoadError::Damaged => "the cars packed in the EBOOT are damaged; copy it again",
         }
     }
 }
 
-/// Reads what cars are on the stick, without opening one.
+/// Reads what cars there are, without opening one.
 ///
 /// This is what makes a car a file rather than a build: dropping one onto the memory stick adds it
 /// to the game. Nothing here knows what cars exist, and boot does not get slower for finding more
-/// of them — a directory walk is all it is, so a stick with fifty cars costs what a stick with
-/// seven does.
+/// of them — a directory walk or one read of an index is all it is, so fifty cars cost what seven
+/// do.
 ///
-/// Anything wrong with the stick is left in `fault` rather than returned, because it is not news
-/// that goes stale: an empty `CARS/` at boot is an empty `CARS/` all session, and the title screen
-/// is the only thing that ever wanted to know.
+/// The EBOOT is asked first. If it carries cars, those are the cars, and `DIR` is not looked at: a
+/// release is what it shipped with, and a leftover development `CARS/` on the same stick should not
+/// quietly change it. If it carries none, this is a development build and `DIR` is the list.
+///
+/// Anything wrong is left in `fault` rather than returned, because it is not news that goes stale:
+/// an empty `CARS/` at boot is an empty `CARS/` all session, and the title screen is the only thing
+/// that ever wanted to know.
 pub fn scan() {
+    match scan_bundle() {
+        Err(bundle::Error::Absent) | Err(bundle::Error::NotAPbp) => scan_dir(),
+        // A bundle that is there but cannot be read offers no cars, not some of them.
+        Err(_) => unsafe {
+            CATALOGUE = Catalogue::EMPTY;
+            SCAN_FAULT = Some(LoadError::Damaged);
+        },
+        Ok(()) => {}
+    }
+}
+
+/// Lists the cars packed into the running EBOOT. `Absent` when there are none, which is not a
+/// fault: it is what every build but a release looks like.
+fn scan_bundle() -> Result<(), bundle::Error> {
+    unsafe {
+        let fd = sys::sceIoOpen(EBOOT.as_ptr(), IoOpenFlags::RD_ONLY, 0o777);
+        if fd.0 < 0 {
+            return Err(bundle::Error::Absent);
+        }
+        let result = read_index(fd);
+        sys::sceIoClose(fd);
+        let (psar, len, index) = result?;
+
+        let bytes: &[u8] = &*(&raw const INDEX);
+        let parsed = Index::parse(&bytes[..index], len)?;
+        let cat = &mut *(&raw mut CATALOGUE);
+        for i in 0..parsed.len() {
+            // The index was checked against the same limits the catalogue has, so neither of its
+            // errors can happen here — but if one did, it is a damaged bundle, not a missing car.
+            cat.insert(parsed.name(i)).map_err(|_| bundle::Error::BadEntry)?;
+        }
+        if cat.is_empty() {
+            SCAN_FAULT = Some(LoadError::Missing);
+        }
+        SOURCE = Source::Bundle { psar, len, index };
+    }
+    Ok(())
+}
+
+/// Reads the bundle's index out of the EBOOT into `INDEX`: where the bundle starts, how long it is,
+/// and how much of the index was read.
+unsafe fn read_index(fd: SceUid) -> Result<(usize, usize, usize), bundle::Error> {
+    let mut header = [0u8; bundle::PBP_HEADER_BYTES];
+    let got = sys::sceIoRead(fd, header.as_mut_ptr() as *mut _, header.len() as u32);
+    if got != header.len() as i32 {
+        return Err(bundle::Error::NotAPbp);
+    }
+    let psar = bundle::psar_offset(&header)?;
+    let end = sys::sceIoLseek(fd, 0, IoWhence::End);
+    if end <= psar as i64 {
+        return Err(bundle::Error::Absent);
+    }
+    let len = (end - psar as i64) as usize;
+    let want = len.min(bundle::INDEX_MAX);
+    if sys::sceIoLseek(fd, psar as i64, IoWhence::Set) != psar as i64 {
+        return Err(bundle::Error::Truncated);
+    }
+    let buf = &mut *(&raw mut INDEX);
+    let got = sys::sceIoRead(fd, buf.as_mut_ptr() as *mut _, want as u32);
+    if got < 0 {
+        return Err(bundle::Error::Truncated);
+    }
+    Ok((psar, len, got as usize))
+}
+
+/// Lists the loose cars in `DIR`.
+fn scan_dir() {
     let mut dir = [0u8; PATH_MAX];
     // sceIoDopen wants the directory without its trailing slash.
     let trimmed = &DIR[..DIR.len() - 1];
@@ -217,6 +324,15 @@ pub fn scan() {
             fault = fault.or(Some(LoadError::Missing));
         }
         SCAN_FAULT = fault;
+    }
+}
+
+/// Where to tell a player to put cars, when there are none: `DIR` for a build that reads it, and
+/// nothing for a release, whose cars are in its EBOOT and cannot be added to by copying a file.
+pub fn hint() -> Option<&'static str> {
+    match unsafe { SOURCE } {
+        Source::Dir => Some(DIR),
+        Source::Bundle { .. } => None,
     }
 }
 
@@ -308,29 +424,14 @@ fn start(index: usize, show: bool) -> Result<bool, LoadError> {
             return Ok(true);
         }
 
-        let mut path = [0u8; PATH_MAX];
         let name = match (*(&raw const CATALOGUE)).get(index) {
             Some(entry) => entry.name(),
             None => return fail(LoadError::Missing),
         };
-        let written = match join(&mut path, DIR, name) {
-            Ok(n) => n,
+        let (fd, size) = match open(name) {
+            Ok(opened) => opened,
             Err(e) => return fail(e),
         };
-
-        let fd = sys::sceIoOpen(path[..written].as_ptr(), IoOpenFlags::RD_ONLY, 0o777);
-        if fd.0 < 0 {
-            return fail(LoadError::Missing);
-        }
-        // Measured here rather than taken from the directory entry, because this is the number the
-        // reads are counted against and it has to come from the handle they are counted on.
-        let size = sys::sceIoLseek(fd, 0, IoWhence::End);
-        sys::sceIoLseek(fd, 0, IoWhence::Set);
-        if size <= 0 {
-            sys::sceIoClose(fd);
-            return fail(LoadError::Short);
-        }
-        let size = size as usize;
         if size > SLOT_BYTES {
             sys::sceIoClose(fd);
             return fail(LoadError::NoRoom);
@@ -355,6 +456,47 @@ fn start(index: usize, show: bool) -> Result<bool, LoadError> {
         // blinks out of the lay-by for a sixtieth of a second on its way to being one. The
         // silhouette lives at the front of the file, so this read is what puts it in memory.
         Ok(read(CHUNK_BYTES))
+    }
+}
+
+/// Opens car `name` wherever this build keeps cars, positioned at its first byte, and says how many
+/// bytes it is.
+unsafe fn open(name: &[u8]) -> Result<(SceUid, usize), LoadError> {
+    match SOURCE {
+        Source::Dir => {
+            let mut path = [0u8; PATH_MAX];
+            let written = join(&mut path, DIR, name)?;
+            let fd = sys::sceIoOpen(path[..written].as_ptr(), IoOpenFlags::RD_ONLY, 0o777);
+            if fd.0 < 0 {
+                return Err(LoadError::Missing);
+            }
+            // Measured here rather than taken from the directory entry, because this is the number
+            // the reads are counted against and it has to come from the handle they are counted on.
+            let size = sys::sceIoLseek(fd, 0, IoWhence::End);
+            sys::sceIoLseek(fd, 0, IoWhence::Set);
+            if size <= 0 {
+                sys::sceIoClose(fd);
+                return Err(LoadError::Short);
+            }
+            Ok((fd, size as usize))
+        }
+        Source::Bundle { psar, len, index } => {
+            // Checked at `scan`; parsing it again is a walk over at most 128 entries, and keeps
+            // no second copy of what it says.
+            let bytes: &[u8] = &*(&raw const INDEX);
+            let parsed = Index::parse(&bytes[..index], len).map_err(|_| LoadError::Damaged)?;
+            let span = parsed.find(name).ok_or(LoadError::Missing)?;
+            let fd = sys::sceIoOpen(EBOOT.as_ptr(), IoOpenFlags::RD_ONLY, 0o777);
+            if fd.0 < 0 {
+                return Err(LoadError::Missing);
+            }
+            let at = (psar + span.offset) as i64;
+            if sys::sceIoLseek(fd, at, IoWhence::Set) != at {
+                sys::sceIoClose(fd);
+                return Err(LoadError::Short);
+            }
+            Ok((fd, span.size))
+        }
     }
 }
 

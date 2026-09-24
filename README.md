@@ -21,12 +21,12 @@ archive is already in the place it belongs:
 
 ```
 PSP/GAME/AngleZero/EBOOT.PBP
-PSP/GAME/AngleZero/CARS/*.azcar
 ```
 
-The cars are separate files rather than being built into the EBOOT, so adding one later is copying
-a file into `CARS/` — no rebuild, and the title screen offers it with D-pad Left/Right. Put as many in there as
-the stick will hold: only the car on screen is in memory, and it is read in as you pick it.
+Every car is packed inside that EBOOT, so the folder can go anywhere under `PSP/GAME` — a category
+folder made by Category Lite and the like, or a PSP Go's internal storage — and the cars go with it.
+They are not loaded with the game: only the car on screen is in memory, and it is read in as you
+pick it.
 
 Then it appears under Game → Memory Stick.
 

@@ -11,6 +11,7 @@ extern crate std;
 
 pub mod audio;
 pub mod azcar;
+pub mod bundle;
 pub mod camera;
 pub mod catalogue;
 pub mod effects;

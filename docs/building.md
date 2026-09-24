@@ -105,4 +105,12 @@ The archive holds a single file:
 PSP/GAME/AngleZero/EBOOT.PBP
 ```
 
-Unzip it at the root of a memory stick and the game is where the XMB looks for it.
+Unzip it at the root of a memory stick and the game is where the XMB looks for it. Every car in
+`assets/compiled/` is packed into that EBOOT's `DATA.PSAR` by `anglezero-asset bundle`, which checks
+each one with the console's own parser first, so the folder can be moved anywhere under `PSP/GAME` —
+a category folder, a PSP Go's internal storage — and its cars go with it. `DATA.PSAR` is never
+loaded; the game reads a car out of it a chunk at a time, the same as a loose file.
+
+A build that carries no cars — anything straight out of `cargo psp`, devtools or not — reads loose
+`.azcar` files from `ms0:/PSP/GAME/AngleZero/CARS/` instead, so during development a recompiled car
+is one file copied and no rebuild. A release never looks there.

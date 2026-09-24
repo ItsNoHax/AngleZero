@@ -414,8 +414,8 @@ fn draw_title(game: &Game) {
         let has_car = super::car::current().is_some();
         let y = if has_car { 226.0 } else { 200.0 };
         text::draw_centered(fault.message().as_bytes(), SCREEN_W * 0.5, y, 1.0, WARN);
-        if !has_car {
-            text::draw_centered(super::car::DIR.as_bytes(), SCREEN_W * 0.5, 212.0, 1.0, DIM);
+        if let (false, Some(hint)) = (has_car, super::car::hint()) {
+            text::draw_centered(hint.as_bytes(), SCREEN_W * 0.5, 212.0, 1.0, DIM);
         }
     }
 }

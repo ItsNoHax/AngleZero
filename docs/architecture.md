@@ -32,8 +32,9 @@ covers the nearest-node queries that containment, gravity and scoring all go thr
 one that merely handles badly.
 
 Loading a car is split along the same line. `src/catalogue.rs` decides what cars exist and in what
-order they are offered, `src/stream.rs` counts the chunks a load arrives in, and `src/psp/car.rs` is
-left holding nothing but the file handle and the arena. The first two are tested on the host with no
+order they are offered, `src/stream.rs` counts the chunks a load arrives in, `src/bundle.rs` reads
+the index of the cars a release packs into its EBOOT, and `src/psp/car.rs` is left holding nothing
+but the file handle and the arena. The first two are tested on the host with no
 memory stick anywhere near them, which is how the sort order, the naming and the last-chunk
 arithmetic are checked at all.
 
