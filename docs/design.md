@@ -1,71 +1,44 @@
-# Angle Zero — the idea
+# Design
 
-The starting point. Everything in the repository grew out of this; where the two disagree, the
-code is right and this is a record of the intent.
+The intent behind the game. Where this and the code disagree, the code is authoritative.
 
-## The game
+## Concept
 
-One car, one road, one run. You start at the top of a mountain pass at night and drive to the
-bottom. There is nobody to race and nothing to collect. The whole game is the road and how you
-take it.
+One car, one road, one run. Start at the top of a mountain pass at night and drive to the bottom.
+No opponents, no traffic, nothing to collect.
 
-The road is **Sekira Pass**: about three and a half kilometres of switchbacks dropping some
-hundred and seventy metres, with ten or so hairpins tight enough to need a deliberate slide. It is
-generated from a short list of turns rather than shipped as a model, so it costs nothing to store
-and is identical every run.
+**Sekira Pass** is roughly 3.5 km of switchbacks with ~170 m of descent and around ten hairpins.
+It is generated at boot from a list of turns, so it costs no storage and is identical every run.
 
-## What makes it work
+## Rules
 
-**Gravity drives.** The car accelerates downhill with no throttle at all. Going fast is not the
-problem; the problem is arriving at the next corner in a state you can do something about. That
-one decision sets the pace of everything else — it is a descent, not a lap.
+- **Gravity drives.** The car accelerates downhill without throttle. The challenge is arriving at
+  each corner in a controllable state.
+- **Sliding scores.** Points accrue while sliding, scaled by angle and speed. Sustained slides
+  build a multiplier; touching a guard rail resets it.
+- **Recovery is free.** Spinning out, facing the wrong way or getting stuck puts the car back on
+  the road facing downhill. The combo is lost, the run is not.
 
-**Sliding is the point, not a mistake.** Points come from holding a slide: the further sideways
-and the faster, the better. A sustained slide builds a multiplier. Brushing a guard rail takes it
-away. So the rails are not scenery, they are the thing standing between you and the score, and
-the interesting line is the one that runs closest to them.
+## Look
 
-**Recovery is never punished twice.** Spin, face the wrong way, or grind along a barrier and the
-game puts you back on the road facing downhill. You lose the combo, not the run.
+Late, cold, sparse: headlights, sodium lamps, a moon over a ridge. The palette is near-black —
+deep blue sky, dark tarmac, dark green hillside — so warm lamps and red tail lights carry the
+scene.
 
-## How it should feel
+The world is flat-shaded and untextured, rendered at the native 480 × 272 with no antialiasing.
+Cars are textured models compiled offline from third-party sources (see [Cars](cars.md)).
 
-Late, cold and a little lonely. Headlights, sodium lamps, a moon over a ridge, and not much else.
-The palette is nearly black — deep blues in the sky, near-black tarmac, dark green hillside — so
-the warm lights and the red tail lamps are the only things that carry.
+## Constraints
 
-Everything is deliberately low-fidelity: flat-shaded blocks, no textures on the world, hard pixel
-edges, no antialiasing, rendered at the console's own 480 × 272 and not a pixel more. The car is
-about thirty boxes. It should look like something that could have shipped on the hardware, not
-like a modern game running on it.
+- **333 MHz CPU, fixed-function GPU.** World lighting is baked into vertices at boot.
+- **480 × 272.** The track mesh is much coarser than the physics representation.
+- **Fog at a few hundred metres**, which bounds what is submitted each frame.
+- **Fixed 1/120 s physics step**, so handling is independent of frame rate.
+- **Testable without the console.** Game logic has no PSP dependency; see
+  [Architecture](architecture.md).
 
-## The constraints that shaped it
+## Out of scope
 
-Written for a **PSP**, which means:
+Opponents, traffic, tuning, progression. Car selection exists, but every car runs the same road.
 
-- A 333 MHz CPU and a fixed-function GPU, so lighting is baked into the geometry at boot and
-  nothing is lit at runtime.
-- 480 × 272, so fine detail is wasted effort; the track mesh is far coarser than the physics.
-- Fog at a few hundred metres, which lets most of the world go unsubmitted every frame.
-- Physics on a fixed 1/120 s step, so the handling does not change with frame rate.
-
-The self-imposed one: **the game must be testable without the console.** Track generation,
-physics, scoring, the camera and the screen flow are ordinary Rust with no PSP dependency, and
-only the shell that draws and reads the pad needs hardware. See
-[architecture.md](architecture.md).
-
-## Controls
-
-| | |
-|---|---|
-| Throttle | ✕ |
-| Brake | ▢ or Down |
-| Handbrake | ○ |
-| Steer | D-pad, or the nub |
-| Back on the road | △ |
-
-## What was left out
-
-No opponents, no traffic, no car selection, no tuning, no progression, no menus beyond a title and
-a results screen. Each of those is a good idea for a different game. This one is a road, a car,
-and one run down.
+Controls are listed in [Building and running](building.md#controls).

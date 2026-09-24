@@ -24,7 +24,7 @@ source = "bmw_e39_free.glb"
 #
 # `Object_33` needs about 11,000 triangles before the recess survives. 24,000 gave it 5,170 and
 # 32,000 with the body weight below gives it 11,293. The file goes 736 KB to 861 KB, which the arena
-# has room for and which `docs/cars.md` records.
+# has room for.
 triangles = 32000
 lods = [3000, 1200]
 

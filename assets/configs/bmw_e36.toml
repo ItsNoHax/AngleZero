@@ -27,7 +27,7 @@ source = "bmw_3-series_e36.glb"
 #
 # 24,000 rather than the 30,000 those two first needed, because `simplify.rs` no longer lets the
 # free-error pass flatten a small part — which was costing more detail than the budget was. See
-# `docs/cars.md`, "Why the budget is 24,000 and not 15,000".
+# "Error threshold" in `docs/cars.md`.
 triangles = 24000
 
 # No `[handling]` table on purpose. The descent was tuned around a 1420 kg saloon and this is that

@@ -77,8 +77,8 @@ match, and the models are not in git — and `convert` refuses to run if it disa
 it was handed.
 
 Add nothing else yet. Every other key exists to fix a specific fault, and adding them speculatively
-means you cannot tell which one did what. `docs/cars.md` under **The config** has the full set, and
-the sections after it are organised by symptom.
+means you cannot tell which one did what. `docs/cars.md` under **Configuration** has the full set, and
+**Troubleshooting** is organised by symptom.
 
 ## 4. Convert
 
@@ -131,7 +131,7 @@ the early ones invalidate the later ones:
 | Any holes into the cabin, or surfaces lit from inside? | run again with `--no-cull`; what appears is what culling throws away |
 | Is the glass glass, are the lamps lamps? | `[[materials.category]]`, but see below |
 | Is anything a colour it should not be? | `[[materials.colour]]` |
-| Does the silhouette read as this car — wheels, roofline, no wedge? | `silhouette` budget; see **Silhouettes** in `docs/cars.md` |
+| Does the silhouette read as this car — wheels, roofline, no wedge? | `silhouette` budget; see **Silhouette** in `docs/cars.md` |
 
 For that last row there is a measurement rather than a judgement, and it is worth running on every
 car because the ways a silhouette goes wrong are not the ways you notice by looking at one:
@@ -192,8 +192,8 @@ Keep going until the car is right. A fault that resists three attempts is not a 
 is a sign that the attempts were guesses and the ladder above has not been climbed. Work it out.
 
 The only honest reason to stop short is a fault that **cannot be fixed from the config at all** —
-the model itself is broken or needs geometry edited, which `docs/cars.md` covers under **When the
-model is wrong about a material**. If that happens, say exactly which part, what is wrong with it,
+the model itself is broken or needs geometry edited, which `docs/cars.md` covers under
+**Troubleshooting**. If that happens, say exactly which part, what is wrong with it,
 what you measured, and which rung of the ladder you got to. "I tried three things" is not that.
 
 Stopping *polishing*, though, is different and is worth doing early. Once the car reads correctly

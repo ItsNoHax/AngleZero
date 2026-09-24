@@ -1,108 +1,118 @@
 # Building and running
 
-Everything needed to get a build onto a PSP or into an emulator.
-
 ## Requirements
 
 | Tool | Purpose |
 |---|---|
-| Rust nightly + `rust-src` | Pinned by [`rust-toolchain.toml`](../rust-toolchain.toml); rustup installs it automatically |
-| [`cargo-psp`](https://github.com/overdrivenpotato/rust-psp) | Builds the `EBOOT.PBP` / `.prx` |
+| Rust nightly + `rust-src` | Pinned in [`rust-toolchain.toml`](../rust-toolchain.toml) (≥ 2026-05-30, required by the `psp` crate) |
+| [`cargo-psp`](https://github.com/overdrivenpotato/rust-psp) | Builds `EBOOT.PBP` and `.prx` |
 | PPSSPP (Flatpak) | Interactive runs |
-| `PPSSPPHeadless` | Scripted screenshot capture with no window (see below) |
+| `PPSSPPHeadless` | Scripted screenshots; see [Diagnostics](diagnostics.md#headless-screenshots) |
 
 ```bash
 rustup component add rust-src
 cargo install cargo-psp
 ```
 
-The nightly channel is pinned in `rust-toolchain.toml`. The `psp` crate requires nightly ≥ 2026-05-30.
-
 ## Building
 
 ```bash
-cargo psp
+cargo psp                      # debug
+cargo psp --release            # use this for hardware: smaller and ~5× faster per frame
+cargo psp --features devtools  # on-device diagnostics, see Diagnostics
 ```
 
-Artifacts land in `target/mipsel-sony-psp/debug/`:
+Output in `target/mipsel-sony-psp/<profile>/`:
 
-- `angle-zero.EBOOT.PBP` — what a real PSP or the PPSSPP GUI runs
-- `angle-zero.prx` — what `PPSSPPHeadless` runs
+| File | Used by |
+|---|---|
+| `angle-zero.EBOOT.PBP` | PSP, PPSSPP GUI |
+| `angle-zero.prx` | `PPSSPPHeadless` |
 
-Use `cargo psp --release` for hardware: it is a fraction of the size, since the debug artifact is
-mostly debug info, and about five times quicker per frame.
+The workspace also contains the host-only car compiler, `tools/anglezero-asset`. It is not a
+default member, so `cargo psp` never builds it. Use `-p anglezero-asset` or `--workspace`.
 
-Add `--features devtools` for the on-device diagnostics and the headless screenshot hook. It is off
-by default, so a shipping build carries neither — see
-[Inspecting it on real hardware](#inspecting-it-on-real-hardware).
+### Features
 
-The build prints `rust-lld: ... linking abicalls code with non-abicalls code` and
-`relocation refers to a discarded section` warnings. These are a known upstream issue
-([rust-psp#203](https://github.com/overdrivenpotato/rust-psp/issues/203)) — recent Rust nightlies
-stopped suppressing pre-existing linker noise on this target. The output runs correctly. They are
-deliberately *not* silenced with `#![allow(linker_messages)]`, so that genuine linker problems stay
-visible.
+| Feature | Effect |
+|---|---|
+| `devtools` | Debug overlay, render-mode overrides, SELECT-to-capture, headless screenshot hook |
+| `harness` | Deterministic scripted run for the glitch hunt. Implies `devtools`. Ignores the controller; never ship |
 
-## Running interactively
+### Linker warnings
+
+The build prints `linking abicalls code with non-abicalls code` and `relocation refers to a
+discarded section`. These are a known upstream issue
+([rust-psp#203](https://github.com/overdrivenpotato/rust-psp/issues/203)) and harmless. They are
+intentionally not silenced so real linker problems stay visible.
+
+## Testing
 
 ```bash
+cargo test               # game crate
+cargo test --workspace   # game crate and asset compiler
+```
+
+## Running in PPSSPP
+
+```bash
+flatpak override --user --filesystem="$PWD" org.ppsspp.PPSSPP   # once, so the sandbox can read the build
 flatpak run org.ppsspp.PPSSPP "$PWD/target/mipsel-sony-psp/debug/angle-zero.EBOOT.PBP"
 ```
 
-The Flatpak sandbox cannot read arbitrary paths by default. Grant it access to this project once:
+Cars are always read from `ms0:/PSP/GAME/AngleZero/CARS/`, wherever the EBOOT is. Copy them into
+the emulator's memory stick directory:
 
 ```bash
-flatpak override --user --filesystem="$PWD" org.ppsspp.PPSSPP
+MS=~/.var/app/org.ppsspp.PPSSPP/config/ppsspp   # Flatpak default; adjust for other installs
+mkdir -p "$MS/PSP/GAME/AngleZero/CARS"
+cp assets/compiled/*.azcar "$MS/PSP/GAME/AngleZero/CARS/"
 ```
 
-Without this, PPSSPP fails to load the EBOOT and you would have to copy it into the emulator's
-memory-stick directory instead.
+Without cars the game still runs and says so on the title screen.
 
 ## Controls
 
 | Action | Button |
 |---|---|
-| Throttle | ✕ (or D-pad Up) |
-| Brake | □ (or D-pad Down) |
+| Throttle | ✕ or D-pad Up |
+| Brake | □ or D-pad Down |
 | Handbrake | ○ |
-| Steer | D-pad Left/Right, or the analog nub |
-| Look at the front of the car | △ (held) |
-| Pause menu | START |
-| Start run | ✕ |
-| Change car, on the title screen | D-pad Left/Right |
-| From the results: run again / change car | ✕ / □ |
+| Steer | D-pad Left/Right or analog nub |
+| Look at the front of the car | △ (hold) |
+| Pause | START |
 
-Changing car reads that car's file off the memory stick, which takes a moment: its silhouette
-stands in the lay-by with a progress bar under its name until the whole of it has arrived. Pressing
-✕ during that reads the rest at once and starts the run, so the wait is only ever paid by somebody
-who is still browsing.
+| Screen | Button | Action |
+|---|---|---|
+| Title | D-pad Left/Right | Change car |
+| Title | ✕ | Start run |
+| Pause | D-pad Up/Down, ✕ | Continue / Restart / Select another car |
+| Pause | START | Resume |
+| Results | ✕ | Run again |
+| Results | □ | Back to title |
 
-The pause menu offers Continue, Restart and Select another car; D-pad Up/Down choose and ✕ confirms,
-and START closes it again the way it opened it. Holding △ swings the chase camera round to look back
-at the car's nose — the same pose it takes by itself when the car is reversing — and letting go
-swings it back behind.
+A newly selected car streams in over a few frames; its silhouette and a progress bar stand in until
+it arrives. Pressing ✕ during the load finishes it immediately.
 
-Best time, score and combo persist to `ms0:/PSP/SAVEDATA/ANGLEZERO/RECORD.BIN` and show on the
-title and results screens.
+Best time, score and combo are saved to `ms0:/PSP/SAVEDATA/ANGLEZERO/RECORD.BIN`.
 
-## Cutting a release
+## Releasing
 
 ```bash
-scripts/release.sh
+scripts/release.sh          # version from Cargo.toml
+scripts/release.sh 0.4.0    # explicit version
 ```
 
-Builds without `devtools`, runs the tests, and writes `dist/AngleZero.<version>.zip`. The version
-comes from `Cargo.toml` unless you pass one (`scripts/release.sh 0.2.0`).
+The script:
 
-Before it packages anything it greps the built `.prx` for strings that only exist when `devtools`
-is on — the render-mode labels, `ms0:/ANGLEZERO/`, the diagnostic filenames — and refuses to
-continue if it finds any. "Off by default" is a promise the build makes, not one it checks, and a
-release carrying the capture tooling and debug overlay would be easy to produce by accident.
-
-The archive holds a single file:
+1. Builds `--release` without `devtools`.
+2. Runs `cargo test`.
+3. Refuses to continue if the `.prx` contains devtools-only strings (`ms0:/ANGLEZERO/`, render-mode
+   labels, diagnostic filenames).
+4. Refuses to continue if `assets/compiled/` has no cars.
+5. Writes `dist/AngleZero.<version>.zip`:
 
 ```
 PSP/GAME/AngleZero/EBOOT.PBP
+PSP/GAME/AngleZero/CARS/*.azcar
 ```
-
-Unzip it at the root of a memory stick and the game is where the XMB looks for it.

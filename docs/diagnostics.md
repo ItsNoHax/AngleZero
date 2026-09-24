@@ -1,71 +1,102 @@
 # Diagnostics
 
-Getting evidence off the console, and out of a headless emulator.
+Tooling for faults that only appear on hardware, and for reproducible captures under emulation.
+All of it is behind the `devtools` feature, which is off by default and rejected by
+`scripts/release.sh`.
 
-## Inspecting it on real hardware
-
-The diagnostics live behind the `devtools` feature, which is **off by default** — a shipping build
-carries none of it, and does not sit there issuing an emulator devctl twice a second. Build with it
-when you need it:
+## On-device
 
 ```bash
 cargo psp --release --features devtools
 ```
 
-A feature rather than `debug_assertions`, because this tooling is most useful *on hardware*, and
-hardware builds are release builds: the debug binary is 7.6 MB against 460 KB.
+Use a release build: hardware faults are what this is for, and the debug binary is ~7.6 MB.
 
-PPSSPP's software rasteriser is far more forgiving than the GE — no cache, no 16-bit depth buffer,
-no display list to overrun — so some faults only appear on a PSP. With the feature on, the game
-captures its own evidence:
+### Controls
 
-- **R** toggles a counter readout. (START used to, and now opens the pause menu instead.)
-- **SELECT** writes the current frame and those counters to `ms0:/ANGLEZERO/`.
+| Button | Action |
+|---|---|
+| R | Toggle the counter overlay |
+| L | Cycle render mode (see [Render modes](#render-modes)) |
+| SELECT | Capture frame + counters to `ms0:/ANGLEZERO/`. Hold for a burst (every 4th frame) |
 
-Put the PSP into USB mode (Settings → USB Connection) and run:
+### Retrieving captures
+
+Put the PSP in USB mode (**Settings → USB Connection**), then:
 
 ```bash
-scripts/psp_pull.sh
+scripts/psp_pull.sh [dest]   # default: captures/
 ```
 
-It finds the memory stick, converts the frames to PNG in `captures/`, and prints the counters.
+Frames are converted to PNG and the counters are printed.
 
-`SCF` is the field to watch: refused vertex-arena allocations. Any non-zero value means draws were
-silently dropped, and it turns red. `LST` is display-list bytes against the 1 MB buffer. Together
-they distinguish the two silent failure modes — an exhausted arena and an overrun list — which both
-look like flickering geometry rather than like an error.
+### Counters
 
-The title screen carries a line of its own, top-left, because it is the only screen that loads a
-car: `RD PK` is the longest a single chunk read has taken, in microseconds, and `ARENA` is how much
-of the residency slots hold a car. Press L or R and watch `RD PK`. That number is what
-`CHUNK_BYTES` in [`src/psp/car.rs`](../src/psp/car.rs) is chosen against, and it is the one
-measurement that **cannot** be taken under the emulator — headless reads a car off a host
-filesystem, so every chunk size looks free there.
+| Field | Meaning |
+|---|---|
+| `US`, `AVG`, `PK` | Frame time in µs: current, rolling average, peak (after the first 90 frames) |
+| `LST` | Display-list bytes used, of 1 MB |
+| `SCR` | Peak frame-arena use |
+| `SCF` | Refused frame-arena allocations. Non-zero (shown red) means draws were dropped |
+| `CAR` | Car draw calls |
+| `LMP`, `BM` | Lamp glows and headlight beams submitted |
+| `SK`, `SM` | Live skid marks and smoke puffs |
+| `SHOT` | Frames captured this session |
 
-On the console this repo is developed against it reads **4,438 µs, consistently**, for a 32 KB
-chunk: 7.4 MB/s, about 27% of a 60 Hz frame, and a car on screen in some 29 frames. Anything past
-about 16,000 would be a chunk that costs a whole frame on its own. The figure being steady matters
-as much as its size — one that wandered would mean seeks, and a worst case that an average hides.
+The title screen adds a line top-left:
 
-Worth re-taking on a different stick, and worth taking again if `CHUNK_BYTES` is ever changed.
-`ARENA` beside it should sit at one car and never climb however many are cycled through; if it
-climbs, residency is leaking.
+| Field | Meaning |
+|---|---|
+| `RD PK` | Longest single chunk read while loading a car, in µs |
+| `ARENA` | Car arena in use / total, in KB |
+
+An exhausted arena (`SCF`) and an overrun list (`LST`) both present as flickering geometry, not as
+an error.
+
+`RD PK` can only be measured on hardware (the emulator reads from the host filesystem). It is the basis for `CHUNK_BYTES` in `src/psp/car.rs` (32 KB).
+Reference: **4,438 µs** per 32 KB chunk, consistently (~7.4 MB/s, 27 % of a 60 Hz frame, a full car
+in ~29 frames). Values above ~16,000 µs mean a chunk costs a whole frame; unstable values suggest
+seeks. Re-measure on a different stick or after changing `CHUNK_BYTES`. `ARENA` must stay at one car
+while cycling cars; growth means residency is leaking.
+
+### Render modes
+
+| Mode | Effect |
+|---|---|
+| 0 | Normal |
+| 1 | No culling |
+| 2 | No depth test |
+| 3 | No fog |
+| 4 | No culling, depth or fog |
+| 5 | No sky |
+| 6 | Road only |
+| 7 | Terrain only |
+| 8 | No HUD |
+| 9 | No headlight beams |
+| 10 | No lamp glows |
+| 11 | No effects |
+| 12 | No roadside light pools |
+| 13 | Four different cars (benchmark) |
+| 14 | Eight different cars (benchmark) |
+| 15 | Every lamp on every car lit |
+
+Modes 1–12 each remove one suspect: if the fault disappears, that is the cause. Removing a pass and
+diffing against mode 0 also shows exactly what that pass paints. Modes 13–14 load extra cars into
+spare arena slots (a stall of about a second) so that switching between models is part of the
+measurement. Mode 15 checks that a new car's lamps sit on the right panels.
 
 ## Headless screenshots
 
-`PPSSPPHeadless` boots a `.prx` and renders with a deterministic software rasteriser. No window, no
-X server, no GPU.
+`PPSSPPHeadless` runs a `.prx` with a deterministic software rasteriser: no window, X server or GPU.
 
-Capture is **pull-based**: `--screenshot-save` only writes a file when the emulated program asks it
-to, by calling `sceIoDevctl("emulator:", 0x20, ...)` — `EMULATOR_DEVCTL__EMIT_SCREENSHOT`. That is
-the `emit_screenshot()` helper in [`src/psp/mod.rs`](../src/psp/mod.rs), called every 30 frames. On
-real hardware the devctl just fails harmlessly. Headless does **not** capture anything on its
-`--timeout` path, so a program that never emits produces no file at all.
+Capture is pull-based. `--screenshot-save` writes only when the guest calls
+`sceIoDevctl("emulator:", 0x20, …)`. A `devtools` build does this every 30 frames
+(`emit_screenshot()` in `src/psp/mod.rs`); on hardware the call fails harmlessly. Nothing is
+captured on `--timeout`.
 
-### One-time setup
+### Setup
 
-The PPSSPP Flatpak does not ship the headless binary, so build it from source. `PPSSPP_SRC` below is
-just where you want the checkout to live — pick anywhere:
+The Flatpak does not include the headless binary. Build it (~2 GB checkout, 15–30 min):
 
 ```bash
 export PPSSPP_SRC="$HOME/.local/src/ppsspp"
@@ -77,113 +108,79 @@ git clone --recurse-submodules --shallow-submodules --depth 1 \
 cd "$PPSSPP_SRC"
 cmake -B build-headless -G Ninja -DCMAKE_BUILD_TYPE=Release -DHEADLESS=ON -Wno-dev
 cmake --build build-headless --target PPSSPPHeadless -j"$(nproc)"
+
+export PPSSPP_HEADLESS="$PPSSPP_SRC/build-headless/PPSSPPHeadless"
 ```
 
-The checkout is ~2 GB and the build takes roughly 15–30 minutes. Two dependency gotchas: current
-PPSSPP requires **SDL3** (`libsdl3-dev`), not SDL2 — older build guides are out of date — and the
-bundled GLEW needs `GL/glu.h`, which is in `libglu1-mesa-dev`, *not* in `libgl1-mesa-dev`.
+Current PPSSPP requires SDL3, not SDL2. The bundled GLEW needs `GL/glu.h` from `libglu1-mesa-dev`.
 
-The commands below resolve the binary through `PPSSPP_HEADLESS`, so export it (in your shell profile
-if you want it to persist) or accept the default:
+### Capture a frame
 
 ```bash
-export PPSSPP_HEADLESS="${PPSSPP_SRC:-$HOME/.local/src/ppsspp}/build-headless/PPSSPPHeadless"
-```
-
-### Capturing a frame
-
-```bash
-"$PPSSPP_HEADLESS" \
-    --graphics=software \
-    --screenshot-save=/tmp/psp.bmp \
-    --timeout=15 \
+cargo psp --features devtools
+"$PPSSPP_HEADLESS" --graphics=software --screenshot-save=/tmp/psp.bmp --timeout=15 \
     target/mipsel-sony-psp/debug/angle-zero.prx
-```
-
-`--graphics=software` gives byte-identical output across runs, which makes screenshots suitable for
-regression comparison. `--timeout` is required for a program with an infinite main loop, otherwise
-headless never returns. Give it enough headroom to reach an emit — the software rasteriser is slow
-now that there is a real scene, and a debug build needs ~15 s to render the first 30 frames.
-
-The BMP is 512×272 — the framebuffer stride — with the right-hand 32 px unused. Crop to the visible
-480×272 while converting to PNG:
-
-```bash
 ffmpeg -y -i /tmp/psp.bmp -vf crop=480:272:0:0 -update 1 /tmp/psp.png
 ```
 
-### Capturing with a button held
+- `--graphics=software` gives byte-identical output across runs.
+- `--timeout` is required (the main loop never exits). A debug build needs ~15 s to reach its first
+  emit.
+- The BMP is 512 × 272 (framebuffer stride); crop to 480 × 272.
 
-Headless has no input device, but `--debugger=<port>` starts PPSSPP's WebSocket debugger, whose
-`input.buttons.send` call routes into the same `__CtrlUpdateButtons` HLE path real input uses. So
-the guest genuinely sees the press. [`scripts/psp_input.py`](../scripts/psp_input.py) wraps this and
-has no third-party dependencies:
+### Capture with buttons held
+
+`--debugger=<port>` enables PPSSPP's WebSocket debugger. `scripts/psp_input.py` (no dependencies)
+sends `input.buttons.send`, which the guest sees as real input:
 
 ```bash
-"$PPSSPP_HEADLESS" \
-    --graphics=software --debugger=9333 \
+"$PPSSPP_HEADLESS" --graphics=software --debugger=9333 \
     --screenshot-save=/tmp/cross.bmp --timeout=16 \
     target/mipsel-sony-psp/debug/angle-zero.prx &
-python3 scripts/psp_input.py 9333 cross
+python3 scripts/psp_input.py 9333 cross          # several allowed: cross circle left
 ```
 
-It accepts several buttons at once (`psp_input.py 9333 cross circle left`). The script holds them
-until killed, which matters: `--screenshot-save` is overwritten by every emit, so releasing early
-lets a later idle frame replace the held one. Let headless reach its own `--timeout` with the
-buttons still down. `--debugger` also implies `startBreak`, so the script sends `cpu.resume` before
-pressing anything.
+The script resumes the CPU (`--debugger` starts paused) and holds the buttons until killed. Let
+headless hit its timeout with the buttons still held, or a later idle frame overwrites the capture.
 
-Claude Code users: the `/psp-preview` skill wraps this whole flow.
+The `/psp-preview` Claude Code skill wraps this flow.
 
-## Hunting flicker automatically
+## Glitch hunting
 
-A single screenshot cannot show flicker: the artifact only exists as a difference between consecutive
-frames. `--screenshot-save` overwrites one file, so it cannot show it either.
+Flicker exists only between consecutive frames, which a single screenshot cannot show. The
+`harness` feature makes a run deterministic:
 
-The `harness` feature turns a run into something comparable frame to frame. It fixes the frame delta
-at 1/60 s, so nothing depends on the clock or on how long the host took to write the last capture;
-replays input from a script keyed to the frame counter rather than to wall-clock seconds; captures
-*consecutive* frames rather than every fourth; and exits when its script is done. Nothing else in the
-game reads a clock or a random number, so two runs of the same script are byte-identical — which is
-what makes a before/after comparison mean anything.
+- fixed 1/60 s frame delta;
+- input replayed from a script keyed to frame number;
+- consecutive frames captured to `ms0:/ANGLEZERO/`;
+- exits when the script ends.
+
+Two runs of the same script are byte-identical.
 
 ```bash
 scripts/psp_glitch.py --node 1200 --burst 60 --frames 40 --label hairpin
 ```
 
-About ten seconds end to end. It builds, runs headless, harvests the frames the guest wrote to
-`ms0:/ANGLEZERO/` (a host directory under headless), and reports two independent things:
+| Option | Effect |
+|---|---|
+| `--burst N` | Frame at which capture starts (default 400) |
+| `--frames N` | Consecutive frames to capture (default 40) |
+| `--hold 'F BUTTONS'` | Script line, repeatable, e.g. `--hold '90 x' --hold '400 xl'` |
+| `--node N` | Place the car at centreline node N (0–2620). Replaces the script, so `--hold` is ignored |
+| `--kph N` | Speed when placed with `--node` (default 90) |
+| `--mode N` | Run under a [render mode](#render-modes) |
+| `--label S` | Output directory under `captures/glitch/` |
+| `--no-build` | Reuse the existing build |
+| `--scan-only DIR` | Re-analyse an already harvested run |
 
-- **A pixel comparison.** A tile that differs from the frame before *and* the frame after, while
-  those two agree, is a one-frame blink. Two filters keep ordinary motion out of it: a shift search,
-  because a lamp post passing close by sweeps wider than itself in a frame and otherwise looks
-  exactly like a blink; and a bracket test, because a pixel in a smoothly moving scene stays between
-  what it was and what it will be, even when the motion is accelerating. Treat its output as leads,
-  not verdicts — it still flags the moment one lamp's pool hands over to the next.
-- **The draw tally**, from `trace.rs`. This one is exact, because it records the draw call rather
-  than its result: holes in the road and terrain chunk sets, any chunk set that blinked, a refused
-  vertex-arena allocation, a display list near its 1 MB buffer.
+Runs in about ten seconds and reports:
 
-When the two disagree, the tally wins. Identical masks and vertex counts across the frames either
-side of a blink is what tells you nothing was dropped and the fault is downstream of submission.
+- **Pixel comparison.** Flags tiles that differ from both neighbouring frames while those agree.
+  Shift search and bracket tests filter out ordinary motion. Treat results as leads.
+- **Draw tally** (from `src/psp/trace.rs`). Exact: missing road or terrain chunks, blinking chunk
+  sets, refused arena allocations, display list near capacity.
 
-`--node` drops the car anywhere on the centreline, so a corner two thirds of the way down can be
-looked at without driving there and surviving every corner in between. It *replaces* the input
-script rather than adding to it, so `--hold` is ignored whenever it is given — a run that has to be
-braking when the burst starts needs its `SCRIPT.TXT` written by hand. `--mode N` runs under a
-`render::DEBUG_MODES` override, which is how a cause gets narrowed down: run the same frames with one
-suspect removed and see whether the artifact survives. Modes 9 to 12 exist for exactly that — they
-drop the headlight beams, the car's lamp glows, the effects, and the roadside light pools, which all
-land on the road on top of each other.
+When they disagree, trust the tally. Identical masks and vertex counts on both sides of a blink mean
+nothing was dropped and the fault is downstream of submission.
 
-Removing a pass is also how to find out what it *paints*, which is a different question from whether
-it was submitted, and the more useful one. Both halves of the vehicle lighting were being submitted
-every frame — `LMP` and `BM` in the overlay, `lamps` and `beams` in the trace, all non-zero — while
-between them they lit under eight hundred pixels of a 480x272 screen: the beams were buried under
-the road they lay on, and the glows were inside the bodywork they belonged to. Diffing one
-deterministic frame at `--mode 9` and `--mode 10` against `--mode 0` said so exactly, one run each,
-after a good deal of staring at screenshots had not.
-
-Mode 15 is the odd one out: it adds rather than removes. Every lamp on every car burns at once and
-from both sides, whatever the driver is doing, which is how to check that a newly imported car's
-lamps came out on the panels they belong to.
+The `/psp-glitch` Claude Code skill wraps this flow.

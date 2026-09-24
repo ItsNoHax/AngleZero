@@ -1,45 +1,47 @@
 # Architecture
 
-How the crate is split, and why almost all of it can be tested without a PSP.
+Game logic is target-agnostic and tested on the host. Only a thin shell touches the PSP.
 
 ## Layout
 
-The crate is split so that almost all of the game can be tested on a normal machine:
-
-| Path | What it is |
+| Path | Contents |
 |---|---|
-| `src/*.rs` | `no_std`, target-agnostic game core — track, physics, scoring, camera, screen flow, HUD numbers, mesh building, and the car format, catalogue and load arithmetic. No PSP dependency. |
-| `src/psp/` | The PSP shell: GU bring-up, controller, renderer, 2D overlay. Only compiled for `target_os = "psp"`. |
-| `tools/anglezero-asset/` | The car asset compiler. A workspace member, and the game is the only default member, so `cargo psp` never tries to build glTF parsing for mipsel. See [Cars](cars.md). |
-| `tests/` | Host tests. Everything in `src/*.rs` is exercised here. |
-| `scripts/` | Music encoding, the glitch hunt, and pulling captures off a console. |
+| `src/*.rs` | `no_std` game core: track, vehicle physics, scoring, camera, screen flow, HUD values, mesh building, lighting, `.azcar` format, car catalogue, load streaming, save format |
+| `src/psp/` | PSP shell: GU setup, renderer, controller, audio, save I/O, car loading, diagnostics. Compiled only for `target_os = "psp"` |
+| `tools/anglezero-asset/` | Host-only car compiler and `azview` renderer. See [Cars](cars.md) |
+| `tests/` | Host tests for everything in `src/*.rs` |
+| `scripts/` | Release, car builds, music encoding, glitch hunt, capture retrieval, asset checks |
+| `assets/` | XMB assets, car configs and compiled cars. See [Assets](assets.md) |
+| `.claude/skills/` | Agent workflows: `add-car`, `psp-preview`, `psp-glitch`, `psp-deploy` |
 
-The `psp` crate is a target-specific dependency, so `cargo test` never builds it, and `src/main.rs`
-compiles to an empty `main` off-target. That is what makes `cargo test` work at all.
+The `psp` crate is a target-specific dependency and `src/main.rs` compiles to an empty `main`
+off-target, so `cargo test` never builds PSP code.
 
-## Testing
+## Boundary
+
+The shell holds no game logic. Anything that can be expressed as arithmetic lives in the core,
+even when it looks like rendering or I/O:
+
+| Concern | Core (tested) | Shell |
+|---|---|---|
+| Car selection | `catalogue.rs`: which cars exist, sort order, naming | Directory scan |
+| Car loading | `stream.rs`: chunk counts, progress | File handle, arena |
+| Vehicle lights | `lights.rs`: which lamps are lit, intensity, world-space placement | Two additive draw passes |
+| Asset format | `azcar.rs`: parsing and validation | Hands buffers to the GE |
+
+## Tests
 
 ```bash
-cargo test
+cargo test               # game crate
+cargo test --workspace   # plus the asset compiler
 ```
 
-Runs on the host, no emulator and no network involved.
+Notable suites:
 
-The track, the vehicle model, scoring, the camera, the screen flow, the mesh builder and the save
-format all have their own suite. The two worth knowing about are `tests/track_query.rs`, which
-covers the nearest-node queries that containment, gravity and scoring all go through, and
-`tests/stability.rs`, which drives the car hard enough to catch a model that blows up rather than
-one that merely handles badly.
-
-Loading a car is split along the same line. `src/catalogue.rs` decides what cars exist and in what
-order they are offered, `src/stream.rs` counts the chunks a load arrives in, and `src/psp/car.rs` is
-left holding nothing but the file handle and the arena. The first two are tested on the host with no
-memory stick anywhere near them, which is how the sort order, the naming and the last-chunk
-arithmetic are checked at all.
-
-`src/lights.rs` is the clearest example of why the split is drawn where it is. Vehicle lighting looks
-like a rendering feature, but almost none of it is: whether the tail lamps are hard on, whether the
-reverse lamps are lit, where each lamp has been carried to by a car that is pitched onto a slope —
-all of that is arithmetic about the game, and all of it is wrong in ways a screenshot cannot settle.
-It lives on the host side and `tests/lights.rs` asks it directly. What is left on the PSP side is two
-additive passes that draw what they are handed.
+| Suite | Covers |
+|---|---|
+| `track_query.rs` | Nearest-node queries used by containment, gravity and scoring |
+| `stability.rs` | Hard driving that would expose a numerically unstable model |
+| `matrix.rs` | View matrix construction (replaces a broken SDK helper, see [PSP notes](psp-notes.md)) |
+| `lights.rs` | Lamp state and placement on pitched and rolled cars |
+| `catalogue.rs`, `stream.rs` | Car ordering and load arithmetic |

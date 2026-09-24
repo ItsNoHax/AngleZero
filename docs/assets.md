@@ -1,23 +1,36 @@
 # Assets
 
-What the XMB shows for the game, and how the music is made. The cars are a pipeline of their own —
-see [Cars](cars.md).
+XMB presentation and music. Cars have their own pipeline; see [Cars](cars.md).
 
-## The three slots
+## Layout
 
-`Psp.toml` points at them and `cargo psp` bakes them into the EBOOT:
+```
+assets/
+  ICON0.png, PIC1.png   XMB icon and background
+  SND0.AT3              XMB music (generated, committed)
+  SND0_source.wav       music source
+  configs/*.toml        car configs (committed)
+  compiled/*.azcar      compiled cars (committed)
+  source/*.glb          car source models (not in git)
+```
+
+## XMB slots
+
+Configured in `Psp.toml` and packed into the EBOOT by `cargo psp`.
 
 | Slot | File | Format |
 |---|---|---|
-| `ICON0` | `assets/ICON0.png` | 144 × 80, 24-bit PNG |
-| `PIC1` | `assets/PIC1.png` | 480 × 272, 24-bit PNG |
-| `SND0` | `assets/SND0.AT3` | ATRAC3, 66 kbps, 44.1 kHz stereo |
+| `ICON0` | `assets/ICON0.png` | 144 × 80 PNG, 24-bit RGB |
+| `PIC1` | `assets/PIC1.png` | 480 × 272 PNG, 24-bit RGB |
+| `SND0` | `assets/SND0.AT3` | ATRAC3 LP4 (66 kbps), 44.1 kHz stereo, RIFF |
 
-Both PNGs are 24-bit with no alpha channel. The source art is RGBA and every pixel of it is opaque,
-but some firmwares and packers reject an alpha channel in these slots, so `assets/` holds converted
-copies.
+The PNGs must have no alpha channel; some firmwares and packers reject it. To convert RGBA art:
 
-To check what actually ended up inside a built EBOOT rather than trusting the manifest:
+```bash
+magick in.png -background black -alpha remove -alpha off -define png:color-type=2 out.png
+```
+
+To list what a built EBOOT actually contains:
 
 ```bash
 python3 - target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP <<'PY'
@@ -33,46 +46,35 @@ PY
 
 ## Music
 
-`assets/SND0.AT3` is committed, because regenerating it means building two projects. To rebuild it
-from `assets/SND0_source.wav`:
+`SND0_source.wav` is a 20 s seamless loop (144 BPM, Am–F–C–G), 44.1 kHz 16-bit stereo. Do not
+fade or trim the ends.
 
 ```bash
 scripts/encode_music.sh
 ```
 
-That clones and builds [atracdenc](https://github.com/dcherednik/atracdenc) at a pinned revision,
-applies `scripts/patches/atracdenc-psp-bands.patch`, low-passes the source, encodes, and then
-verifies the result frame by frame before accepting it.
+The script builds [atracdenc](https://github.com/dcherednik/atracdenc) at a pinned revision,
+applies `scripts/patches/atracdenc-psp-bands.patch`, low-passes the source at 15.5 kHz, encodes,
+and verifies every frame.
 
-### Why it is not just a one-line ffmpeg call
+### XMB requirements
 
-ffmpeg has **decoders** for ATRAC3 but no encoder, so it cannot produce this file at all. atracdenc
-can, but its output is rejected outright by the PSP — the XMB simply plays nothing.
+ffmpeg can decode ATRAC3 but not encode it. Stock atracdenc output decodes on a PC but is silently
+rejected by the XMB. A playable `SND0.AT3` must have:
 
-An ATRAC3 frame opens with a six-bit unit id, then two bits of `bands_coded`. Every frame of a
-stock PSP `SND0.AT3` carries **2**, meaning three QMF bands. atracdenc always writes **3**, coding
-a fourth band above 16.5 kHz, and the console's decoder refuses the stream rather than ignoring the
-extra band. The tell is the first byte of every frame: `A2` in a file that plays, `A3` in one that
-does not. The patch caps the count; the low-pass at 15.5 kHz then keeps the encoder from spending
-bits on a band that is going to be discarded anyway.
+| Property | Required | Handled by |
+|---|---|---|
+| Container | RIFF/WAVE | `--container riff` |
+| Mode | LP4: 66144 bps, block align 192, joint stereo | `-e atrac3_lp4` (LP2 will not play) |
+| `bands_coded` per frame | 2 (first frame byte `A2`); atracdenc writes 3 (`A3`) | the patch |
+| `fact` chunk | absent (`fmt`, then `data`) | stripped by the script |
 
-Nothing about this is visible from a PC. ffmpeg decodes the rejected file perfectly, the RIFF header
-is byte-identical to files that work, and `sceAtrac` accepts it. That is why the encode script
-checks every frame and refuses to emit a file the console would ignore:
+The script refuses to emit a file unless every frame has `bands_coded=2`.
 
-```
->> 863 frames, all with bands_coded=2
-```
+### Debugging playback
 
-The `fact` chunk is also dropped. atracdenc writes a sample count of exactly frames × 1024, leaving
-no slack for ATRAC3's decoder delay; Sony's own files either claim fewer samples than they carry or
-omit the chunk entirely. The chunk is optional, so the header now matches a file known to play:
-`fmt`, then `data`, nothing else.
-
-### Diagnosing a file that will not play
-
-The dev build asks the console's own decoder at boot and writes the answer to
-`ms0:/ANGLEZERO/ATRAC.TXT` — see `src/psp/atractest.rs`. A healthy report:
+A `devtools` build tests the file with the console's own decoder at boot and writes
+`ms0:/ANGLEZERO/ATRAC.TXT` (`src/psp/atractest.rs`). Healthy output:
 
 ```
 sceAtracSetDataAndGetID 2 (0x00000002)
@@ -81,6 +83,20 @@ decode rc 0 (0x00000000) samples 955
 first frame peak 25084
 ```
 
-Note that a file can pass all of this and still be silent in the XMB, which is what happened here.
-Comparing against an `SND0.AT3` extracted from a game that does play is worth more than any single
-check.
+A file can pass this and still be silent in the XMB. Comparing byte-for-byte against a `SND0.AT3`
+from a game whose music plays is the most reliable check.
+
+## Art direction
+
+Night touge: moonlit ridge road, sodium lamp pools, red tail-light smear on the apex.
+
+| Use | Colour |
+|---|---|
+| Sky | `#04060e` → `#132247` |
+| Moon | `#e8efff` |
+| Sodium lamps | `#ffc478` |
+| Tail lights | `#ff3a3a` |
+| Accent | `#ff783c` |
+
+Wordmark in a bold condensed grotesque with added tracking; "SEKIRA PASS" subtitle at 6.5 px on the
+icon.
