@@ -82,3 +82,29 @@ fn lift_undoes_the_tile_on_average() {
         assert!((net - 1.0).abs() < 0.03, "{s:?} comes out at {net}");
     }
 }
+
+#[test]
+fn pines_stay_inside_their_cells() {
+    use angle_zero::texgen::{pine_atlas, ATLAS_H, ATLAS_W, PINE_CELL, PINE_PITCH};
+    let mut a = [0u8; ATLAS_W * ATLAS_H];
+    pine_atlas(&mut a);
+    for y in 0..ATLAS_H {
+        for x in 0..ATLAS_W {
+            let cell = x / PINE_PITCH;
+            let inside = x - cell * PINE_PITCH < PINE_CELL && cell < 3;
+            if !inside {
+                assert_eq!(a[y * ATLAS_W + x], 0, "texel {x},{y} outside every cell");
+            }
+        }
+    }
+    // Each pine covers a fair part of its cell, and touches its bottom row (the trunk).
+    for k in 0..3 {
+        let x0 = k * PINE_PITCH;
+        let filled = (0..ATLAS_H)
+            .flat_map(|y| (x0..x0 + PINE_CELL).map(move |x| (x, y)))
+            .filter(|&(x, y)| a[y * ATLAS_W + x] > 0)
+            .count();
+        assert!(filled > PINE_CELL * ATLAS_H / 5, "pine {k} covers only {filled}");
+        assert!((x0..x0 + PINE_CELL).any(|x| a[(ATLAS_H - 1) * ATLAS_W + x] > 0));
+    }
+}

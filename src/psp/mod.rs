@@ -21,6 +21,7 @@ pub mod scratch;
 pub mod surfaces;
 pub mod storage;
 pub mod text;
+pub mod trees;
 
 use core::ffi::c_void;
 

@@ -150,3 +150,102 @@ pub fn mean_gain(s: Surface) -> f32 {
     }
     sum / (TILE * TILE) as f32
 }
+
+// --- pine billboards ----------------------------------------------------------------------------
+
+/// The tree atlas: three pines side by side, each in a cell [`PINE_CELL`] texels wide.
+pub const ATLAS_W: usize = 128;
+pub const ATLAS_H: usize = 64;
+pub const PINE_CELL: usize = 42;
+/// Cell `k` starts at `k * PINE_PITCH`, leaving a transparent column between neighbours so linear
+/// filtering never pulls one pine's edge into the next.
+pub const PINE_PITCH: usize = 43;
+
+/// Index 0 is transparent; 1..=15 a ramp from shadowed needles to moonlit tips.
+pub fn pine_palette() -> [(u8, u8, u8, u8); 16] {
+    let mut out = [(0u8, 0u8, 0u8, 0u8); 16];
+    for (i, px) in out.iter_mut().enumerate().skip(1) {
+        let t = (i - 1) as f32 / 14.0;
+        let c = |a: f32, b: f32| lerp(a, b, t) as u8;
+        *px = (c(110.0, 255.0), c(118.0, 255.0), c(112.0, 245.0), 255);
+    }
+    out
+}
+
+/// Draws the three pines. Each is a trunk under tiers of foliage that flare and step back in, with
+/// a ragged edge, and is lit from its right (the moon's side in the default view) and from above.
+pub fn pine_atlas(out: &mut [u8; ATLAS_W * ATLAS_H]) {
+    out.fill(0);
+    for k in 0..3usize {
+        let x0 = k * PINE_PITCH;
+        let cx = x0 as f32 + PINE_CELL as f32 * 0.5;
+        let seed = 0x9100 + k as u32 * 97;
+        let tiers = [6.0f32, 7.0, 5.0][k];
+        let fullness = [0.47f32, 0.40, 0.5][k];
+        let top = [1usize, 3, 2][k];
+        let foliage_bottom = ATLAS_H - 7;
+        for y in top..ATLAS_H {
+            let yy = y as f32;
+            // 0 at the tip, 1 at the lowest branches.
+            let t = (yy - top as f32) / (foliage_bottom - top) as f32;
+            let row_seed = seed + y as u32 * 131;
+            if y > foliage_bottom {
+                // Trunk.
+                for x in 0..PINE_CELL {
+                    let dx = (x0 + x) as f32 + 0.5 - cx;
+                    if abs_f(dx) < 1.6 {
+                        out[y * ATLAS_W + x0 + x] = 2 + (dx > 0.0) as u8;
+                    }
+                }
+                continue;
+            }
+            let tier = t * tiers;
+            let frac = tier - floor(tier);
+            let envelope = PINE_CELL as f32 * fullness * (0.12 + 0.88 * t);
+            let half = envelope * (0.5 + 0.5 * frac);
+            for x in 0..PINE_CELL {
+                let dx = (x0 + x) as f32 + 0.5 - cx;
+                let ragged = (hash(row_seed + x as u32) >> 8) as f32 / (1u32 << 24) as f32;
+                let edge = half * (0.82 + 0.3 * ragged);
+                if abs_f(dx) > edge {
+                    continue;
+                }
+                // Gaps near the edge where branches part.
+                if abs_f(dx) > edge * 0.7 && ragged < 0.2 {
+                    continue;
+                }
+                let side = clamp(0.5 + dx / (2.0 * edge.max(1.0)), 0.0, 1.0);
+                let droop = 1.0 - frac; // the top of each tier catches the light
+                let light = 0.2 + 0.45 * side + 0.25 * droop * (1.0 - t * 0.5) + (ragged - 0.5) * 0.25;
+                out[y * ATLAS_W + x0 + x] = 1 + (clamp(light, 0.0, 1.0) * 14.0 + 0.5) as u8;
+            }
+        }
+    }
+}
+
+fn abs_f(x: f32) -> f32 {
+    if x < 0.0 { -x } else { x }
+}
+
+/// Halves the atlas. A texel is opaque when at least two of its four sources are, and takes the
+/// mean of those; averaging in the transparent index would darken every edge.
+pub fn downsample_alpha(src: &[u8], w: usize, h: usize, dst: &mut [u8]) {
+    for y in 0..h / 2 {
+        for x in 0..w / 2 {
+            let q = [
+                src[2 * y * w + 2 * x],
+                src[2 * y * w + 2 * x + 1],
+                src[(2 * y + 1) * w + 2 * x],
+                src[(2 * y + 1) * w + 2 * x + 1],
+            ];
+            let (mut n, mut sum) = (0u32, 0u32);
+            for v in q {
+                if v > 0 {
+                    n += 1;
+                    sum += v as u32;
+                }
+            }
+            dst[y * (w / 2) + x] = if n >= 2 { ((sum + n / 2) / n) as u8 } else { 0 };
+        }
+    }
+}

@@ -108,3 +108,35 @@ fn valley_is_deterministic() {
     }
 }
 
+
+#[test]
+fn trees_stand_clear_of_every_road() {
+    use angle_zero::scenery::{tree_sites, TreeSite, TREE_ROAD_CLEARANCE};
+    let t = track();
+    let mut out = vec![TreeSite::ZERO; 4000];
+    let n = tree_sites(&t, &mut out, |_, _| false);
+    assert!(n > 1000, "only {n} trees");
+    for tree in &out[..n] {
+        for node in t.nodes.iter() {
+            assert!(node.p.horizontal_distance(tree.base) > TREE_ROAD_CLEARANCE - 1.5);
+        }
+    }
+}
+
+#[test]
+fn trees_come_in_stands() {
+    // Not one every few nodes: somewhere along the road there is a clearing and somewhere a stand.
+    use angle_zero::scenery::forest_density;
+    let d: Vec<f32> = (0..3500).step_by(10).map(|s| forest_density(s as f32, 1.0)).collect();
+    assert!(d.iter().any(|&x| x < 0.15) && d.iter().any(|&x| x > 0.85));
+}
+
+#[test]
+fn terrain_profile_meets_the_road_and_falls_away() {
+    use angle_zero::scenery::{terrain_drop, TERRAIN_PROFILE};
+    assert!(terrain_drop(0.0) > -0.3);
+    for w in TERRAIN_PROFILE.windows(2) {
+        assert!(w[1].0 > w[0].0 && w[1].1 < w[0].1);
+    }
+    assert!((terrain_drop(-30.0) - terrain_drop(30.0)).abs() < 1e-6);
+}

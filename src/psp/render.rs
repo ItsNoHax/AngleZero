@@ -59,8 +59,7 @@ const DASH_COLOR: u32 = rgb(0x8C, 0x7A, 0x45);
 ///
 /// So the ribbon stays the size the *scenery* wants to be, and [`draw_ground_backdrop`] deals with
 /// what is behind it.
-const TERRAIN_HALF_WIDTH: f32 = 190.0;
-const TERRAIN_EDGE_DROP: f32 = -150.0;
+const TERRAIN_HALF_WIDTH: f32 = angle_zero::scenery::TERRAIN_PROFILE[5].0;
 
 /// The hillside, shaded darker as it falls away so the slope reads at night.
 ///
@@ -71,19 +70,21 @@ const fn terrain(lateral: f32, y: f32, shade: u32) -> Station {
     Station::new(lateral, y, rgb(k * 34 / 10000, k * 48 / 10000, k * 28 / 10000))
 }
 
+/// The cross-section is `angle_zero::scenery::TERRAIN_PROFILE`, which the trees stand on too.
+const TP: [(f32, f32); 6] = angle_zero::scenery::TERRAIN_PROFILE;
 const TERRAIN_STATIONS: [Station; 12] = [
-    terrain(-TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
-    terrain(-96.0, -58.0, 44),
-    terrain(-48.0, -19.0, 58),
-    terrain(-22.0, -4.2, 74),
-    terrain(-11.0, -0.9, 92),
-    terrain(-7.2, -0.25, 100),
-    terrain(7.2, -0.25, 100),
-    terrain(11.0, -0.9, 92),
-    terrain(22.0, -4.2, 74),
-    terrain(48.0, -19.0, 58),
-    terrain(96.0, -58.0, 44),
-    terrain(TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
+    terrain(-TERRAIN_HALF_WIDTH, TP[5].1, 34),
+    terrain(-TP[4].0, TP[4].1, 44),
+    terrain(-TP[3].0, TP[3].1, 58),
+    terrain(-TP[2].0, TP[2].1, 74),
+    terrain(-TP[1].0, TP[1].1, 92),
+    terrain(-TP[0].0, TP[0].1, 100),
+    terrain(TP[0].0, TP[0].1, 100),
+    terrain(TP[1].0, TP[1].1, 92),
+    terrain(TP[2].0, TP[2].1, 74),
+    terrain(TP[3].0, TP[3].1, 58),
+    terrain(TP[4].0, TP[4].1, 44),
+    terrain(TERRAIN_HALF_WIDTH, TP[5].1, 34),
 ];
 
 /// A road colour lifted for the asphalt tile, as [`terrain`] is for the grass.
@@ -251,6 +252,7 @@ pub fn init(track: &Track) {
         build_starfield();
         super::scenery::init(track, SKY_RADIUS);
         super::surfaces::init();
+        super::trees::init(track);
         sys::sceKernelDcacheWritebackAll();
     }
 }
@@ -383,7 +385,6 @@ const POOL_DEPTH_BIAS: i32 = 64;
 const LAMP_DEPTH_BIAS: i32 = 256;
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
-const TREE_STRIDE: usize = 4;
 const LAMP_STRIDE: usize = 58;
 const CONE_STRIDE: usize = 11;
 const FLOODLIGHT_STRIDE: usize = 90;
@@ -395,8 +396,6 @@ const CONE_COLOR: u32 = rgb(0xE4, 0x62, 0x2F);
 const TYRE_STACK: u32 = rgb(0x16, 0x16, 0x1A);
 const FLOOD_PANEL: u32 = rgb(0xDA, 0xE4, 0xF2);
 
-const TREE_LOW: u32 = rgb(0x1A, 0x21, 0x1C);
-const TREE_HIGH: u32 = rgb(0x30, 0x39, 0x37);
 const LAMP_POLE: u32 = rgb(0x3A, 0x40, 0x46);
 const LAMP_HEAD: u32 = rgb(0xFF, 0xEC, 0xBE);
 
@@ -435,58 +434,6 @@ unsafe fn build_props(track: &Track) {
             let node = &track.nodes[i];
 
             // --- trees, both sides, pseudo-random offsets ---
-            if i % TREE_STRIDE == 0 {
-                for k in 0..2usize {
-                    if w + 12 > budget {
-                        break;
-                    }
-                    let side = if k == 0 { -1.0 } else { 1.0 };
-                    let off = 15.0 + ((i * 37 + k * 91) % 34) as f32;
-                    let height = 7.0 + ((i * 13 + k * 7) % 7) as f32;
-                    let half = 0.62 * height * 0.5;
-                    // Trees stand on the hillside, which falls away from the road.
-                    let drop = if off < 14.0 {
-                        off * 0.11
-                    } else {
-                        1.6 + (off - 14.0) * 0.4
-                    };
-                    let bx = node.p.x + node.nrm.x * side * off;
-                    let bz = node.p.z + node.nrm.z * side * off;
-                    let by = node.p.y - drop;
-
-                    // Two tapering tiers give a conifer silhouette. A plain quad here reads as a
-                    // building, which is exactly what a wall of them looked like.
-                    //
-                    // Crossed in an X over two axes so the tree holds up from any viewing angle
-                    // without being rotated toward the camera every frame.
-                    for axis in 0..2 {
-                        let (ax, az) = if axis == 0 {
-                            (node.dir.x, node.dir.z)
-                        } else {
-                            (node.nrm.x, node.nrm.z)
-                        };
-                        let tiers = [
-                            (half, height * 0.22, height * 0.70, TREE_LOW),
-                            (half * 0.62, height * 0.55, height, TREE_HIGH),
-                        ];
-                        for (w_half, base_y, tip_y, color) in tiers {
-                            let corners = [
-                                (-w_half, base_y, color),
-                                (w_half, base_y, color),
-                                (0.0, tip_y, TREE_HIGH),
-                            ];
-                            for (dx, dy, c) in corners {
-                                let v = Vertex::new(bx + ax * dx, by + dy, bz + az * dx, c);
-                                verts[w] = v;
-                                note(&v, &mut lo, &mut hi);
-                                w += 1;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // --- street lamps, alternating sides ---
             if i % LAMP_STRIDE == 0 && w + 108 <= budget {
                 let side = if (i / LAMP_STRIDE) % 2 == 0 { -1.0 } else { 1.0 };
                 let lateral = 8.4 * side;
@@ -1476,6 +1423,9 @@ pub fn draw_world(camera: &Camera) {
                 prop_verts.add(chunk.start as usize) as *const c_void,
             );
         }
+        // Pines, textured and alpha-tested, in the same cull-free state as the props.
+        let tree_verts = super::trees::draw(|chunk| visible(chunk, eye, forward));
+        tally(5, tree_verts);
         sys::sceGuEnable(GuState::CullFace);
 
         // Light pools and lamp glows, added on top of the world they fall on. Depth-tested so a

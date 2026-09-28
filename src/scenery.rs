@@ -346,3 +346,140 @@ pub fn ridge_farthest(track: &Track, band: &RidgeBand) -> f32 {
     // Height adds a little: the crest is above or below the eye as well as out from it.
     far + abs(band.high) * 0.05
 }
+
+// --- the hillside -------------------------------------------------------------------------------
+
+/// The terrain's cross-section either side of the road: (metres out, metres below the centreline),
+/// from the road's shoulder to the ribbon's outer edge. Mirrored on the two sides.
+///
+/// It falls away steeply past 20 m. A pass on a ridge drops faster than it climbs, and it has to:
+/// anything gentler holds the hillside up in front of the valley below.
+pub const TERRAIN_PROFILE: [(f32, f32); 6] =
+    [(7.2, -0.25), (11.0, -0.9), (22.0, -4.2), (48.0, -19.0), (96.0, -58.0), (190.0, -150.0)];
+
+/// Height of the hillside below its node's centreline, `lateral` metres out on either side.
+pub fn terrain_drop(lateral: f32) -> f32 {
+    let l = abs(lateral);
+    if l <= TERRAIN_PROFILE[0].0 {
+        return TERRAIN_PROFILE[0].1;
+    }
+    for w in TERRAIN_PROFILE.windows(2) {
+        let ((l0, y0), (l1, y1)) = (w[0], w[1]);
+        if l <= l1 {
+            return y0 + (y1 - y0) * (l - l0) / (l1 - l0);
+        }
+    }
+    TERRAIN_PROFILE[TERRAIN_PROFILE.len() - 1].1
+}
+
+// --- trees --------------------------------------------------------------------------------------
+
+/// Pine variants in the billboard atlas.
+pub const PINE_VARIANTS: u32 = 3;
+
+#[derive(Clone, Copy, Debug)]
+pub struct TreeSite {
+    /// Where the trunk meets the ground.
+    pub base: Vec3,
+    pub height: f32,
+    pub variant: u8,
+    /// Brightness of this tree against the others, around 1.0.
+    pub tint: f32,
+    /// Which node it was placed from, for chunking.
+    pub node: u32,
+    /// The node's frame, for the crossed quads.
+    pub dir: (f32, f32),
+    pub nrm: (f32, f32),
+}
+
+impl TreeSite {
+    pub const ZERO: TreeSite = TreeSite {
+        base: Vec3::ZERO,
+        height: 0.0,
+        variant: 0,
+        tint: 1.0,
+        node: 0,
+        dir: (0.0, 1.0),
+        nrm: (1.0, 0.0),
+    };
+}
+
+/// Nodes between tree candidates.
+pub const TREE_STEP: usize = 3;
+
+/// Nearest a tree may stand to any node's centreline: clear of the tarmac, the shoulder and the rail.
+pub const TREE_ROAD_CLEARANCE: f32 = 11.0;
+
+/// How dense the forest is at arclength `s` on `side`, `0.0..=1.0`: smooth along the road, so trees
+/// come in stands with clearings between rather than at a fixed pitch.
+pub fn forest_density(s: f32, side: f32) -> f32 {
+    let seed = if side < 0.0 { 3 } else { 7 };
+    let n = 0.55 * sin(s * 0.021 + unit(seed) * TAU)
+        + 0.3 * sin(s * 0.057 + unit(seed + 1) * TAU)
+        + 0.15 * sin(s * 0.13 + unit(seed + 2) * TAU);
+    clamp(0.5 + 0.6 * n, 0.0, 1.0)
+}
+
+fn clear_of_tarmac(track: &Track, p: Vec3) -> bool {
+    let mut i = 0;
+    while i < track.nodes.len() {
+        let n = &track.nodes[i].p;
+        let (dx, dz) = (n.x - p.x, n.z - p.z);
+        if dx * dx + dz * dz < TREE_ROAD_CLEARANCE * TREE_ROAD_CLEARANCE {
+            return false;
+        }
+        i += 2;
+    }
+    true
+}
+
+/// Fills `out` with tree sites in node order, and returns how many. `skip(node, side)` excludes
+/// ground the caller has other plans for (the lay-by).
+pub fn tree_sites(track: &Track, out: &mut [TreeSite], skip: impl Fn(usize, f32) -> bool) -> usize {
+    let mut w = 0usize;
+    let mut i = 0usize;
+    while i < track.nodes.len() && w < out.len() {
+        let node = &track.nodes[i];
+        for side in [-1.0f32, 1.0] {
+            if skip(i, side) {
+                continue;
+            }
+            let density = forest_density(node.s, side);
+            // Up to three trees per candidate: one near the road, two further down the slope,
+            // each placed only where the stand is dense enough to have it.
+            for k in 0..3u32 {
+                if w >= out.len() {
+                    break;
+                }
+                let key = (i as u32) * 8 + k * 2 + if side < 0.0 { 0 } else { 1 };
+                let r = unit(key);
+                if r > density * (1.2 - 0.25 * k as f32) {
+                    continue;
+                }
+                let near = [14.0, 26.0, 44.0][k as usize];
+                let lateral = near + unit(key ^ 0xA5) * [12.0, 18.0, 40.0][k as usize];
+                let along = (unit(key ^ 0x3C) - 0.5) * 4.0;
+                let x = node.p.x + node.nrm.x * side * lateral + node.dir.x * along;
+                let z = node.p.z + node.nrm.z * side * lateral + node.dir.z * along;
+                let base = Vec3::new(x, node.p.y + terrain_drop(lateral) - 0.3, z);
+                if !clear_of_tarmac(track, base) {
+                    continue;
+                }
+                // Taller further down the slope, where they stand in the valley's shelter.
+                let height = (7.0 + unit(key ^ 0x77) * 6.0) * (1.0 + 0.12 * k as f32);
+                out[w] = TreeSite {
+                    base,
+                    height,
+                    variant: (hash(key ^ 0x1234) % PINE_VARIANTS) as u8,
+                    tint: 0.85 + unit(key ^ 0x99) * 0.3,
+                    node: i as u32,
+                    dir: (node.dir.x, node.dir.z),
+                    nrm: (node.nrm.x, node.nrm.z),
+                };
+                w += 1;
+            }
+        }
+        i += TREE_STEP;
+    }
+    w
+}
