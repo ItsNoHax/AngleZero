@@ -13,7 +13,7 @@ use angle_zero::azcar;
 use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
 use angle_zero::lights;
-use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
+use angle_zero::math::{cos, floor, radians, sin, sqrt, tan, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::track::{Locator, Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
@@ -888,16 +888,36 @@ unsafe fn build_mountains(track: &Track) {
 
 /// Stars and moon.
 ///
-/// Placed on a dome that is translated to the camera every frame rather than drawn in screen
-/// space. Screen-locked stars slide across the sky whenever the camera turns, which on a road
-/// this twisty is immediately obvious.
+/// Both are fixed to directions from the camera rather than to the screen. Screen-locked stars
+/// slide across the sky whenever the camera turns, which on a road this twisty is immediately
+/// obvious.
+///
+/// The stars are not geometry, though. They used to be quads on a dome 1800 m out, which put them
+/// at 0.8 to 1.8 pixels across — and a quad that size, rasterised without antialiasing, covers a
+/// different set of pixels every frame the camera moves: two, then one, then four, then none. The
+/// whole sky twinkled at 60 Hz while driving, and only while driving. So each star is kept as a
+/// direction, projected on the CPU every frame, and drawn as a square of exactly one or two pixels
+/// snapped to the pixel grid. It can move a pixel at a time; it can no longer change shape.
+///
+/// The moon is nine pixels across, which is large enough to rasterise the same way every frame,
+/// so it stays a pair of quads on the dome.
 const STAR_COUNT: usize = 700;
 const SKY_RADIUS: f32 = 1800.0;
-const STAR_VERTS: usize = STAR_COUNT * 6 + 12; // stars, plus the moon and its halo
-static mut STARFIELD: psp::Align16<[Vertex; STAR_VERTS]> = psp::Align16([Vertex::ZERO; STAR_VERTS]);
+const MOON_VERTS: usize = 12; // the moon and its halo
+static mut MOON: psp::Align16<[Vertex; MOON_VERTS]> = psp::Align16([Vertex::ZERO; MOON_VERTS]);
+
+#[derive(Clone, Copy)]
+struct Star {
+    dir: Vec3,
+    color: u32,
+    /// Side of the square on screen, in pixels.
+    size: f32,
+}
+static mut STARS: [Star; STAR_COUNT] = [Star { dir: Vec3::ZERO, color: 0, size: 1.0 }; STAR_COUNT];
 
 unsafe fn build_starfield() {
-    let out = core::slice::from_raw_parts_mut(&raw mut STARFIELD as *mut Vertex, STAR_VERTS);
+    let out = core::slice::from_raw_parts_mut(&raw mut MOON as *mut Vertex, MOON_VERTS);
+    let stars = &mut *(&raw mut STARS);
     let mut w = 0usize;
     // Deterministic, so a headless capture of the sky is reproducible.
     let mut rng: u32 = 0x5EED_1234;
@@ -913,31 +933,21 @@ unsafe fn build_starfield() {
         // Biased toward the upper sky.
         let height = 0.12 + next() * 0.88;
         let ring = sqrt(1.0 - height * height);
-        let (cx, cy, cz) = (
-            sin(yaw) * ring * SKY_RADIUS,
-            height * SKY_RADIUS,
-            cos(yaw) * ring * SKY_RADIUS,
-        );
         // Three brightnesses, as the palette has it.
         let color = match i % 3 {
             0 => rgb(0xFF, 0xFF, 0xFF),
             1 => rgb(0xCD, 0xDC, 0xF2),
             _ => rgb(0x7F, 0x93, 0xAD),
         };
+        // The half-width the quads had, in metres at SKY_RADIUS. Drawn in the same stream as
+        // before, so every star keeps the place it has always had in the sky.
         let s = 3.0 + next() * 4.0;
-        // Billboarded roughly toward the origin by using the ring tangent as the horizontal axis.
-        let (tx, tz) = (cos(yaw), -sin(yaw));
-        for (a, b) in [
-            (-1.0, -1.0),
-            (1.0, -1.0),
-            (1.0, 1.0),
-            (-1.0, -1.0),
-            (1.0, 1.0),
-            (-1.0, 1.0),
-        ] {
-            out[w] = Vertex::new(cx + tx * s * a, cy + s * b, cz + tz * s * a, color);
-            w += 1;
-        }
+        stars[i] = Star {
+            dir: Vec3::new(sin(yaw) * ring, height, cos(yaw) * ring),
+            color,
+            // Up to 1.4 px as a quad is one pixel; the bigger ones, three in eight, are two.
+            size: if s < 5.5 { 1.0 } else { 2.0 },
+        };
     }
 
     // The moon, with a faint halo behind it.
@@ -968,7 +978,7 @@ unsafe fn build_starfield() {
             w += 1;
         }
     }
-    debug_assert!(w == STAR_VERTS);
+    debug_assert!(w == MOON_VERTS);
 }
 
 /// Draws the night sky: a vertical gradient behind everything, then the mountain silhouette.
@@ -1039,8 +1049,11 @@ pub fn draw_sky(camera: &Camera) {
         // mountains, so both still paint over it.
         draw_ground_backdrop(camera);
 
-        // Stars and moon sit on a dome centred on the camera, so they never come closer and
-        // never slide as the car turns. Depth writes off, and blended for the moon's halo.
+        // Still in the gradient's state: 2D, no depth test, no culling.
+        draw_stars(camera);
+
+        // The moon sits on a dome centred on the camera, so it never comes closer and never
+        // slides as the car turns. Depth writes off, and blended for its halo.
         sys::sceGuEnable(GuState::DepthTest);
         sys::sceGuDepthMask(1);
         sys::sceGuEnable(GuState::Blend);
@@ -1061,9 +1074,9 @@ pub fn draw_sky(camera: &Camera) {
         sys::sceGumDrawArray(
             GuPrimitive::Triangles,
             VERTEX_FORMAT,
-            STAR_VERTS as i32,
+            MOON_VERTS as i32,
             core::ptr::null(),
-            &raw const STARFIELD as *const c_void,
+            &raw const MOON as *const c_void,
         );
         sys::sceGuDisable(GuState::Blend);
         sys::sceGuEnable(GuState::CullFace);
@@ -1082,6 +1095,73 @@ pub fn draw_sky(camera: &Camera) {
         sys::sceGuDepthMask(0);
         sys::sceGuEnable(GuState::Fog);
     }
+}
+
+/// Projects every star through this frame's camera and draws the ones in view as pixel squares.
+///
+/// This repeats what `set_camera` hands the GE — `Mat4::look_at` for the view, and
+/// `sceGumPerspective` at 16:9 for the projection — because a star has to be placed before it is
+/// snapped to a pixel, and the GE cannot be asked to snap. A star is a direction, not a point, so
+/// the eye's position drops out and only its orientation matters.
+unsafe fn draw_stars(camera: &Camera) {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Star2D {
+        color: u32,
+        x: f32,
+        y: f32,
+        z: f32,
+    }
+
+    let forward = camera.look_at.sub(camera.pos).normalized();
+    let side = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalized();
+    if forward.length() < 0.5 || side.length() < 0.5 {
+        return;
+    }
+    let up = side.cross(forward);
+    // Pixels per unit of tangent: the viewport's half-height over tan(fov / 2), and the same
+    // across, divided by the aspect the projection was given rather than the screen's own.
+    let t = tan(radians(camera.fov) * 0.5);
+    let fy = 136.0 / t;
+    let fx = 240.0 / (16.0 / 9.0 * t);
+
+    let verts = super::scratch::alloc::<Star2D>(STAR_COUNT * 2);
+    if verts.is_null() {
+        return;
+    }
+    let mut w = 0usize;
+    for star in (*(&raw const STARS)).iter() {
+        let depth = star.dir.dot(forward);
+        if depth <= 0.0 {
+            continue;
+        }
+        let sx = 240.0 + star.dir.dot(side) / depth * fx;
+        let sy = 136.0 - star.dir.dot(up) / depth * fy;
+        // The square's top-left pixel, chosen so the star's centre falls inside it.
+        let x = floor(sx - (star.size - 1.0) * 0.5);
+        let y = floor(sy - (star.size - 1.0) * 0.5);
+        if x + star.size <= 0.0 || y + star.size <= 0.0 || x >= 480.0 || y >= 272.0 {
+            continue;
+        }
+        *verts.add(w) = Star2D { color: star.color, x, y, z: 0.0 };
+        *verts.add(w + 1) = Star2D {
+            color: star.color,
+            x: x + star.size,
+            y: y + star.size,
+            z: 0.0,
+        };
+        w += 2;
+    }
+    if w == 0 {
+        return;
+    }
+    sys::sceGumDrawArray(
+        GuPrimitive::Sprites,
+        VertexType::COLOR_8888 | VertexType::VERTEX_32BITF | VertexType::TRANSFORM_2D,
+        w as i32,
+        core::ptr::null(),
+        verts as *const c_void,
+    );
 }
 
 /// Everything below the horizon that the scenery does not reach, in the colour distance already is.

@@ -412,7 +412,6 @@ pub fn psp_main() {
             if !skip_hud {
                 hud::draw(game, track);
             }
-            hud::scanlines();
             #[cfg(all(feature = "devtools", not(feature = "harness")))]
             if show_debug {
                 hud::debug_overlay(&diag, shots);
