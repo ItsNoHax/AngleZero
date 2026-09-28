@@ -4,15 +4,19 @@
 
 | Tool | Purpose |
 |---|---|
-| Rust nightly + `rust-src` | Pinned in [`rust-toolchain.toml`](../rust-toolchain.toml) (≥ 2026-05-30, required by the `psp` crate) |
-| [`cargo-psp`](https://github.com/overdrivenpotato/rust-psp) | Builds `EBOOT.PBP` and `.prx` |
+| Rust nightly + `rust-src` | Pinned by [`rust-toolchain.toml`](../rust-toolchain.toml); rustup installs it automatically |
+| [`cargo-psp`](https://github.com/ItsNoHax/rust-psp) | Builds the `EBOOT.PBP` / `.prx` |
 | PPSSPP (Flatpak) | Interactive runs |
 | `PPSSPPHeadless` | Scripted screenshots; see [Diagnostics](diagnostics.md#headless-screenshots) |
 
 ```bash
 rustup component add rust-src
-cargo install cargo-psp
+cargo +nightly-2026-08-26 install --git https://github.com/ItsNoHax/rust-psp --rev a89142b237f3014fc15425d3549e44d3aa07d1c6 cargo-psp --locked
 ```
+
+The nightly channel is pinned in `rust-toolchain.toml`, and the `psp` crate comes from the
+project's rust-psp fork at the same revision. Both match SSB64PSP, so one installed `cargo-psp`
+builds either project; change them together.
 
 ## Building
 

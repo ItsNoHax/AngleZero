@@ -1,3 +1,9 @@
+# Same pin as SSB64PSP, so both projects build with one installed cargo-psp.
+#
+# The project's rust-psp fork tracks upstream's PanicPayload compatibility fix, and its cargo-psp
+# requires this nightly or newer. Keep this in step with the `psp` rev in Cargo.toml and with
+# SSB64PSP's psp-game/rust-toolchain.toml. Any future bump still needs a PPSSPP boot check, not
+# merely a successful compile.
 [toolchain]
-channel = "nightly-2026-08-01"
+channel = "nightly-2026-08-26"
 components = ["rust-src"]

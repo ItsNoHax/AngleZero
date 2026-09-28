@@ -39,4 +39,5 @@ libm = "0.2"
 
 # Only the binary shell touches the PSP SDK, so host `cargo test` never builds it.
 [target.'cfg(target_os = "psp")'.dependencies]
-psp = "0.3.11"
+# The project's rust-psp fork, at the revision SSB64PSP pins. See rust-toolchain.toml.
+psp = { git = "https://github.com/ItsNoHax/rust-psp", rev = "a89142b237f3014fc15425d3549e44d3aa07d1c6" }

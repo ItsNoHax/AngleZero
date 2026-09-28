@@ -322,8 +322,7 @@ dependencies = [
 [[package]]
 name = "psp"
 version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07d17adf566a4c5c46e60502877e9bf5c41e6ce511659fb561f659eab4ff55aa"
+source = "git+https://github.com/ItsNoHax/rust-psp?rev=a89142b237f3014fc15425d3549e44d3aa07d1c6#a89142b237f3014fc15425d3549e44d3aa07d1c6"
 dependencies = [
  "bitflags",
  "libm",
