@@ -457,7 +457,8 @@ def main():
         type=int,
         default=0,
         help="render override to bisect a cause: 1 no cull, 2 no depth, 3 no fog, 5 no sky, "
-        "6 road only, 7 terrain only, 8 no HUD (see render::DEBUG_MODES)",
+        "6 road only, 7 terrain only, 8 no HUD, 16 no surface textures, 17 no ridges or valley "
+        "(see render::DEBUG_MODES)",
     )
     ap.add_argument("--label", default="run", help="names the output directory under captures/glitch")
     ap.add_argument("--out", type=Path, default=None)

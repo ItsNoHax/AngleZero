@@ -15,6 +15,7 @@ use angle_zero::effects::Effects;
 use angle_zero::lights;
 use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
+use angle_zero::texgen::Surface;
 use angle_zero::track::{Locator, Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
@@ -62,8 +63,12 @@ const TERRAIN_HALF_WIDTH: f32 = 190.0;
 const TERRAIN_EDGE_DROP: f32 = -150.0;
 
 /// The hillside, shaded darker as it falls away so the slope reads at night.
+///
+/// Lifted by the grass tile's [`lift_percent`](angle_zero::texgen::lift_percent), which the tile
+/// takes back off on average, so the hillside keeps the colour it had untextured.
 const fn terrain(lateral: f32, y: f32, shade: u32) -> Station {
-    Station::new(lateral, y, rgb(shade * 34 / 100, shade * 48 / 100, shade * 28 / 100))
+    let k = shade * angle_zero::texgen::lift_percent(angle_zero::texgen::Surface::Grass);
+    Station::new(lateral, y, rgb(k * 34 / 10000, k * 48 / 10000, k * 28 / 10000))
 }
 
 const TERRAIN_STATIONS: [Station; 12] = [
@@ -81,12 +86,18 @@ const TERRAIN_STATIONS: [Station; 12] = [
     terrain(TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
 ];
 
+/// A road colour lifted for the asphalt tile, as [`terrain`] is for the grass.
+const fn tarmac(c: u32) -> u32 {
+    let k = angle_zero::texgen::lift_percent(angle_zero::texgen::Surface::Asphalt);
+    rgb((c & 0xff) * k / 100, ((c >> 8) & 0xff) * k / 100, ((c >> 16) & 0xff) * k / 100)
+}
+
 const ROAD_STATIONS: [Station; 5] = [
-    Station::new(-angle_zero::track::ROAD_SHOULDER, 0.0, rgb(0x14, 0x16, 0x19)),
-    Station::new(-5.2, 0.02, ROAD_COLOR),
-    Station::new(0.0, 0.03, rgb(0x1E, 0x20, 0x25)),
-    Station::new(5.2, 0.02, ROAD_COLOR),
-    Station::new(angle_zero::track::ROAD_SHOULDER, 0.0, rgb(0x14, 0x16, 0x19)),
+    Station::new(-angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(rgb(0x14, 0x16, 0x19))),
+    Station::new(-5.2, 0.02, tarmac(ROAD_COLOR)),
+    Station::new(0.0, 0.03, tarmac(rgb(0x1E, 0x20, 0x25))),
+    Station::new(5.2, 0.02, tarmac(ROAD_COLOR)),
+    Station::new(angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(rgb(0x14, 0x16, 0x19))),
 ];
 
 // The two edge lines must be separate ribbons. Built as one four-station ribbon, the quad
@@ -196,8 +207,14 @@ pub const MODE_EIGHT_CARS: u32 = 14;
 /// Worth having for the next model that arrives with its lenses somewhere new.
 #[cfg(feature = "devtools")]
 pub const MODE_ALL_LAMPS: u32 = 15;
+/// The world's surface tiles off: road and hillside drawn in their vertex colours alone.
 #[cfg(feature = "devtools")]
-pub const DEBUG_MODES: u32 = 16;
+pub const MODE_NO_TEXTURES: u32 = 16;
+/// The far scenery off: no ridgelines and no valley. Stars, moon and cloud stay.
+#[cfg(feature = "devtools")]
+pub const MODE_NO_FAR_SCENERY: u32 = 17;
+#[cfg(feature = "devtools")]
+pub const DEBUG_MODES: u32 = 18;
 #[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
@@ -233,6 +250,7 @@ pub fn init(track: &Track) {
         build_props(track);
         build_starfield();
         super::scenery::init(track, SKY_RADIUS);
+        super::surfaces::init();
         sys::sceKernelDcacheWritebackAll();
     }
 }
@@ -1054,8 +1072,14 @@ pub fn draw_sky(camera: &Camera) {
         // kilometre away; the order of these calls is the only occlusion there is out here, and
         // `angle_zero::scenery` is what keeps that order true (see tests/scenery.rs). Culling is
         // off: a ring seen from inside winds the other way on its far side.
-        super::scenery::draw_ridges(camera);
-        super::scenery::draw_valley(camera);
+        #[cfg(feature = "devtools")]
+        let far = DEBUG_MODE != MODE_NO_FAR_SCENERY;
+        #[cfg(not(feature = "devtools"))]
+        let far = true;
+        if far {
+            super::scenery::draw_ridges(camera);
+            super::scenery::draw_valley(camera);
+        }
         sys::sceGuEnable(GuState::CullFace);
 
         sys::sceGuDepthMask(0);
@@ -1389,6 +1413,7 @@ pub fn draw_world(camera: &Camera) {
         #[cfg(not(feature = "devtools"))]
         let skip_terrain = false;
         if !skip_terrain {
+            super::surfaces::bind(Surface::Grass);
             draw_ribbon(&*(&raw const TERRAIN_MESH), span);
         }
         sys::sceGuEnable(GuState::CullFace);
@@ -1399,8 +1424,10 @@ pub fn draw_world(camera: &Camera) {
         #[cfg(not(feature = "devtools"))]
         let skip_road = false;
         if !skip_road {
+            super::surfaces::bind(Surface::Asphalt);
             draw_ribbon(&*(&raw const ROAD_MESH), span);
         }
+        super::surfaces::unbind();
 
         // Markings sit fractions of a metre above the road; draw them after so they win ties.
         STATS_SLOT = 2;

@@ -23,5 +23,6 @@ pub mod save;
 pub mod scenery;
 pub mod scoring;
 pub mod stream;
+pub mod texgen;
 pub mod track;
 pub mod vehicle;

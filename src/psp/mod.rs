@@ -18,6 +18,7 @@ pub mod hud;
 pub mod render;
 pub mod scenery;
 pub mod scratch;
+pub mod surfaces;
 pub mod storage;
 pub mod text;
 
