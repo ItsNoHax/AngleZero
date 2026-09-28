@@ -13,7 +13,7 @@ use angle_zero::azcar;
 use angle_zero::camera::Camera;
 use angle_zero::effects::Effects;
 use angle_zero::lights;
-use angle_zero::math::{cos, floor, radians, sin, sqrt, tan, Mat4, Vec3, TAU};
+use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::track::{Locator, Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
@@ -37,9 +37,8 @@ pub const SKY_CLEAR: u32 = rgb(0x07, 0x0A, 0x12);
 pub const FOG_COLOR: u32 = rgb(0x08, 0x0C, 0x15);
 pub const FOG_NEAR: f32 = 45.0;
 pub const FOG_FAR: f32 = 330.0;
-/// Projection far plane, and the distance past which chunks are culled. Geometry beyond this is
-/// clipped by the hardware anyway, so nothing visible can be lost by using it.
-pub const DRAW_DISTANCE: f32 = 2400.0;
+/// Projection far plane. Lives in the core so the far scenery can be tested against it.
+pub const DRAW_DISTANCE: f32 = angle_zero::scenery::DRAW_DISTANCE;
 
 const ROAD_COLOR: u32 = rgb(0x1A, 0x1C, 0x20);
 const EDGE_COLOR: u32 = rgb(0xA9, 0xA2, 0x93);
@@ -60,7 +59,7 @@ const DASH_COLOR: u32 = rgb(0x8C, 0x7A, 0x45);
 /// So the ribbon stays the size the *scenery* wants to be, and [`draw_ground_backdrop`] deals with
 /// what is behind it.
 const TERRAIN_HALF_WIDTH: f32 = 190.0;
-const TERRAIN_EDGE_DROP: f32 = -78.0;
+const TERRAIN_EDGE_DROP: f32 = -150.0;
 
 /// The hillside, shaded darker as it falls away so the slope reads at night.
 const fn terrain(lateral: f32, y: f32, shade: u32) -> Station {
@@ -69,16 +68,16 @@ const fn terrain(lateral: f32, y: f32, shade: u32) -> Station {
 
 const TERRAIN_STATIONS: [Station; 12] = [
     terrain(-TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
-    terrain(-96.0, -40.0, 44),
-    terrain(-48.0, -17.0, 58),
+    terrain(-96.0, -58.0, 44),
+    terrain(-48.0, -19.0, 58),
     terrain(-22.0, -4.2, 74),
     terrain(-11.0, -0.9, 92),
     terrain(-7.2, -0.25, 100),
     terrain(7.2, -0.25, 100),
     terrain(11.0, -0.9, 92),
     terrain(22.0, -4.2, 74),
-    terrain(48.0, -17.0, 58),
-    terrain(96.0, -40.0, 44),
+    terrain(48.0, -19.0, 58),
+    terrain(96.0, -58.0, 44),
     terrain(TERRAIN_HALF_WIDTH, TERRAIN_EDGE_DROP, 34),
 ];
 
@@ -232,8 +231,8 @@ pub fn init(track: &Track) {
 
         build_dashes(track);
         build_props(track);
-        build_mountains(track);
         build_starfield();
+        super::scenery::init(track, SKY_RADIUS);
         sys::sceKernelDcacheWritebackAll();
     }
 }
@@ -855,55 +854,6 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
 /// Mountain ring. Thirty four-sided cones ringing the track, drawn without fog as a
 /// pure silhouette: at 700 m+ they sit far beyond the 330 m fog range, so fogging them would
 /// erase the horizon entirely.
-const MOUNTAIN_COUNT: usize = 30;
-const MOUNTAIN_VERTS: usize = MOUNTAIN_COUNT * 4 * 3;
-static mut MOUNTAINS: psp::Align16<[Vertex; MOUNTAIN_VERTS]> =
-    psp::Align16([Vertex::ZERO; MOUNTAIN_VERTS]);
-
-unsafe fn build_mountains(track: &Track) {
-    let (mut min_x, mut max_x) = (f32::MAX, f32::MIN);
-    let (mut min_z, mut max_z) = (f32::MAX, f32::MIN);
-    let mut max_y = f32::MIN;
-    for n in track.nodes.iter() {
-        min_x = fmin(min_x, n.p.x);
-        max_x = fmax(max_x, n.p.x);
-        min_z = fmin(min_z, n.p.z);
-        max_z = fmax(max_z, n.p.z);
-        max_y = fmax(max_y, n.p.y);
-    }
-    let cx = (min_x + max_x) * 0.5;
-    let cz = (min_z + max_z) * 0.5;
-    let span = fmax(max_x - min_x, max_z - min_z);
-    let base_y = max_y - 240.0;
-
-    let out = core::slice::from_raw_parts_mut(&raw mut MOUNTAINS as *mut Vertex, MOUNTAIN_VERTS);
-    let mut w = 0usize;
-
-    for k in 0..MOUNTAIN_COUNT {
-        let angle = (k as f32 / MOUNTAIN_COUNT as f32) * TAU;
-        let radius = span * 0.85 + 700.0 + (k % 5) as f32 * 240.0;
-        let height = 320.0 + (k % 7) as f32 * 130.0;
-        let color = if k % 2 == 0 {
-            rgb(0x1B, 0x24, 0x34)
-        } else {
-            rgb(0x23, 0x2F, 0x42)
-        };
-        let px = cx + sin(angle) * radius;
-        let pz = cz + cos(angle) * radius;
-        // A four-sided cone: apex plus a square base, yawed to face the track.
-        let base = height * 0.62;
-        let apex = Vertex::new(px, base_y + height, pz, color);
-        for s in 0..4 {
-            let a0 = angle + (s as f32) * (TAU / 4.0);
-            let a1 = angle + ((s + 1) as f32) * (TAU / 4.0);
-            out[w] = apex;
-            out[w + 1] = Vertex::new(px + sin(a0) * base, base_y, pz + cos(a0) * base, color);
-            out[w + 2] = Vertex::new(px + sin(a1) * base, base_y, pz + cos(a1) * base, color);
-            w += 3;
-        }
-    }
-}
-
 /// Stars and moon.
 ///
 /// Both are fixed to directions from the camera rather than to the screen. Screen-locked stars
@@ -969,8 +919,8 @@ unsafe fn build_starfield() {
     }
 
     // The moon, with a faint halo behind it.
-    let yaw = 2.1;
-    let height = 0.55;
+    let yaw = angle_zero::scenery::MOON_YAW;
+    let height = angle_zero::scenery::MOON_HEIGHT;
     let ring = sqrt(1.0 - height * height);
     let (mx, my, mz) = (
         sin(yaw) * ring * SKY_RADIUS,
@@ -1096,19 +1046,17 @@ pub fn draw_sky(camera: &Camera) {
             core::ptr::null(),
             &raw const MOON as *const c_void,
         );
+        super::scenery::draw_cloud();
         sys::sceGuDisable(GuState::Blend);
-        sys::sceGuEnable(GuState::CullFace);
 
-        // Mountains sit in front of the gradient but behind everything else. Depth writes stay
-        // off so the scene proper is never occluded by geometry a kilometre away.
-        sys::sceGumLoadIdentity();
-        sys::sceGumDrawArray(
-            GuPrimitive::Triangles,
-            VERTEX_FORMAT,
-            MOUNTAIN_VERTS as i32,
-            core::ptr::null(),
-            &raw const MOUNTAINS as *const c_void,
-        );
+        // Ridges sit in front of the gradient but behind everything else, then the valley in front
+        // of them. Depth writes stay off so the scene proper is never occluded by geometry a
+        // kilometre away; the order of these calls is the only occlusion there is out here, and
+        // `angle_zero::scenery` is what keeps that order true (see tests/scenery.rs). Culling is
+        // off: a ring seen from inside winds the other way on its far side.
+        super::scenery::draw_ridges(camera);
+        super::scenery::draw_valley(camera);
+        sys::sceGuEnable(GuState::CullFace);
 
         sys::sceGuDepthMask(0);
         sys::sceGuEnable(GuState::Fog);
@@ -1122,64 +1070,21 @@ pub fn draw_sky(camera: &Camera) {
 /// snapped to a pixel, and the GE cannot be asked to snap. A star is a direction, not a point, so
 /// the eye's position drops out and only its orientation matters.
 unsafe fn draw_stars(camera: &Camera) {
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Star2D {
-        color: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-    }
-
-    let forward = camera.look_at.sub(camera.pos).normalized();
-    let side = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalized();
-    if forward.length() < 0.5 || side.length() < 0.5 {
+    use super::scenery::{draw_pixels, push_pixel, Pixel2D, Projector};
+    let Some(proj) = Projector::new(camera) else {
         return;
-    }
-    let up = side.cross(forward);
-    // Pixels per unit of tangent: the viewport's half-height over tan(fov / 2), and the same
-    // across, divided by the aspect the projection was given rather than the screen's own.
-    let t = tan(radians(camera.fov) * 0.5);
-    let fy = 136.0 / t;
-    let fx = 240.0 / (16.0 / 9.0 * t);
-
-    let verts = super::scratch::alloc::<Star2D>(STAR_COUNT * 2);
+    };
+    let verts = super::scratch::alloc::<Pixel2D>(STAR_COUNT * 2);
     if verts.is_null() {
         return;
     }
     let mut w = 0usize;
     for star in (*(&raw const STARS)).iter() {
-        let depth = star.dir.dot(forward);
-        if depth <= 0.0 {
-            continue;
+        if let Some((sx, sy)) = proj.direction(star.dir) {
+            w += push_pixel(verts.add(w), sx, sy, star.size, star.color);
         }
-        let sx = 240.0 + star.dir.dot(side) / depth * fx;
-        let sy = 136.0 - star.dir.dot(up) / depth * fy;
-        // The square's top-left pixel, chosen so the star's centre falls inside it.
-        let x = floor(sx - (star.size - 1.0) * 0.5);
-        let y = floor(sy - (star.size - 1.0) * 0.5);
-        if x + star.size <= 0.0 || y + star.size <= 0.0 || x >= 480.0 || y >= 272.0 {
-            continue;
-        }
-        *verts.add(w) = Star2D { color: star.color, x, y, z: 0.0 };
-        *verts.add(w + 1) = Star2D {
-            color: star.color,
-            x: x + star.size,
-            y: y + star.size,
-            z: 0.0,
-        };
-        w += 2;
     }
-    if w == 0 {
-        return;
-    }
-    sys::sceGumDrawArray(
-        GuPrimitive::Sprites,
-        VertexType::COLOR_8888 | VertexType::VERTEX_32BITF | VertexType::TRANSFORM_2D,
-        w as i32,
-        core::ptr::null(),
-        verts as *const c_void,
-    );
+    draw_pixels(verts, w);
 }
 
 /// Everything below the horizon that the scenery does not reach, in the colour distance already is.

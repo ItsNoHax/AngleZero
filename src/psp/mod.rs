@@ -16,6 +16,7 @@ pub mod harness;
 pub mod trace;
 pub mod hud;
 pub mod render;
+pub mod scenery;
 pub mod scratch;
 pub mod storage;
 pub mod text;
