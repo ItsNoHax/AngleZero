@@ -70,9 +70,11 @@ pub enum Toast {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Buttons {
     pub cross: bool,
-    pub circle: bool,
     pub square: bool,
-    pub triangle: bool,
+    /// The L trigger, held to look at the front of the car.
+    pub l: bool,
+    /// The R trigger, the handbrake.
+    pub r: bool,
     pub up: bool,
     pub down: bool,
     pub left: bool,
@@ -162,9 +164,9 @@ impl Game {
             impacts: 0,
             prev: Buttons {
                 cross: false,
-                circle: false,
                 square: false,
-                triangle: false,
+                l: false,
+                r: false,
                 up: false,
                 down: false,
                 left: false,
@@ -188,7 +190,7 @@ impl Game {
         Input {
             throttle: if b.cross || b.up { 1.0 } else { 0.0 },
             brake: b.square || b.down,
-            handbrake: b.circle,
+            handbrake: b.r,
             steer_in,
         }
     }
@@ -325,7 +327,7 @@ impl Game {
                 } else {
                     // Held, not toggled: it is a glance at the front of the car, and letting go has
                     // to put the road back without a second press to remember.
-                    self.camera.front_view = buttons.triangle;
+                    self.camera.front_view = buttons.l;
                     self.run_substeps(track, buttons, frame_dt);
                     self.camera.update_run(&self.vehicle.state, frame_dt);
                     // Smoke ages per rendered frame rather than per substep.

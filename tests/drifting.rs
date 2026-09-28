@@ -14,9 +14,9 @@ use angle_zero::track::{Track, NODE_COUNT};
 
 const NONE: Buttons = Buttons {
     cross: false,
-    circle: false,
     square: false,
-    triangle: false,
+    l: false,
+    r: false,
     up: false,
     down: false,
     left: false,
@@ -74,7 +74,7 @@ fn drive_a_drifting_descent(seconds: f32) -> (Box<Game>, Run) {
             let stab = ((secs - 18.0) % 6.0) < 0.5;
             Buttons {
                 cross: true,
-                circle: stab,
+                r: stab,
                 analog_x: clamp(lane * 0.35 + counter, -1.0, 1.0),
                 ..NONE
             }
@@ -130,7 +130,7 @@ fn holding_full_lock_and_the_handbrake_spins_rather_than_drifts() {
         } else {
             Buttons {
                 cross: true,
-                circle: true,
+                r: true,
                 left: true,
                 ..NONE
             }

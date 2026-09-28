@@ -19,9 +19,9 @@ fn game(t: &Track) -> Box<Game> {
 
 const NONE: Buttons = Buttons {
     cross: false,
-    circle: false,
     square: false,
-    triangle: false,
+    l: false,
+    r: false,
     up: false,
     down: false,
     left: false,
@@ -201,7 +201,7 @@ fn triangle_during_a_run_looks_at_the_front_of_the_car_and_lets_go_again() {
     assert!(along_nose(&g) < -3.0, "the chase should start out behind");
 
     let ahead = Buttons {
-        triangle: true,
+        l: true,
         ..CROSS
     };
     hold(&mut g, &t, ahead, 2.0);
@@ -346,7 +346,7 @@ fn the_face_buttons_map_the_way_the_design_says() {
     assert!(!i.brake && !i.handbrake);
 
     let i = Game::drive_input(&Buttons {
-        circle: true,
+        r: true,
         ..NONE
     });
     assert!(i.handbrake);

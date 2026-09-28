@@ -31,7 +31,7 @@ invent new ones:
 | Slot | Build | Why |
 | --- | --- | --- |
 | `PSP/GAME/AngleZero/EBOOT.PBP` | `cargo psp --release` | What actually gets played. ~765 KB. |
-| `PSP/GAME/AngleZeroDev/EBOOT.PBP` | `cargo psp --release --features devtools` | R toggles the counter overlay, SELECT saves a frame burst, L cycles the render-state modes. The title screen also carries `RD PK`, the longest chunk read off the stick, which is the one measurement no emulator can give. ~963 KB. |
+| `PSP/GAME/AngleZeroDev/EBOOT.PBP` | `cargo psp --release --features devtools` | ○ toggles the counter overlay, SELECT saves a frame burst, △ cycles the render-state modes. The title screen also carries `RD PK`, the longest chunk read off the stick, which is the one measurement no emulator can give. ~963 KB. |
 
 "Push the new builds" means **both**. The `EBOOT.PBP` is the only *build* artifact in each folder —
 `Psp.toml` bundles the icon, background and music into the PBP itself — but the cars are separate

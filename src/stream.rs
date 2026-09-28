@@ -1,8 +1,8 @@
 //! Reading a car a piece at a time, and the arithmetic of doing so.
 //!
 //! A car is the better part of a megabyte and a memory stick is not fast. Read whole, it stops the
-//! title screen dead for a fraction of a second every time somebody presses L or R — which is the
-//! one screen where the player is pressing L and R repeatedly. Read a chunk per frame instead and
+//! title screen dead for a fraction of a second every time somebody presses Left or Right — which
+//! is the one screen where the player is pressing them repeatedly. Read a chunk per frame instead and
 //! the screen keeps running at its own rate while the car arrives over the next handful of frames.
 //!
 //! What is worth testing about that is not the file handle, which only exists on the console, but

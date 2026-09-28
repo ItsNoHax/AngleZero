@@ -81,9 +81,9 @@ Without cars the game still runs and says so on the title screen.
 |---|---|
 | Throttle | ✕ or D-pad Up |
 | Brake | □ or D-pad Down |
-| Handbrake | ○ |
+| Handbrake | R |
 | Steer | D-pad Left/Right or analog nub |
-| Look at the front of the car | △ (hold) |
+| Look at the front of the car | L (hold) |
 | Pause | START |
 
 | Screen | Button | Action |

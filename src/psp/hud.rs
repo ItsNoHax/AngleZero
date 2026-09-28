@@ -372,8 +372,8 @@ fn draw_title(game: &Game) {
     // stay true when the car is swapped — and neither needs a table of cars in the game.
     //
     // Except while one is arriving, which is the one moment there is no asset to ask. Then the
-    // filename stands in, so a press of L or R is answered on the frame it happened rather than
-    // when the read finishes.
+    // filename stands in, so a press of Left or Right is answered on the frame it happened rather
+    // than when the read finishes.
     if let Some((index, progress)) = super::car::loading() {
         let name = super::car::display_name(index);
         text::draw_centered(name.as_bytes(), SCREEN_W * 0.5, 202.0, 1.0, TEXT);
@@ -384,7 +384,7 @@ fn draw_title(game: &Game) {
             text::draw_centered(name, SCREEN_W * 0.5, 202.0, 1.0, TEXT);
         }
         if game.car_count > 1 {
-            text::draw_centered(b"< L/R TO CHANGE CAR >", SCREEN_W * 0.5, 214.0, 1.0, DIM);
+            text::draw_centered(b"< LEFT/RIGHT TO CHANGE CAR >", SCREEN_W * 0.5, 214.0, 1.0, DIM);
         }
         let credit = car.credit();
         if !credit.is_empty() {
@@ -413,8 +413,8 @@ fn draw_title(game: &Game) {
 /// What loading a car costs, on the one screen where cars are loaded.
 ///
 /// Off the debug overlay's line, which is full and already at the width of the screen, and here
-/// instead because this is where it can be read while doing the thing it measures: press L or R,
-/// watch what a chunk cost. `PK` is the number `CHUNK_BYTES` is chosen against and the only one
+/// instead because this is where it can be read while doing the thing it measures: press Left or
+/// Right, watch what a chunk cost. `PK` is the number `CHUNK_BYTES` is chosen against and the only one
 /// that has to come off a real memory stick — under the emulator these bytes come from an SSD and
 /// every chunk size looks free.
 ///
@@ -447,8 +447,8 @@ fn draw_car_diagnostics() {
 
 /// How far through the car being read this is, as a bar rather than a number.
 ///
-/// It sits where `< L/R TO CHANGE CAR >` sits, because it is answering the press that line invited
-/// and the two never need to be read at once. A bar rather than a percentage: what it is there to
+/// It sits where `< LEFT/RIGHT TO CHANGE CAR >` sits, because it is answering the press that line
+/// invited and the two never need to be read at once. A bar rather than a percentage: what it is there to
 /// say is "this is going to happen", and the exact figure is nobody's business at a title screen.
 fn loading_bar(y: f32, fraction: f32) {
     const W: f32 = 96.0;

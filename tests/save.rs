@@ -141,7 +141,7 @@ use angle_zero::game::{Buttons, Game, Phase};
 use angle_zero::track::{Track, NODE_COUNT};
 
 const NONE: Buttons = Buttons {
-    cross: false, circle: false, square: false, triangle: false,
+    cross: false, square: false, l: false, r: false,
     up: false, down: false, left: false, right: false, start: false, analog_x: 0.0,
 };
 

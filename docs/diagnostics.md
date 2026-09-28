@@ -16,8 +16,8 @@ Use a release build: hardware faults are what this is for, and the debug binary 
 
 | Button | Action |
 |---|---|
-| R | Toggle the counter overlay |
-| L | Cycle render mode (see [Render modes](#render-modes)) |
+| ○ | Toggle the counter overlay |
+| △ | Cycle render mode (see [Render modes](#render-modes)) |
 | SELECT | Capture frame + counters to `ms0:/ANGLEZERO/`. Hold for a burst (every 4th frame) |
 
 ### Retrieving captures

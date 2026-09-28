@@ -16,9 +16,9 @@ fn track() -> Box<Track> {
 
 const NONE: Buttons = Buttons {
     cross: false,
-    circle: false,
     square: false,
-    triangle: false,
+    l: false,
+    r: false,
     up: false,
     down: false,
     left: false,
@@ -107,7 +107,7 @@ fn permanent_handbrake_and_full_lock_stays_finite() {
 
     let chaos = Buttons {
         cross: true,
-        circle: true,
+        r: true,
         left: true,
         ..NONE
     };
@@ -135,7 +135,7 @@ fn slamming_between_opposite_inputs_stays_finite() {
         let b = Buttons {
             cross: flip,
             square: !flip,
-            circle: i % 3 == 0,
+            r: i % 3 == 0,
             left: flip,
             right: !flip,
             ..NONE

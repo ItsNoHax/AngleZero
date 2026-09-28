@@ -95,9 +95,9 @@ fn read_buttons(pad: &SceCtrlData) -> Buttons {
 
     Buttons {
         cross: b.contains(CtrlButtons::CROSS),
-        circle: b.contains(CtrlButtons::CIRCLE),
         square: b.contains(CtrlButtons::SQUARE),
-        triangle: b.contains(CtrlButtons::TRIANGLE),
+        l: b.contains(CtrlButtons::LTRIGGER),
+        r: b.contains(CtrlButtons::RTRIGGER),
         up: b.contains(CtrlButtons::UP),
         down: b.contains(CtrlButtons::DOWN),
         left: b.contains(CtrlButtons::LEFT),
@@ -273,20 +273,22 @@ pub fn psp_main() {
             // way to catch something that flickers for a few frames while you are also driving.
             #[cfg(all(feature = "devtools", not(feature = "harness")))]
             let want_capture = {
-                let r_edge = pad.buttons.contains(CtrlButtons::RTRIGGER)
-                    && !prev_debug_buttons.contains(CtrlButtons::RTRIGGER);
+                // Circle and Triangle, because the triggers drive: R is the handbrake and L the
+                // front view.
+                let overlay_edge = pad.buttons.contains(CtrlButtons::CIRCLE)
+                    && !prev_debug_buttons.contains(CtrlButtons::CIRCLE);
                 let select_held = pad.buttons.contains(CtrlButtons::SELECT);
                 let select_edge = select_held && !prev_debug_buttons.contains(CtrlButtons::SELECT);
-                // L cycles a render-state override, for pinning down a fault that only appears
-                // on hardware. See `render::DEBUG_MODES`. Every edge here has to be read before
+                // Triangle cycles a render-state override, for pinning down a fault that only
+                // appears on hardware. See `render::DEBUG_MODES`. Every edge here has to be read before
                 // `prev_debug_buttons` is updated, or it can never be true.
-                let l_edge = pad.buttons.contains(CtrlButtons::LTRIGGER)
-                    && !prev_debug_buttons.contains(CtrlButtons::LTRIGGER);
+                let mode_edge = pad.buttons.contains(CtrlButtons::TRIANGLE)
+                    && !prev_debug_buttons.contains(CtrlButtons::TRIANGLE);
                 prev_debug_buttons = pad.buttons;
-                if r_edge {
+                if overlay_edge {
                     show_debug = !show_debug;
                 }
-                if l_edge {
+                if mode_edge {
                     debug_mode = (debug_mode + 1) % render::DEBUG_MODES;
                     render::set_debug_mode(debug_mode);
                     // A field of cars needs cars to field. Only one is resident in the ordinary

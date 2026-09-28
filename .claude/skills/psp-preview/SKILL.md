@@ -99,7 +99,7 @@ the first car finishes arriving, so an early capture can legitimately catch the 
 silhouette is not what you wanted, capture later — `--timeout` headroom is cheap — or press X,
 which reads the rest of the file at once.
 
-The same is true after any press of L or R: the car under the name is the one arriving, and it
+The same is true after any press of Left or Right on the d-pad: the car under the name is the one arriving, and it
 takes a moment. `scripts/psp_glitch.py` is the tool for looking at that transition frame by frame,
 since a single overwritten screenshot cannot show it.
 

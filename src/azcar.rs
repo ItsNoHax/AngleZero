@@ -564,8 +564,8 @@ pub struct Car<'a> {
 /// A car is the better part of a megabyte and arrives over a handful of frames. This is the part
 /// that arrives first — a few hundred triangles, positions only, written at the very front of the
 /// file so that the load's first chunk already holds it. Drawn flat and dark, it is the car's
-/// outline, which is enough to answer a press of L or R on the frame it happened instead of when
-/// the read finishes.
+/// outline, which is enough to answer a press of Left or Right on the frame it happened instead of
+/// when the read finishes.
 ///
 /// It is a copy of geometry the file already contains, and that duplication is the whole trade: a
 /// second seek to the middle of a file, on a memory stick, costs more than the fifteen kilobytes

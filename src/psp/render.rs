@@ -171,13 +171,13 @@ const SILHOUETTE_VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
 /// light enough to have an edge.
 const SILHOUETTE_COLOR: u32 = 0xFF18_1410;
 
-/// Render-state overrides for diagnosing hardware-only faults, cycled with the L trigger.
+/// Render-state overrides for diagnosing hardware-only faults, cycled with Triangle.
 ///
 /// The scenery dropout at the bottom of the screen does not reproduce in any emulator backend
 /// available here, so the mechanism has to be identified on the console itself. Each mode turns
 /// off one suspect; whichever one makes the fault disappear names the cause.
 ///
-/// Interactively these are cycled with the L trigger. A harness run sets one from its script
+/// Interactively these are cycled with Triangle. A harness run sets one from its script
 /// instead, which is what makes the overrides usable as a bisection: run the same frames with one
 /// suspect disabled and see whether the artifact survives.
 ///

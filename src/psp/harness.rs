@@ -27,13 +27,13 @@
 //! 400 xl            # still accelerating, now steering left
 //! ```
 //!
-//! Letters are `x`, `o`, `s`, `t` for the face buttons and `u`, `d`, `l`, `r` for the d-pad; `-`
-//! means nothing held. Each line holds until the next one's frame.
+//! Letters are `x`, `s` for the face buttons, `L`, `R` for the triggers, `u`, `d`, `l`, `r` for
+//! the d-pad and `p` for START; `-` means nothing held. Each line holds until the next one's frame.
 //!
 //! `place` exists because most of the track is otherwise unreachable. Driving there needs a
 //! steering script that survives every corner in between, and one mistake ends the run against a
 //! guard rail — so a hairpin two thirds of the way down could not be looked at at all. Dropping the
-//! car onto a node reaches any of them directly. It is the same call the triangle-key rescue makes.
+//! car onto a node reaches any of them directly. It is the same call that puts the car on the grid.
 
 use angle_zero::game::Buttons;
 use psp::sys::{self, IoOpenFlags};
@@ -45,9 +45,9 @@ pub const DT: f32 = 1.0 / 60.0;
 const PATH: &[u8] = b"ms0:/ANGLEZERO/SCRIPT.TXT\0";
 
 const CROSS: u16 = 1 << 0;
-const CIRCLE: u16 = 1 << 1;
 const SQUARE: u16 = 1 << 2;
-const TRIANGLE: u16 = 1 << 3;
+const L_TRIGGER: u16 = 1 << 1;
+const R_TRIGGER: u16 = 1 << 3;
 const UP: u16 = 1 << 4;
 const DOWN: u16 = 1 << 5;
 const LEFT: u16 = 1 << 6;
@@ -97,9 +97,9 @@ fn mask_from_letters(s: &[u8]) -> u16 {
     for &c in s {
         mask |= match c {
             b'x' => CROSS,
-            b'o' => CIRCLE,
             b's' => SQUARE,
-            b't' => TRIANGLE,
+            b'L' => L_TRIGGER,
+            b'R' => R_TRIGGER,
             b'u' => UP,
             b'd' => DOWN,
             b'l' => LEFT,
@@ -240,9 +240,9 @@ pub fn buttons_for(frame: u32) -> Buttons {
     }
     Buttons {
         cross: mask & CROSS != 0,
-        circle: mask & CIRCLE != 0,
         square: mask & SQUARE != 0,
-        triangle: mask & TRIANGLE != 0,
+        l: mask & L_TRIGGER != 0,
+        r: mask & R_TRIGGER != 0,
         up: mask & UP != 0,
         down: mask & DOWN != 0,
         left: mask & LEFT != 0,
