@@ -5,6 +5,7 @@
 //! clock that drives the fixed-timestep update.
 
 pub mod audio;
+pub mod banks;
 pub mod car;
 #[cfg(feature = "devtools")]
 pub mod atractest;

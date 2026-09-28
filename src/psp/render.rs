@@ -266,6 +266,7 @@ pub fn init(track: &Track) {
         build_starfield();
         super::scenery::init(track, SKY_RADIUS);
         super::surfaces::init();
+        super::banks::init(track);
         super::trees::init(track);
         super::roadside::init(track);
         sys::sceKernelDcacheWritebackAll();
@@ -1438,6 +1439,9 @@ pub fn draw_world(camera: &Camera) {
                 prop_verts.add(chunk.start as usize) as *const c_void,
             );
         }
+        // Cut banks on the inside of the bends.
+        let bank_verts = super::banks::draw(|chunk| visible(chunk, eye, forward));
+        tally(1, bank_verts);
         // Pines, textured and alpha-tested, in the same cull-free state as the props.
         let tree_verts = super::trees::draw(|chunk| visible(chunk, eye, forward));
         tally(5, tree_verts);

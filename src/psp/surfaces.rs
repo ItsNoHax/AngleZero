@@ -54,12 +54,8 @@ pub unsafe fn init() {
     }
 }
 
-/// Textures everything drawn until [`unbind`] with `s`, projected from world X and Z.
-pub unsafe fn bind(s: Surface) {
-    #[cfg(feature = "devtools")]
-    if super::render::debug_mode() == super::render::MODE_NO_TEXTURES {
-        return;
-    }
+/// Loads `s` as the current texture, without choosing how coordinates are made.
+unsafe fn load(s: Surface) {
     let t = &(*(&raw const TILES))[slot(s)];
     sys::sceGuEnable(GuState::Texture2D);
     sys::sceGuClutMode(ClutPixelFormat::Psm8888, 0, 0x0f, 0);
@@ -77,6 +73,25 @@ pub unsafe fn bind(s: Surface) {
     sys::sceGuTexFilter(TextureFilter::LinearMipmapNearest, TextureFilter::Linear);
     sys::sceGuTexLevelMode(TextureLevelMode::Auto, 0.0);
     sys::sceGuTexWrap(GuTexWrapMode::Repeat, GuTexWrapMode::Repeat);
+}
+
+/// Textures what follows with `s` from the vertices' own UVs, in tiles.
+pub unsafe fn bind_uv(s: Surface) {
+    #[cfg(feature = "devtools")]
+    if super::render::debug_mode() == super::render::MODE_NO_TEXTURES {
+        return;
+    }
+    load(s);
+    sys::sceGuTexMapMode(TextureMapMode::TextureCoords, 0, 0);
+}
+
+/// Textures everything drawn until [`unbind`] with `s`, projected from world X and Z.
+pub unsafe fn bind(s: Surface) {
+    #[cfg(feature = "devtools")]
+    if super::render::debug_mode() == super::render::MODE_NO_TEXTURES {
+        return;
+    }
+    load(s);
     sys::sceGuTexMapMode(TextureMapMode::TextureMatrix, 0, 0);
     sys::sceGuTexProjMapMode(TextureProjectionMapMode::Position);
 

@@ -435,7 +435,15 @@ fn clear_of_tarmac(track: &Track, p: Vec3) -> bool {
 
 /// Fills `out` with tree sites in node order, and returns how many. `skip(node, side)` excludes
 /// ground the caller has other plans for (the lay-by).
-pub fn tree_sites(track: &Track, out: &mut [TreeSite], skip: impl Fn(usize, f32) -> bool) -> usize {
+///
+/// `ground(node, lateral)` is the height of anything built over the hillside there (a cut bank),
+/// which a tree stands on instead.
+pub fn tree_sites(
+    track: &Track,
+    out: &mut [TreeSite],
+    skip: impl Fn(usize, f32) -> bool,
+    ground: impl Fn(usize, f32) -> Option<f32>,
+) -> usize {
     let mut w = 0usize;
     let mut i = 0usize;
     while i < track.nodes.len() && w < out.len() {
@@ -461,7 +469,8 @@ pub fn tree_sites(track: &Track, out: &mut [TreeSite], skip: impl Fn(usize, f32)
                 let along = (unit(key ^ 0x3C) - 0.5) * 4.0;
                 let x = node.p.x + node.nrm.x * side * lateral + node.dir.x * along;
                 let z = node.p.z + node.nrm.z * side * lateral + node.dir.z * along;
-                let base = Vec3::new(x, node.p.y + terrain_drop(lateral) - 0.3, z);
+                let lift = ground(i, side * lateral).map_or(terrain_drop(lateral), |g| max(g, terrain_drop(lateral)));
+                let base = Vec3::new(x, node.p.y + lift - 0.3, z);
                 if !clear_of_tarmac(track, base) {
                     continue;
                 }
@@ -666,4 +675,124 @@ pub fn sign_gain(sign: &Sign, car: Vec3, forward: (f32, f32)) -> f32 {
     let face = sqrt(face);
     let fade = clamp(1.25 - d / REFLECT_FAR, 0.0, 1.0);
     beam * face * fade
+}
+
+// --- cut banks ----------------------------------------------------------------------------------
+
+/// A stretch of the inside of a bend where the hillside is cut back into a faced bank.
+#[derive(Clone, Copy, Debug)]
+pub struct BankSpan {
+    pub from: u32,
+    pub to: u32,
+    /// Which side of the road, in the nodes' `nrm` frame.
+    pub side: f32,
+    /// Height of the crest at the middle of the span, metres above the road.
+    pub height: f32,
+}
+
+impl BankSpan {
+    pub const ZERO: BankSpan = BankSpan { from: 0, to: 0, side: 1.0, height: 0.0 };
+}
+
+/// Where the bank's face starts, just behind the rail.
+pub const BANK_FOOT: f32 = 7.9;
+/// How far out the bank's back slope comes down to meet the hillside again.
+pub const BANK_BACK: f32 = 24.0;
+/// Nodes over which a bank rises from nothing at each end.
+pub const BANK_RAMP: u32 = 22;
+/// Nearest the bank's footprint may come to a different part of the road.
+pub const BANK_CLEARANCE: f32 = 14.0;
+
+/// Lateral position of the crest for a bank of height `h`: the face leans back at about 55°.
+pub fn bank_crest(h: f32) -> f32 {
+    BANK_FOOT + h * 0.7
+}
+
+/// Crest height at `node` within `span`, easing in and out over [`BANK_RAMP`] nodes.
+pub fn bank_height_at(span: &BankSpan, node: u32) -> f32 {
+    if node < span.from || node > span.to {
+        return 0.0;
+    }
+    let from_start = (node - span.from) as f32 / BANK_RAMP as f32;
+    let from_end = (span.to - node) as f32 / BANK_RAMP as f32;
+    let t = clamp(crate::math::min(from_start, from_end), 0.0, 1.0);
+    span.height * t * t * (3.0 - 2.0 * t)
+}
+
+/// Height of the bank's surface above the road, `lateral` metres out on its side (0 elsewhere).
+/// The face rises from the foot to the crest; the back slope falls from the crest to the hillside.
+pub fn bank_surface(span: &BankSpan, node: u32, lateral: f32) -> Option<f32> {
+    let h = bank_height_at(span, node);
+    let l = lateral * span.side;
+    if h <= 0.01 || !(BANK_FOOT..=BANK_BACK).contains(&l) {
+        return None;
+    }
+    let crest = bank_crest(h);
+    let foot_y = -0.3;
+    Some(if l <= crest {
+        foot_y + (h - foot_y) * (l - BANK_FOOT) / (crest - BANK_FOOT)
+    } else {
+        let back = terrain_drop(BANK_BACK);
+        h + (back - h) * (l - crest) / (BANK_BACK - crest)
+    })
+}
+
+/// True when the ground a bank would occupy beside `node` is clear of every other part of the road.
+fn bank_fits(track: &Track, node: usize, side: f32) -> bool {
+    let n = &track.nodes[node];
+    for lateral in [BANK_FOOT, 12.0, 17.0, BANK_BACK] {
+        let p = Vec3::new(n.p.x + n.nrm.x * lateral * side, n.p.y, n.p.z + n.nrm.z * lateral * side);
+        let mut j = 0;
+        while j < track.nodes.len() {
+            if (j as i64 - node as i64).abs() > 30 && track.nodes[j].p.horizontal_distance(p) < BANK_CLEARANCE {
+                return false;
+            }
+            j += 2;
+        }
+    }
+    true
+}
+
+/// The cut banks on the pass: one around each apex that needs braking for, on the inside, trimmed to
+/// where the ground is clear of the road's other legs. `skip(node, side)` excludes the lay-by.
+pub fn cut_banks(track: &Track, out: &mut [BankSpan], skip: impl Fn(usize, f32) -> bool) -> usize {
+    let mut apex = [0u32; 64];
+    let count = apexes(track, &mut apex);
+    let mut w = 0usize;
+    for &a in &apex[..count] {
+        let a = a as usize;
+        let side = -outside_of_bend(track, a);
+        if side == 0.0 {
+            continue;
+        }
+        let reach = 42usize;
+        let (lo, hi) = (a.saturating_sub(reach), (a + reach).min(track.nodes.len() - 2));
+        // Longest clear run through the span.
+        let (mut best, mut run_start) = ((0usize, 0usize), None::<usize>);
+        for i in lo..=hi + 1 {
+            let ok = i <= hi && !skip(i, side) && bank_fits(track, i, side);
+            match (ok, run_start) {
+                (true, None) => run_start = Some(i),
+                (false, Some(s)) => {
+                    if i - s > best.1 - best.0 {
+                        best = (s, i);
+                    }
+                    run_start = None;
+                }
+                _ => {}
+            }
+        }
+        if best.1 - best.0 < (BANK_RAMP as usize) * 2 + 6 || w >= out.len() {
+            continue;
+        }
+        let c = abs(track.nodes[a].curv);
+        out[w] = BankSpan {
+            from: best.0 as u32,
+            to: (best.1 - 1) as u32,
+            side,
+            height: clamp(3.0 + (c - 0.07) * 25.0, 3.0, 6.0),
+        };
+        w += 1;
+    }
+    w
 }

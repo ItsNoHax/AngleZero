@@ -25,15 +25,19 @@ pub const fn level_bytes(level: usize) -> usize {
 pub enum Surface {
     Asphalt,
     Grass,
+    /// Sprayed-concrete slope protection: a grid of cast frames with rougher fill between.
+    Lattice,
 }
 
-pub const SURFACES: [Surface; 2] = [Surface::Asphalt, Surface::Grass];
+pub const SURFACES: [Surface; 3] = [Surface::Asphalt, Surface::Grass, Surface::Lattice];
 
 /// How many metres of world one tile covers.
 pub fn tile_metres(s: Surface) -> f32 {
     match s {
         Surface::Asphalt => 2.6,
         Surface::Grass => 7.0,
+        // Two frames per tile, so each cell is 1.6 m across.
+        Surface::Lattice => 3.2,
     }
 }
 
@@ -42,6 +46,7 @@ pub fn palette(s: Surface) -> [(u8, u8, u8); 16] {
     let (dark, light) = match s {
         Surface::Asphalt => ((112u8, 112u8, 120u8), (255u8, 255u8, 255u8)),
         Surface::Grass => ((132, 138, 104), (255, 255, 250)),
+        Surface::Lattice => ((96, 100, 96), (255, 255, 255)),
     };
     let mut out = [(0u8, 0u8, 0u8); 16];
     for (i, px) in out.iter_mut().enumerate() {
@@ -93,6 +98,20 @@ fn sample(s: Surface, x: usize, y: usize) -> f32 {
             let tussock = lattice(fx, fy, 16, 22);
             0.5 + (clumps - 0.5) * 0.9 + (tussock - 0.5) * 0.6 + (white - 0.5) * 0.35
         }
+        Surface::Lattice => {
+            // Distance to the nearest frame, in texels, on a 32-texel grid.
+            let gx = (x % 32).min(32 - x % 32) as f32;
+            let gy = (y % 32).min(32 - y % 32) as f32;
+            let d = gx.min(gy);
+            let rough = lattice(fx, fy, 16, 31);
+            if d < 3.0 {
+                // The cast frame: bright, with its upper edge catching more light than its lower.
+                0.78 + (white - 0.5) * 0.12 - d * 0.03
+            } else {
+                // The fill between: darker shotcrete, blotched with damp and moss.
+                0.36 + (rough - 0.5) * 0.4 + (white - 0.5) * 0.18
+            }
+        }
     }
 }
 
@@ -134,8 +153,11 @@ pub const fn lift_percent(s: Surface) -> u32 {
     match s {
         Surface::Asphalt => 157,
         Surface::Grass => 123,
+        Surface::Lattice => LATTICE_LIFT,
     }
 }
+
+const LATTICE_LIFT: u32 = 149;
 
 /// Average multiplier a surface's tile applies, `0.0..=1.0`: what the vertex colours under it
 /// have to be brightened by so the surface keeps the colour it had untextured.

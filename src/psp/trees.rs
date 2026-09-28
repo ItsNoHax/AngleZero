@@ -89,7 +89,7 @@ unsafe fn build_mesh(track: &Track) {
     let bay = |node: usize, side: f32| {
         side * BAY_SIDE > 0.0 && node + 6 >= BAY_FROM && node <= BAY_TO + 6
     };
-    let count = scenery::tree_sites(track, sites, bay);
+    let count = scenery::tree_sites(track, sites, bay, super::banks::surface);
     let verts = &mut (*(&raw mut MESH)).0;
     let chunks = &mut *(&raw mut CHUNKS);
     let nodes_per_chunk = mesh::CHUNK_NODES * mesh::RENDER_STRIDE;

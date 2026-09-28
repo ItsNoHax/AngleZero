@@ -114,7 +114,7 @@ fn trees_stand_clear_of_every_road() {
     use angle_zero::scenery::{tree_sites, TreeSite, TREE_ROAD_CLEARANCE};
     let t = track();
     let mut out = vec![TreeSite::ZERO; 4000];
-    let n = tree_sites(&t, &mut out, |_, _| false);
+    let n = tree_sites(&t, &mut out, |_, _| false, |_, _| None);
     assert!(n > 1000, "only {n} trees");
     for tree in &out[..n] {
         for node in t.nodes.iter() {
@@ -210,6 +210,73 @@ mod signs {
             let chord_mid = Vec3::new((a.p.x + b.p.x) * 0.5, 0.0, (a.p.z + b.p.z) * 0.5);
             let inward = (chord_mid.x - node.p.x) * node.nrm.x + (chord_mid.z - node.p.z) * node.nrm.z;
             assert!(inward * side <= 0.05, "chevron at node {i} is on the inside");
+        }
+    }
+}
+
+mod banks {
+    use super::track;
+    use angle_zero::scenery::{bank_surface, cut_banks, outside_of_bend, BankSpan, BANK_CLEARANCE};
+
+    #[test]
+    fn some_bends_get_a_bank() {
+        let t = track();
+        let mut out = [BankSpan::ZERO; 64];
+        let n = cut_banks(&t, &mut out, |_, _| false);
+        assert!(n >= 6, "only {n} banks");
+    }
+
+    #[test]
+    fn banks_stand_on_the_inside() {
+        let t = track();
+        let mut out = [BankSpan::ZERO; 64];
+        let n = cut_banks(&t, &mut out, |_, _| false);
+        for b in &out[..n] {
+            let mid = ((b.from + b.to) / 2) as usize;
+            assert_eq!(b.side, -outside_of_bend(&t, mid), "bank {b:?}");
+        }
+    }
+
+    #[test]
+    fn no_bank_buries_another_part_of_the_road() {
+        let t = track();
+        let mut out = [BankSpan::ZERO; 64];
+        let n = cut_banks(&t, &mut out, |_, _| false);
+        for b in &out[..n] {
+            for node in b.from..=b.to {
+                let nd = &t.nodes[node as usize];
+                for lateral in [9.0f32, 14.0, 20.0] {
+                    if bank_surface(b, node, lateral * b.side).is_none() {
+                        continue;
+                    }
+                    let p = angle_zero::math::Vec3::new(
+                        nd.p.x + nd.nrm.x * lateral * b.side,
+                        0.0,
+                        nd.p.z + nd.nrm.z * lateral * b.side,
+                    );
+                    for (j, other) in t.nodes.iter().enumerate() {
+                        if (j as i64 - node as i64).abs() > 30 {
+                            assert!(
+                                other.p.horizontal_distance(p) > BANK_CLEARANCE - 3.0,
+                                "bank at node {node} reaches node {j}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_bank_meets_the_ground_at_both_ends() {
+        let t = track();
+        let mut out = [BankSpan::ZERO; 64];
+        let n = cut_banks(&t, &mut out, |_, _| false);
+        for b in &out[..n] {
+            assert!(bank_surface(b, b.from, 12.0 * b.side).is_none());
+            assert!(bank_surface(b, b.to, 12.0 * b.side).is_none());
+            let mid = (b.from + b.to) / 2;
+            assert!(bank_surface(b, mid, 12.0 * b.side).unwrap() > 2.0);
         }
     }
 }
