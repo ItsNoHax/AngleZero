@@ -104,8 +104,10 @@ unsafe fn build_mesh(track: &Track) {
             let half = t.height * PINE_CELL as f32 / ATLAS_H as f32 * 0.5;
             let u0 = (t.variant as usize * PINE_PITCH) as f32 / ATLAS_W as f32;
             let u1 = u0 + PINE_CELL as f32 / ATLAS_W as f32;
-            let foot = shade(TREE_FOOT, t.tint);
-            let crown = shade(TREE_CROWN, t.tint);
+            // A tree by a lamp takes its light, the crown less than the foot the pool lies around.
+            let warm = scenery::lamp_warmth(track, t.node as usize, t.base);
+            let foot = super::render::bake(shade(TREE_FOOT, t.tint), 1.0, warm * 0.9);
+            let crown = super::render::bake(shade(TREE_CROWN, t.tint), 1.0, warm * 0.5);
             let (bx, by, bz) = (t.base.x, t.base.y, t.base.z);
             for (ax, az) in [t.dir, t.nrm] {
                 let v = |s: f32, up: bool| TexVertex {

@@ -280,3 +280,38 @@ mod banks {
         }
     }
 }
+
+mod light {
+    use super::track;
+    use angle_zero::scenery::{hillside_light, lamp_side, LAMP_STRIDE};
+
+    #[test]
+    fn level_ground_by_the_road_is_neither_lit_nor_shaded() {
+        let t = track();
+        let (k, _) = hillside_light(&t, 700, 3.0);
+        assert!((k - 1.0).abs() < 0.02, "{k}");
+    }
+
+    #[test]
+    fn slopes_toward_the_moon_are_brighter_than_slopes_away() {
+        let t = track();
+        let (mut hi, mut lo) = (0.0f32, 9.0f32);
+        for i in (0..t.nodes.len()).step_by(20) {
+            for l in [-60.0f32, 60.0] {
+                let (k, _) = hillside_light(&t, i, l);
+                hi = hi.max(k);
+                lo = lo.min(k);
+            }
+        }
+        assert!(hi > 1.15 && lo < 0.85, "range {lo}..{hi}");
+    }
+
+    #[test]
+    fn warmth_peaks_under_a_lamp() {
+        let t = track();
+        let i = LAMP_STRIDE * 4;
+        let (_, under) = hillside_light(&t, i, lamp_side(i) * 7.0);
+        let (_, far) = hillside_light(&t, i + LAMP_STRIDE / 2, -lamp_side(i) * 60.0);
+        assert!(under > 0.5 && far == 0.0, "{under} {far}");
+    }
+}

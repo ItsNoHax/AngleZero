@@ -169,6 +169,12 @@ impl<const V: usize> Ribbon<V> {
         self.build_shaped(track, stations, None, true)
     }
 
+    /// As `build_shelved`, with every vertex's colour passed through `light(node, lateral, color)`
+    /// on the way in: how the hillside's lighting is baked.
+    pub fn build_shelved_lit(&mut self, track: &Track, stations: &[Station], light: &dyn Fn(usize, f32, u32) -> u32) {
+        self.build_lit(track, stations, None, true, Some(light))
+    }
+
     /// As `build`, but collapses the ribbon to zero width across `gap` (a range of *centreline*
     /// node indices). The guard rail uses this to leave the emergency pull-off open.
     pub fn build_gapped(
@@ -187,6 +193,24 @@ impl<const V: usize> Ribbon<V> {
         gap: Option<(usize, usize)>,
         shelf: bool,
     ) {
+        self.build_lit(track, stations, gap, shelf, None)
+    }
+
+    fn build_lit(
+        &mut self,
+        track: &Track,
+        stations: &[Station],
+        gap: Option<(usize, usize)>,
+        shelf: bool,
+        light: Option<&dyn Fn(usize, f32, u32) -> u32>,
+    ) {
+        let station_vertex = |track: &Track, n: i32, st: &Station, shelf: bool| {
+            let (mut v, index) = station_vertex(track, n, st, shelf);
+            if let Some(light) = light {
+                v.color = light(index, st.lateral, v.color);
+            }
+            v
+        };
         let mut w = 0usize;
 
         for c in 0..CHUNK_COUNT {
@@ -290,7 +314,7 @@ use crate::track::node_at_arclength;
 /// The index is signed and may run past either end of the track: those become the apron, laid
 /// along the tangent of the nearest real node so the extension carries on in the direction the
 /// road was already going.
-fn station_vertex(track: &Track, render_node: i32, st: &Station, shelf: bool) -> Vertex {
+fn station_vertex(track: &Track, render_node: i32, st: &Station, shelf: bool) -> (Vertex, usize) {
     let spacing = track.length / (RENDER_NODES - 1) as f32;
     let target = render_node as f32 * spacing;
 
@@ -315,11 +339,14 @@ fn station_vertex(track: &Track, render_node: i32, st: &Station, shelf: bool) ->
         }
     }
 
-    Vertex::new(
-        n.p.x + n.dir.x * along + n.nrm.x * st.lateral,
-        n.p.y + y,
-        n.p.z + n.dir.z * along + n.nrm.z * st.lateral,
-        st.color,
+    (
+        Vertex::new(
+            n.p.x + n.dir.x * along + n.nrm.x * st.lateral,
+            n.p.y + y,
+            n.p.z + n.dir.z * along + n.nrm.z * st.lateral,
+            st.color,
+        ),
+        index,
     )
 }
 

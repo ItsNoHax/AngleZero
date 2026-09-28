@@ -796,3 +796,57 @@ pub fn cut_banks(track: &Track, out: &mut [BankSpan], skip: impl Fn(usize, f32) 
     }
     w
 }
+
+// --- baked light ---------------------------------------------------------------------------------
+
+/// Nodes between roadside lamps, and which side each stands on.
+pub const LAMP_STRIDE: usize = 58;
+/// How far out from the centreline a lamp's pole stands.
+pub const LAMP_LATERAL: f32 = 8.4;
+
+pub fn lamp_side(node: usize) -> f32 {
+    if (node / LAMP_STRIDE) % 2 == 0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+/// Where the ground under the nearest lamp's head is, for a point at `node`.
+fn nearest_lamp(track: &Track, node: usize) -> Vec3 {
+    let k = ((node + LAMP_STRIDE / 2) / LAMP_STRIDE) * LAMP_STRIDE;
+    let k = k.min(track.nodes.len() - 1);
+    let n = &track.nodes[k];
+    // The head overhangs the road by 2.2 m from the pole.
+    let lateral = lamp_side(k) * (LAMP_LATERAL - 2.2);
+    Vec3::new(n.p.x + n.nrm.x * lateral, n.p.y, n.p.z + n.nrm.z * lateral)
+}
+
+/// Brightness and warmth of the hillside at `node`, `lateral` metres out.
+///
+/// The brightness is the moon on the slope: the slope's normal from the terrain's own profile,
+/// against [`moon_dir`], scaled so level ground comes out at 1.0. Slopes turned to the moon are
+/// picked out, those turned away fall into shadow, which is what lets the shape of the hill read at
+/// night. The warmth is the sodium lamps, `0.0..=1.0`, falling off over twenty-odd metres.
+pub fn hillside_light(track: &Track, node: usize, lateral: f32) -> (f32, f32) {
+    let n = &track.nodes[node];
+    let l = abs(lateral);
+    let grade = (terrain_drop(l + 0.5) - terrain_drop(l - 0.5).max(terrain_drop(0.0))) / 1.0;
+    let side = if lateral < 0.0 { -1.0 } else { 1.0 };
+    // Outward and down: the normal leans outward by the grade.
+    let (ox, oz) = (n.nrm.x * side, n.nrm.z * side);
+    let normal = Vec3::new(-grade * ox, 1.0, -grade * oz).normalized();
+    let flat = MOON_HEIGHT;
+    let k = 0.62 + 0.38 * max(0.0, normal.dot(moon_dir())) / flat;
+    let p = Vec3::new(n.p.x + ox * l, n.p.y, n.p.z + oz * l);
+    let d = p.horizontal_distance(nearest_lamp(track, node));
+    let warm = clamp(1.0 - d / 24.0, 0.0, 1.0);
+    (clamp(k, 0.55, 1.45), warm * warm)
+}
+
+/// Warmth from the roadside lamps at a point, `0.0..=1.0`.
+pub fn lamp_warmth(track: &Track, node: usize, p: Vec3) -> f32 {
+    let d = p.horizontal_distance(nearest_lamp(track, node));
+    let w = clamp(1.0 - d / 24.0, 0.0, 1.0);
+    w * w
+}

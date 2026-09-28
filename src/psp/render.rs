@@ -87,6 +87,15 @@ const TERRAIN_STATIONS: [Station; 12] = [
     terrain(TERRAIN_HALF_WIDTH, TP[5].1, 34),
 ];
 
+/// A baked colour: `color` scaled by the moon term `k`, plus sodium light by `warm`.
+pub fn bake(color: u32, k: f32, warm: f32) -> u32 {
+    let ch = |shift: u32, add: f32| {
+        let c = ((color >> shift) & 0xff) as f32 * k + add * warm;
+        (c as u32).min(255)
+    };
+    (color & 0xff00_0000) | ch(0, 70.0) | ch(8, 44.0) << 8 | ch(16, 14.0) << 16
+}
+
 /// A road colour lifted for the asphalt tile, as [`terrain`] is for the grass.
 const fn tarmac(c: u32) -> u32 {
     let k = angle_zero::texgen::lift_percent(angle_zero::texgen::Surface::Asphalt);
@@ -246,7 +255,10 @@ pub fn debug_mode() -> u32 {
 /// Builds every static mesh. Call once, after the track is generated.
 pub fn init(track: &Track) {
     unsafe {
-        (*(&raw mut TERRAIN_MESH)).build_shelved(track, &TERRAIN_STATIONS);
+        (*(&raw mut TERRAIN_MESH)).build_shelved_lit(track, &TERRAIN_STATIONS, &|node, lateral, color| {
+            let (k, warm) = angle_zero::scenery::hillside_light(track, node, lateral);
+            bake(color, k, warm)
+        });
         (*(&raw mut ROAD_MESH)).build(track, &ROAD_STATIONS);
         (*(&raw mut EDGE_L_MESH)).build(track, &EDGE_LEFT);
         (*(&raw mut EDGE_R_MESH)).build(track, &EDGE_RIGHT);
@@ -401,7 +413,7 @@ const POOL_DEPTH_BIAS: i32 = 64;
 const LAMP_DEPTH_BIAS: i32 = 256;
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
-const LAMP_STRIDE: usize = 58;
+use angle_zero::scenery::LAMP_STRIDE;
 const CONE_STRIDE: usize = 11;
 const FLOODLIGHT_STRIDE: usize = 90;
 /// The design puts a tyre stack every third node of every corner. At 2620 nodes that is thousands
@@ -451,8 +463,8 @@ unsafe fn build_props(track: &Track) {
 
             // --- trees, both sides, pseudo-random offsets ---
             if i % LAMP_STRIDE == 0 && w + 108 <= budget {
-                let side = if (i / LAMP_STRIDE) % 2 == 0 { -1.0 } else { 1.0 };
-                let lateral = 8.4 * side;
+                let side = angle_zero::scenery::lamp_side(i);
+                let lateral = angle_zero::scenery::LAMP_LATERAL * side;
                 let bx = node.p.x + node.nrm.x * lateral;
                 let bz = node.p.z + node.nrm.z * lateral;
                 let by = node.p.y;
