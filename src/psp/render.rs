@@ -336,7 +336,11 @@ static mut PROP_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
 
 /// Additive light pools and lamp glows. Kept in their own chunked buffer
 /// because they need a separate blended, depth-write-off pass after the opaque world.
-const GLOWS_PER_CHUNK: usize = 512;
+///
+/// The chunk holding the pull-off is the one that sets this. Its roadside lamps come first, and
+/// the pull-off's pools, cut into bands so the title camera can orbit inside them, need room
+/// after them; at 576 they no longer fit and the whole pull-off goes dark.
+const GLOWS_PER_CHUNK: usize = 640;
 const PROP_GLOW_VERTS: usize = GLOWS_PER_CHUNK * mesh::CHUNK_COUNT;
 static mut PROP_GLOW_MESH: psp::Align16<[Vertex; PROP_GLOW_VERTS]> =
     psp::Align16([Vertex::ZERO; PROP_GLOW_VERTS]);
@@ -638,18 +642,19 @@ unsafe fn build_props(track: &Track) {
             // which is what this did — runs straight while the road curves, and holds one height
             // while the pass drops 7.4 cm a metre, so the pool sat the best part of a metre off the
             // ground it was supposed to be lying on.
-            if gw + GROUND_GLOW_VERTS + GLOW_VERTS * 2 <= glow_budget {
+            // Two pools and two double-fan lamp glows.
+            if gw + bay_pool_verts(BAY_POOL_RINGS) + bay_pool_verts(1) + GLOW_VERTS * 4 <= glow_budget {
                 use angle_zero::track::bay_surface;
                 let g0 = gw;
                 // These sit on the paving, not on the shelf cut underneath it. The two are a
                 // quarter of a metre apart, which is enough to bury a ground pool completely.
-                push_bay_pool(track, glows, &mut gw, 10.0, 10.0, 12.0, 0.06, LAMP_POOL);
+                push_bay_pool(track, glows, &mut gw, 10.0, 10.0, 12.0, 0.06, BAY_POOL_RINGS, LAMP_POOL);
                 // The head of the lamp built in `build_bay_props`, which stands at lateral 7.6.
                 let head = bay_surface(track, 12.0, 9.8);
                 let foot = bay_surface(track, 12.0, 7.6);
                 push_blob_glow(glows, &mut gw, head.x, foot.y + 7.15, head.z, 2.75, LAMP_GLOW);
                 // The vending machine throws a small warm pool of its own.
-                push_bay_pool(track, glows, &mut gw, -7.0, 14.6, 4.2, 0.07, LAMP_POOL);
+                push_bay_pool(track, glows, &mut gw, -7.0, 14.6, 4.2, 0.07, 1, LAMP_POOL);
                 let v = bay_surface(track, -7.0, 15.6);
                 push_blob_glow(glows, &mut gw, v.x, v.y + 1.25, v.z, 1.5, LAMP_GLOW);
                 for v in &glows[g0..gw] {
@@ -778,17 +783,30 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     let steps = last - first;
     let along_at = |i: usize| (first + i) as f32 * spacing - s0;
 
-    // The apron, as a ribbon of quads down the hill rather than one slab across it.
+    // The apron, as a ribbon of quads down the hill rather than one slab across it — and cut
+    // across as well as along. The title camera orbits over this paving a few metres up, so a
+    // quad the full 13 m width of the apron has corners well behind it, and the GE does not clip
+    // such a triangle: it drops the whole thing, and the grass underneath shows through in
+    // wedges that come and go as the camera turns. Two-metre cells keep every triangle small
+    // enough to survive. The cuts are lateral only, so the inner edge keeps exactly the road
+    // ribbon's vertices and the butt joint stays watertight.
+    const APRON_CELLS: usize = 7;
+    let lat_at = |j: usize| {
+        BAY_APRON_INNER + (BAY_APRON_OUTER - BAY_APRON_INNER) * j as f32 / APRON_CELLS as f32
+    };
     for i in 0..steps {
         let (a, b) = (along_at(i), along_at(i + 1));
-        w += mesh::build_quad(
-            &mut out[w..],
-            at(a, BAY_APRON_INNER),
-            at(b, BAY_APRON_INNER),
-            at(b, BAY_APRON_OUTER),
-            at(a, BAY_APRON_OUTER),
-            rgb(0x24, 0x26, 0x2A),
-        );
+        for j in 0..APRON_CELLS {
+            let (l0, l1) = (lat_at(j), lat_at(j + 1));
+            w += mesh::build_quad(
+                &mut out[w..],
+                at(a, l0),
+                at(b, l0),
+                at(b, l1),
+                at(a, l1),
+                rgb(0x24, 0x26, 0x2A),
+            );
+        }
     }
 
     // The parapet, chained so it follows both the curve of the road and the fall of the pass. On
@@ -2135,6 +2153,12 @@ unsafe fn push_ground_glow(
 /// Laying it out in the pull-off's own `(along, lateral)` frame fixes both halves of that at once:
 /// every vertex takes its height from the node it actually stands above, exactly as the paving
 /// does, and the disc follows the road's curve instead of running straight off it.
+///
+/// It is also cut into `rings` concentric bands rather than laid as one fan. The title camera
+/// orbits inside the big pool, and a fan triangle reaching 12 m from the lamp to the rim has
+/// corners behind the camera; the GE drops such a triangle outright rather than clipping it, so
+/// whole slices of the light went missing along straight radial edges as the camera turned.
+/// The fade is linear in radius either way, so the bands draw the same gradient the fan did.
 #[allow(clippy::too_many_arguments)]
 unsafe fn push_bay_pool(
     track: &Track,
@@ -2144,24 +2168,46 @@ unsafe fn push_bay_pool(
     lateral: f32,
     radius: f32,
     lift: f32,
+    rings: usize,
     color: u32,
 ) {
     use angle_zero::track::bay_surface;
-    let rim = color & 0x00ff_ffff;
-    let c = bay_surface(track, along, lateral);
-    let centre = Vertex::new(c.x, c.y + lift, c.z, color);
-    let edge = |k: usize| {
-        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
-        let p = bay_surface(track, along + cos(a) * radius, lateral + sin(a) * radius);
-        Vertex::new(p.x, p.y + lift, p.z, rim)
+    let alpha = color >> 24;
+    let rgb = color & 0x00ff_ffff;
+    let point = |ring: usize, k: usize| {
+        let a = (k % BAY_POOL_SEGMENTS) as f32 / BAY_POOL_SEGMENTS as f32 * TAU;
+        let r = radius * ring as f32 / rings as f32;
+        let p = bay_surface(track, along + cos(a) * r, lateral + sin(a) * r);
+        let fade = alpha * (rings - ring) as u32 / rings as u32;
+        Vertex::new(p.x, p.y + lift, p.z, rgb | fade << 24)
     };
-    for k in 0..GLOW_SEGMENTS {
-        out[*w] = centre;
-        out[*w + 1] = edge(k);
-        out[*w + 2] = edge(k + 1);
+    for k in 0..BAY_POOL_SEGMENTS {
+        out[*w] = point(0, 0);
+        out[*w + 1] = point(1, k);
+        out[*w + 2] = point(1, k + 1);
         *w += 3;
     }
+    for ring in 1..rings {
+        for k in 0..BAY_POOL_SEGMENTS {
+            let (a, b) = (point(ring, k), point(ring, k + 1));
+            let (c, d) = (point(ring + 1, k + 1), point(ring + 1, k));
+            out[*w..*w + 6].copy_from_slice(&[a, b, c, a, c, d]);
+            *w += 6;
+        }
+    }
 }
+
+/// Around the pull-off's pools. More than a roadside pool's eight, so the outer bands of the big
+/// one are no longer than its inner ones are wide.
+const BAY_POOL_SEGMENTS: usize = 12;
+
+/// Vertices [`push_bay_pool`] writes for a pool of `rings` bands.
+const fn bay_pool_verts(rings: usize) -> usize {
+    BAY_POOL_SEGMENTS * 3 + (rings - 1) * BAY_POOL_SEGMENTS * 6
+}
+
+/// Bands in the 26 m pool over the pad: three metres each.
+const BAY_POOL_RINGS: usize = 4;
 
 /// A glow around a lamp head, built as two crossed vertical fans. Baked rather than billboarded:
 /// these are fixed to the scenery, and a crossed pair reads from any angle without needing to be
