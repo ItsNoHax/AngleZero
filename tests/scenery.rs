@@ -315,3 +315,40 @@ mod light {
         assert!(under > 0.5 && far == 0.0, "{under} {far}");
     }
 }
+
+mod wet {
+    use super::track;
+    use angle_zero::math::Vec3;
+    use angle_zero::scenery::{wet_streak, LAMP_STRIDE};
+
+    #[test]
+    fn a_streak_runs_from_the_lamp_toward_the_eye_on_the_road() {
+        let t = track();
+        let lamp = LAMP_STRIDE * 6;
+        let eye_node = &t.nodes[lamp - 50];
+        let eye = Vec3::new(eye_node.p.x, eye_node.p.y + 2.5, eye_node.p.z);
+        let s = wet_streak(&t, lamp, eye).expect("uphill of the lamp");
+        // Brightest under the lamp, then fading.
+        assert!(s[0].2 == 1.0 && s[4].2 == 0.0);
+        // Each step is nearer the eye than the last.
+        let mid = |p: &(Vec3, Vec3, f32)| Vec3::new((p.0.x + p.1.x) * 0.5, 0.0, (p.0.z + p.1.z) * 0.5);
+        for w in s.windows(2) {
+            assert!(mid(&w[1]).horizontal_distance(eye) < mid(&w[0]).horizontal_distance(eye));
+        }
+        // And on the road: never more than a few centimetres off the surface below it.
+        for p in s.iter() {
+            let near = t.nodes.iter().min_by(|a, b| {
+                a.p.horizontal_distance(p.0).partial_cmp(&b.p.horizontal_distance(p.0)).unwrap()
+            });
+            assert!((p.0.y - near.unwrap().p.y).abs() < 0.3);
+        }
+    }
+
+    #[test]
+    fn no_streak_for_a_lamp_behind_the_eye() {
+        let t = track();
+        let lamp = LAMP_STRIDE * 6;
+        let eye_node = &t.nodes[lamp + 30];
+        assert!(wet_streak(&t, lamp, eye_node.p).is_none());
+    }
+}

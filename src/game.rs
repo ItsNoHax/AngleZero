@@ -114,6 +114,11 @@ pub struct Game {
     /// Which pause-menu entry is highlighted. Only meaningful in `Phase::Paused`.
     pub pause_choice: PauseChoice,
 
+    /// Whether the road is wet: picked on the title screen with Up or Down, and only looks. The
+    /// car grips the same either way — the pass is one road, and a second set of handling numbers
+    /// would be a second game to tune.
+    pub wet: bool,
+
     pub toast: Option<Toast>,
     pub toast_timer: f32,
     /// Throttle applied on the last substep, which the rev counter reads.
@@ -157,6 +162,7 @@ impl Game {
             },
             record_dirty: false,
             pause_choice: PauseChoice::Continue,
+            wet: false,
             toast: None,
             toast_timer: 0.0,
             last_throttle: 0.0,
@@ -317,6 +323,9 @@ impl Game {
                     }
                     if left_edge {
                         self.select_car(-1);
+                    }
+                    if up_edge || down_edge {
+                        self.wet = !self.wet;
                     }
                     self.camera.update_title(&self.vehicle.state, frame_dt);
                 }

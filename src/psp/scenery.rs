@@ -254,6 +254,53 @@ pub unsafe fn draw_valley(camera: &Camera) {
         w += push_pixel(verts.add(w), sx, sy, l.size as f32, color);
     }
     draw_pixels(verts, w);
+    draw_mist();
+}
+
+// --- mist in the valley ------------------------------------------------------------------------
+
+const MIST_SEGMENTS: usize = 32;
+const MIST_RINGS: usize = 3;
+const MIST_VERTS: usize = MIST_SEGMENTS * MIST_RINGS * 6;
+static mut MIST: psp::Align16<[Vertex; MIST_VERTS]> = psp::Align16([Vertex::ZERO; MIST_VERTS]);
+
+/// A ring of low mist over the valley floor, thickest partway out and gone at both edges. From the
+/// pass it is seen nearly edge-on, which foreshortens it into a pale band lying over the lights.
+/// Its density varies around the ring so the band is patchy rather than a stripe.
+unsafe fn build_mist(track: &Track) {
+    let out = &mut (*(&raw mut MIST)).0;
+    let (centre, reach) = track_footprint(track);
+    let floor = scenery::towns(track)[0].centre.y + 22.0;
+    let radii = [reach + 240.0, reach + 420.0, reach + 640.0, reach + 900.0];
+    let peak = [0.0f32, 1.0, 0.7, 0.0];
+    let mut w = 0;
+    let point = |ring: usize, k: usize| {
+        let a = (k % MIST_SEGMENTS) as f32 / MIST_SEGMENTS as f32 * TAU;
+        let patch = 0.55 + 0.45 * sin(a * 5.0 + 1.3) * cos(a * 3.0);
+        let alpha = (0x34 as f32 * peak[ring] * patch) as u32;
+        Vertex::new(
+            centre.x + sin(a) * radii[ring],
+            floor,
+            centre.z + cos(a) * radii[ring],
+            rgba(0x9F, 0xB4, 0xD6, alpha),
+        )
+    };
+    for ring in 0..MIST_RINGS {
+        for k in 0..MIST_SEGMENTS {
+            let (a, b, c, d) = (point(ring, k), point(ring, k + 1), point(ring + 1, k + 1), point(ring + 1, k));
+            out[w..w + 6].copy_from_slice(&[a, b, c, a, c, d]);
+            w += 6;
+        }
+    }
+}
+
+unsafe fn draw_mist() {
+    sys::sceGuEnable(sys::GuState::Blend);
+    sys::sceGuBlendFunc(sys::BlendOp::Add, sys::BlendFactor::SrcAlpha, sys::BlendFactor::OneMinusSrcAlpha, 0, 0);
+    sys::sceGumMatrixMode(MatrixMode::Model);
+    sys::sceGumLoadIdentity();
+    sys::sceGumDrawArray(GuPrimitive::Triangles, VERTEX_FORMAT, MIST_VERTS as i32, core::ptr::null(), &raw const MIST as *const c_void);
+    sys::sceGuDisable(sys::GuState::Blend);
 }
 
 // --- cloud across the moon ----------------------------------------------------------------------
@@ -307,5 +354,6 @@ pub unsafe fn init(track: &Track, sky_radius: f32) {
     TRACK_CENTRE = track_footprint(track).0;
     build_ridges();
     build_valley(track);
+    build_mist(track);
     build_cloud(sky_radius);
 }

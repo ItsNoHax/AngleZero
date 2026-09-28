@@ -89,6 +89,7 @@ Without cars the game still runs and says so on the title screen.
 | Screen | Button | Action |
 |---|---|---|
 | Title | D-pad Left/Right | Change car |
+| Title | D-pad Up/Down | Dry or wet road |
 | Title | ✕ | Start run |
 | Pause | D-pad Up/Down, ✕ | Continue / Restart / Select another car |
 | Pause | START | Resume |

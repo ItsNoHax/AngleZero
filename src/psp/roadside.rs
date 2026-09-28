@@ -225,6 +225,7 @@ unsafe fn build_signs(track: &Track) {
 }
 
 pub unsafe fn init(track: &Track) {
+    build_ring();
     build_posts(track);
     build_signs(track);
 }
@@ -251,15 +252,30 @@ pub unsafe fn draw_static(eye: Vec3, visible: impl Fn(&Chunk) -> bool) -> u32 {
     drawn
 }
 
+const GLOW_SEGMENTS: usize = 8;
+
+/// The rim of a glow as (cos, sin) pairs, worked out once. `sin` and `cos` are software routines
+/// on this target, and at two of each per rim vertex a frame with sixty lit reflectors spent eight
+/// milliseconds on nothing but trigonometry.
+static mut RING: [(f32, f32); GLOW_SEGMENTS + 1] = [(0.0, 0.0); GLOW_SEGMENTS + 1];
+
+unsafe fn build_ring() {
+    let ring = &mut *(&raw mut RING);
+    for (k, r) in ring.iter_mut().enumerate() {
+        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+        *r = (cos(a), sin(a));
+    }
+}
+
 /// A glow facing the camera, bright in the middle and gone at the rim: 24 vertices.
 fn glow(out: &mut [Vertex], w: &mut usize, c: Vec3, right: (f32, f32), radius: f32, color: u32) {
-    const SEGMENTS: usize = 8;
     let rim = color & 0x00ff_ffff;
+    let ring = unsafe { &*(&raw const RING) };
     let edge = |k: usize| {
-        let a = (k % SEGMENTS) as f32 / SEGMENTS as f32 * TAU;
-        Vertex::new(c.x + right.0 * cos(a) * radius, c.y + sin(a) * radius, c.z + right.1 * cos(a) * radius, rim)
+        let (ca, sa) = ring[k];
+        Vertex::new(c.x + right.0 * ca * radius, c.y + sa * radius, c.z + right.1 * ca * radius, rim)
     };
-    for k in 0..SEGMENTS {
+    for k in 0..GLOW_SEGMENTS {
         out[*w] = Vertex::new(c.x, c.y, c.z, color);
         out[*w + 1] = edge(k);
         out[*w + 2] = edge(k + 1);
@@ -284,12 +300,28 @@ pub unsafe fn draw_reflections(vehicle: &Vehicle, camera: &Camera, track: &Track
     let forward = (sin(st.yaw), cos(st.yaw));
     let all = &*(&raw const SIGNS);
     let signs = &all[..SIGN_COUNT];
-    const BUDGET: usize = 96;
-    let ptr = super::scratch::alloc::<Vertex>(BUDGET * 60);
+    // What the lit signs will cost, counted before asking the arena for it: a fixed budget large
+    // enough for the worst corner would take most of the arena every frame.
+    const MAX_LIT: usize = 64;
+    let verts_for = |k: SignKind| match k {
+        SignKind::Reflector => 24,
+        SignKind::Chevron => 60,
+        SignKind::Mirror => 24,
+    };
+    let lit_now = |sign: &Sign| {
+        let (dx, dz) = (sign.at.x - car.x, sign.at.z - car.z);
+        dx * dx + dz * dz <= REFLECT_FAR * REFLECT_FAR && scenery::sign_gain(sign, car, forward) >= 0.03
+    };
+    let need: usize = signs.iter().filter(|s| lit_now(s)).take(MAX_LIT).map(|s| verts_for(s.kind)).sum();
+    if need == 0 {
+        return;
+    }
+    let ptr = super::scratch::alloc::<Vertex>(need);
     if ptr.is_null() {
         return;
     }
-    let out = core::slice::from_raw_parts_mut(ptr, BUDGET * 60);
+    let out = core::slice::from_raw_parts_mut(ptr, need);
+    const BUDGET: usize = MAX_LIT;
     let right = (cos(camera.yaw), -sin(camera.yaw));
     let mut w = 0usize;
     let mut lit = 0usize;

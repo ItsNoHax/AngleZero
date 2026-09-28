@@ -411,6 +411,9 @@ const POOL_DEPTH_BIAS: i32 = 64;
 /// glow is a disc facing the camera and the panel behind it curves away, where a pool and its road
 /// are two flat things a few centimetres apart.
 const LAMP_DEPTH_BIAS: i32 = 256;
+/// The vending machines' light: cold blue-white, the only light in the game that is not sodium.
+const VEND_POOL: u32 = rgba(0xC8, 0xDC, 0xFF, 0x50);
+const VEND_GLOW: u32 = rgba(0xDC, 0xEA, 0xFF, 0x70);
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
 use angle_zero::scenery::LAMP_STRIDE;
@@ -635,7 +638,7 @@ unsafe fn build_props(track: &Track) {
             // while the pass drops 7.4 cm a metre, so the pool sat the best part of a metre off the
             // ground it was supposed to be lying on.
             // Two pools and two double-fan lamp glows.
-            if gw + bay_pool_verts(BAY_POOL_RINGS) + bay_pool_verts(1) + GLOW_VERTS * 4 <= glow_budget {
+            if gw + bay_pool_verts(BAY_POOL_RINGS) + bay_pool_verts(2) + GLOW_VERTS * 4 <= glow_budget {
                 use angle_zero::track::bay_surface;
                 let g0 = gw;
                 // These sit on the paving, not on the shelf cut underneath it. The two are a
@@ -645,10 +648,10 @@ unsafe fn build_props(track: &Track) {
                 let head = bay_surface(track, 12.0, 9.8);
                 let foot = bay_surface(track, 12.0, 7.6);
                 push_blob_glow(glows, &mut gw, head.x, foot.y + 7.15, head.z, 2.75, LAMP_GLOW);
-                // The vending machine throws a small warm pool of its own.
-                push_bay_pool(track, glows, &mut gw, -7.0, 14.6, 4.2, 0.07, 1, LAMP_POOL);
-                let v = bay_surface(track, -7.0, 15.6);
-                push_blob_glow(glows, &mut gw, v.x, v.y + 1.25, v.z, 1.5, LAMP_GLOW);
+                // The vending machines throw a cold pool of their own, against the lamp's warm one.
+                push_bay_pool(track, glows, &mut gw, -7.7, 14.2, 5.0, 0.07, 2, VEND_POOL);
+                let v = bay_surface(track, -7.7, 15.6);
+                push_blob_glow(glows, &mut gw, v.x, v.y + 1.25, v.z, 2.2, VEND_GLOW);
                 for v in &glows[g0..gw] {
                     note(&(*v), &mut glo, &mut ghi);
                 }
@@ -818,15 +821,72 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
         );
     }
 
-    // The vending machine, and the crate of empties beside it.
-    let v = at(-7.0, 15.6);
-    w += mesh::build_box(&mut out[w..], 1.3, 2.0, 0.85, v.x, v.y + 1.0, v.z, rgb(0xC0, 0x2E, 0x2A));
-    // The lit front panel faces the road, which is the side the camera orbits.
-    let f = at(-7.0, 15.2);
-    w += mesh::build_box(&mut out[w..], 1.05, 1.35, 0.1, f.x, v.y + 1.25, f.z, rgb(0xFF, 0xEC, 0xBE));
-    w += mesh::build_box(&mut out[w..], 1.05, 0.3, 0.12, f.x, v.y + 0.42, f.z, rgb(0x2A, 0x2A, 0x2E));
-    let c = at(-8.6, 15.4);
+    // An overlook rail along the top of the parapet: a thin bar on short posts, so the edge of
+    // the lay-by reads against the valley lights behind it.
+    for i in 0..steps {
+        let (a, b) = (at(along_at(i), WALL_LATERAL), at(along_at(i + 1), WALL_LATERAL));
+        let lift = |p: Vec3, y: f32| Vec3::new(p.x, p.y + y, p.z);
+        w += mesh::build_wall_segment(&mut out[w..], lift(a, 1.06), lift(b, 1.06), 0.03, 0.06, 0.02, rgb(0x7A, 0x80, 0x86), rgb(0xA8, 0xAE, 0xB4));
+        if i % 2 == 0 {
+            w += mesh::build_box(&mut out[w..], 0.06, 0.34, 0.06, a.x, a.y + 0.94, a.z, rgb(0x5A, 0x60, 0x66));
+        }
+    }
+
+    // Painted bays on the apron, each line cut in three so no triangle is long enough to reach
+    // behind the orbiting title camera and be dropped whole.
+    for k in 0..6 {
+        let a = -15.0 + k as f32 * 5.6;
+        for seg in 0..3 {
+            let (l0, l1) = (8.6 + seg as f32 * 1.8, 8.6 + (seg + 1) as f32 * 1.8);
+            let p = |da: f32, l: f32| {
+                let q = at(a + da, l);
+                Vec3::new(q.x, q.y + 0.03, q.z)
+            };
+            w += mesh::build_quad(&mut out[w..], p(-0.06, l0), p(0.06, l0), p(0.06, l1), p(-0.06, l1), rgb(0x8A, 0x86, 0x7C));
+        }
+    }
+
+    // Two vending machines, red and white, and the crate of empties beside them: the lay-by's own
+    // light, cold against the sodium lamp. Each front is lit, with rows of cans behind the glass.
+    for (along, body, glass) in [
+        (-7.0f32, rgb(0xC0, 0x2E, 0x2A), rgb(0xFF, 0xEC, 0xBE)),
+        (-8.45, rgb(0xC9, 0xD2, 0xDC), rgb(0xDF, 0xEA, 0xFF)),
+    ] {
+        let v = at(along, 15.6);
+        w += mesh::build_box(&mut out[w..], 1.3, 2.0, 0.85, v.x, v.y + 1.0, v.z, body);
+        // The lit front panel faces the road, which is the side the camera orbits.
+        let f = at(along, 15.2);
+        w += mesh::build_box(&mut out[w..], 1.05, 1.35, 0.1, f.x, v.y + 1.25, f.z, glass);
+        w += mesh::build_box(&mut out[w..], 1.05, 0.3, 0.12, f.x, v.y + 0.42, f.z, rgb(0x2A, 0x2A, 0x2E));
+        const CANS: [u32; 5] = [
+            rgb(0xD2, 0x3A, 0x3A),
+            rgb(0x2C, 0x5F, 0xD1),
+            rgb(0xE8, 0xA2, 0x1C),
+            rgb(0x2F, 0x9E, 0x6A),
+            rgb(0xF4, 0xF0, 0xE6),
+        ];
+        for row in 0..3 {
+            for col in 0..4 {
+                let da = -0.39 + col as f32 * 0.26;
+                let y = v.y + 1.55 - row as f32 * 0.32;
+                let q = |d: f32, h: f32| {
+                    let p = at(along + da + d, 15.13);
+                    Vec3::new(p.x, y + h, p.z)
+                };
+                let c = CANS[(row * 4 + col + (along < -8.0) as usize * 2) % CANS.len()];
+                w += mesh::build_quad(&mut out[w..], q(-0.08, -0.12), q(0.08, -0.12), q(0.08, 0.12), q(-0.08, 0.12), c);
+            }
+        }
+    }
+    let c = at(-10.0, 15.4);
     w += mesh::build_box(&mut out[w..], 0.6, 0.5, 0.42, c.x, c.y + 0.25, c.z, rgb(0x2C, 0x3A, 0x30));
+
+    // A bench beside them, facing the view.
+    let b = at(-3.6, 16.6);
+    w += mesh::build_box(&mut out[w..], 1.6, 0.08, 0.45, b.x, b.y + 0.45, b.z, rgb(0x6A, 0x52, 0x38));
+    w += mesh::build_box(&mut out[w..], 1.6, 0.4, 0.06, b.x, b.y + 0.75, b.z, rgb(0x5E, 0x48, 0x30));
+    w += mesh::build_box(&mut out[w..], 0.08, 0.45, 0.4, b.x - 0.7, b.y + 0.22, b.z, rgb(0x2A, 0x2D, 0x31));
+    w += mesh::build_box(&mut out[w..], 0.08, 0.45, 0.4, b.x + 0.7, b.y + 0.22, b.z, rgb(0x2A, 0x2D, 0x31));
 
     // A route sign at the far end.
     let s = at(13.0, 16.4);

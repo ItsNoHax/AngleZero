@@ -79,11 +79,15 @@ while cycling cars; growth means residency is leaking.
 | 13 | Four different cars (benchmark) |
 | 14 | Eight different cars (benchmark) |
 | 15 | Every lamp on every car lit |
+| 16 | No surface textures on the road, hillside and banks; trees left out |
+| 17 | No ridgelines or valley |
+| 18 | No headlight reflections off rails, boards and mirrors |
 
 Modes 1–12 each remove one suspect: if the fault disappears, that is the cause. Removing a pass and
 diffing against mode 0 also shows exactly what that pass paints. Modes 13–14 load extra cars into
 spare arena slots (a stall of about a second) so that switching between models is part of the
-measurement. Mode 15 checks that a new car's lamps sit on the right panels.
+measurement. Mode 15 checks that a new car's lamps sit on the right panels. Modes 16–18 isolate the scenery
+layers added with the textured world.
 
 ## Headless screenshots
 

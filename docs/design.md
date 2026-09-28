@@ -25,8 +25,19 @@ Late, cold, sparse: headlights, sodium lamps, a moon over a ridge. The palette i
 deep blue sky, dark tarmac, dark green hillside — so warm lamps and red tail lights carry the
 scene.
 
-The world is flat-shaded and untextured, rendered at the native 480 × 272 with no antialiasing.
-Cars are textured models compiled offline from third-party sources (see [Cars](cars.md)).
+The world is vertex-lit and carries low-contrast tiles: asphalt grain on the road, grass on the
+hillside, a sprayed-concrete lattice on the cut banks, and alpha-tested pines. Every tile is
+generated at boot, and every light is baked into vertices: the moon on each slope, sodium warmth
+near each lamp. It renders at the native 480 × 272 with no antialiasing, so anything thinner than
+a pixel is either drawn only up close (rail posts) or snapped to whole pixels (stars, valley
+lights). Cars are textured models compiled offline from third-party sources (see
+[Cars](cars.md)).
+
+Beyond the road: three rings of moonlit ridgeline, and below them the lights of two towns and
+the roads between, under a haze and a band of mist. Hard bends are cut into the hillside on
+their inside and marked with chevrons on their outside; the rail carries reflectors. All three
+answer the headlights. On the title screen, Up or Down wets the road, which puts each lamp's
+reflection in the tarmac. It changes nothing about the handling.
 
 ## Constraints
 

@@ -6,7 +6,7 @@ Game logic is target-agnostic and tested on the host. Only a thin shell touches 
 
 | Path | Contents |
 |---|---|
-| `src/*.rs` | `no_std` game core: track, vehicle physics, scoring, camera, screen flow, HUD values, mesh building, lighting, `.azcar` format, car catalogue, load streaming, save format |
+| `src/*.rs` | `no_std` game core: track, vehicle physics, scoring, camera, screen flow, HUD values, mesh building, lighting, scenery placement, procedural textures, `.azcar` format, car catalogue, load streaming, save format |
 | `src/psp/` | PSP shell: GU setup, renderer, controller, audio, save I/O, car loading, diagnostics. Compiled only for `target_os = "psp"` |
 | `tools/anglezero-asset/` | Host-only car compiler and `azview` renderer. See [Cars](cars.md) |
 | `tests/` | Host tests for everything in `src/*.rs` |
@@ -27,6 +27,8 @@ even when it looks like rendering or I/O:
 | Car selection | `catalogue.rs`: which cars exist, sort order, naming | Directory scan |
 | Car loading | `stream.rs`: chunk counts, progress | File handle, arena |
 | Vehicle lights | `lights.rs`: which lamps are lit, intensity, world-space placement | Two additive draw passes |
+| Scenery | `scenery.rs`: ridgelines, valley lights, trees, cut banks, signs and how brightly they return the headlights, baked hillside light, wet-road streaks | `scenery.rs`, `trees.rs`, `banks.rs`, `roadside.rs`, `wet.rs` under `src/psp/` |
+| Surface tiles | `texgen.rs`: asphalt, grass, lattice and pine atlas texels, palettes, mips | `surfaces.rs`: GE texture state, projection mapping from world XZ |
 | Asset format | `azcar.rs`: parsing and validation | Hands buffers to the GE |
 
 ## Tests
@@ -44,4 +46,6 @@ Notable suites:
 | `stability.rs` | Hard driving that would expose a numerically unstable model |
 | `matrix.rs` | View matrix construction (replaces a broken SDK helper, see [PSP notes](psp-notes.md)) |
 | `lights.rs` | Lamp state and placement on pitched and rolled cars |
+| `scenery.rs` | Draw-order invariants for the far scenery, clearances for trees and banks, sign facing and headlight response |
+| `texgen.rs` | Tiles wrap without a seam, stay low in contrast, and the vertex lift undoes them on average |
 | `catalogue.rs`, `stream.rs` | Car ordering and load arithmetic |

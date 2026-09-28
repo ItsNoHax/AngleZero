@@ -531,3 +531,32 @@ fn hitting_a_rail_bumps_the_impact_count_once_per_hit() {
         after - before
     );
 }
+
+#[test]
+fn up_or_down_on_the_title_screen_wets_and_dries_the_road() {
+    let t = track();
+    let mut g = game(&t);
+    assert!(!g.wet);
+    g.update(&t, Buttons { up: true, ..NONE }, FIXED_DT);
+    g.update(&t, NONE, FIXED_DT);
+    assert!(g.wet);
+    g.update(&t, Buttons { down: true, ..NONE }, FIXED_DT);
+    g.update(&t, NONE, FIXED_DT);
+    assert!(!g.wet);
+    // Held, it toggles once rather than every frame.
+    for _ in 0..10 {
+        g.update(&t, Buttons { up: true, ..NONE }, FIXED_DT);
+    }
+    assert!(g.wet);
+}
+
+#[test]
+fn the_weather_survives_a_run() {
+    let t = track();
+    let mut g = game(&t);
+    g.update(&t, Buttons { up: true, ..NONE }, FIXED_DT);
+    g.update(&t, NONE, FIXED_DT);
+    g.update(&t, Buttons { cross: true, ..NONE }, FIXED_DT);
+    assert_eq!(g.phase, Phase::Run);
+    assert!(g.wet);
+}

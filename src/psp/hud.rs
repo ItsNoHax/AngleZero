@@ -363,6 +363,8 @@ fn draw_title(game: &Game) {
     // Kept clear of the middle of the frame so the orbiting car stays visible behind it.
     text::draw_centered(b"ANGLEZERO", SCREEN_W * 0.5, 26.0, 3.0, TEXT);
     text::draw_centered(b"SEKIRA DESCENT", SCREEN_W * 0.5, 58.0, 1.0, DIM);
+    let weather: &[u8] = if game.wet { b"UP/DOWN  ROAD: WET" } else { b"UP/DOWN  ROAD: DRY" };
+    text::draw_centered(weather, SCREEN_W * 0.5, 72.0, 1.0, DIM);
     text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
     draw_best(game, 250.0);
     #[cfg(all(feature = "devtools", not(feature = "harness")))]

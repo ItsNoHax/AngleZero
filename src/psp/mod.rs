@@ -24,6 +24,7 @@ pub mod surfaces;
 pub mod storage;
 pub mod text;
 pub mod trees;
+pub mod wet;
 
 use core::ffi::c_void;
 
@@ -399,6 +400,7 @@ pub fn psp_main() {
             // parked at night with its lights on is also just what a car in a lay-by at night looks
             // like.
             render::draw_light_beams(&game.vehicle, track, game.braking_hint());
+            wet::draw(game.wet, &game.vehicle, &game.camera, track);
             if game.phase != Phase::Title {
                 render::draw_effects(&game.effects, &game.camera);
             }

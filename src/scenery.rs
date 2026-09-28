@@ -850,3 +850,47 @@ pub fn lamp_warmth(track: &Track, node: usize, p: Vec3) -> f32 {
     let w = clamp(1.0 - d / 24.0, 0.0, 1.0);
     w * w
 }
+
+// --- wet road -----------------------------------------------------------------------------------
+
+/// Nodes a lamp's reflection is laid over, back toward the eye.
+pub const STREAK_NODES: usize = 14;
+/// Past this a lamp's reflection is not drawn.
+pub const STREAK_FAR: f32 = 150.0;
+/// Width of a reflection, metres.
+pub const STREAK_WIDTH: f32 = 0.9;
+
+/// The reflection of the lamp at `lamp_node` on a wet road, seen from `eye`: pairs of points
+/// (left, right) from under the lamp head back toward the eye, lying on the road, with how bright
+/// each pair is, `1.0` under the lamp and fading to nothing. `None` when the eye is not uphill of
+/// the lamp or too far from it to see it.
+///
+/// A light reflected in a wet road shows as a streak running from under the light straight toward
+/// the viewer. On screen that is a vertical smear below the lamp, which is the whole effect: laid on
+/// the road, a strip pointing at the eye projects to exactly that.
+pub fn wet_streak(track: &Track, lamp_node: usize, eye: Vec3) -> Option<[(Vec3, Vec3, f32); 5]> {
+    let n = &track.nodes[lamp_node];
+    let side = lamp_side(lamp_node);
+    let head_l = side * (LAMP_LATERAL - 2.2);
+    let (dx, dz) = (n.p.x - eye.x, n.p.z - eye.z);
+    let ahead = dx * n.dir.x + dz * n.dir.z;
+    let dist = sqrt(dx * dx + dz * dz);
+    if ahead < 6.0 || dist > STREAK_FAR {
+        return None;
+    }
+    // The eye's offset across the road in this node's frame: the streak leans toward it.
+    let eye_l = -(dx * n.nrm.x + dz * n.nrm.z);
+    let reach = crate::math::min(STREAK_NODES as f32 * 1.34, ahead * 0.6);
+    let mut out = [(Vec3::ZERO, Vec3::ZERO, 0.0); 5];
+    for (k, slot) in out.iter_mut().enumerate() {
+        let t = k as f32 / 4.0;
+        let back = reach * t;
+        let i = crate::track::node_at_arclength(track, n.s - back);
+        let m = &track.nodes[i];
+        let lateral = head_l + (eye_l - head_l) * (back / ahead);
+        let half = STREAK_WIDTH * 0.5 * (1.0 - 0.4 * t);
+        let at = |l: f32| Vec3::new(m.p.x + m.nrm.x * l, m.p.y + 0.04, m.p.z + m.nrm.z * l);
+        *slot = (at(lateral - half), at(lateral + half), (1.0 - t) * (1.0 - t));
+    }
+    Some(out)
+}
