@@ -16,6 +16,7 @@ pub mod harness;
 pub mod trace;
 pub mod hud;
 pub mod render;
+pub mod roadside;
 pub mod scenery;
 pub mod scratch;
 pub mod surfaces;
@@ -401,6 +402,8 @@ pub fn psp_main() {
                 render::draw_effects(&game.effects, &game.camera);
             }
             render::draw_lamp_glows(&game.vehicle, track, &game.camera, game.braking_hint());
+            // What the headlights pick out: rail reflectors, chevron boards, road mirrors.
+            roadside::draw_reflections(&game.vehicle, &game.camera, track);
 
             hud::begin();
             // Both of these draw over the frame, so a harness build leaves them out: the detector

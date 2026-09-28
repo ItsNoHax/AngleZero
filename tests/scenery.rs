@@ -140,3 +140,76 @@ fn terrain_profile_meets_the_road_and_falls_away() {
     }
     assert!((terrain_drop(-30.0) - terrain_drop(30.0)).abs() < 1e-6);
 }
+
+mod signs {
+    use super::track;
+    use angle_zero::math::Vec3;
+    use angle_zero::scenery::{road_signs, sign_gain, Sign, SignKind, REFLECT_FAR};
+
+    fn reflector_at(x: f32, z: f32) -> Sign {
+        // Facing -Z: toward a car coming up from below on +Z... i.e. for a car heading +Z at it.
+        Sign { kind: SignKind::Reflector, at: Vec3::new(x, 0.8, z), face: (0.0, -1.0), node: 0 }
+    }
+
+    #[test]
+    fn a_reflector_ahead_in_the_beams_lights_up() {
+        let g = sign_gain(&reflector_at(0.5, 30.0), Vec3::ZERO, (0.0, 1.0));
+        assert!(g > 0.7, "{g}");
+    }
+
+    #[test]
+    fn behind_off_axis_or_far_stays_dark() {
+        let car = Vec3::ZERO;
+        assert_eq!(sign_gain(&reflector_at(0.0, -30.0), car, (0.0, 1.0)), 0.0);
+        assert_eq!(sign_gain(&reflector_at(30.0, 5.0), car, (0.0, 1.0)), 0.0);
+        assert_eq!(sign_gain(&reflector_at(0.0, REFLECT_FAR + 5.0), car, (0.0, 1.0)), 0.0);
+    }
+
+    #[test]
+    fn a_face_turned_away_stays_dark() {
+        let mut s = reflector_at(0.0, 30.0);
+        s.face = (0.0, 1.0);
+        assert_eq!(sign_gain(&s, Vec3::ZERO, (0.0, 1.0)), 0.0);
+    }
+
+    #[test]
+    fn nearer_is_brighter() {
+        let near = sign_gain(&reflector_at(0.0, 20.0), Vec3::ZERO, (0.0, 1.0));
+        let far = sign_gain(&reflector_at(0.0, 90.0), Vec3::ZERO, (0.0, 1.0));
+        assert!(near > far);
+    }
+
+    #[test]
+    fn signs_face_the_traffic_coming_down_the_pass() {
+        let t = track();
+        let mut out = vec![Sign::ZERO; 2000];
+        let n = road_signs(&t, &mut out, |_, _| false);
+        assert!(n > 600, "{n}");
+        for s in &out[..n] {
+            let d = t.nodes[s.node as usize].dir;
+            // Facing back up the road, within the turn-in the chevrons allow.
+            assert!(-(d.x * s.face.0 + d.z * s.face.1) > 0.5, "{:?}", s.kind);
+        }
+        assert!(out[..n].iter().any(|s| s.kind == SignKind::Chevron));
+        assert!(out[..n].iter().any(|s| s.kind == SignKind::Mirror));
+    }
+
+    #[test]
+    fn chevrons_stand_on_the_outside_of_the_bend() {
+        let t = track();
+        let mut out = vec![Sign::ZERO; 2000];
+        let n = road_signs(&t, &mut out, |_, _| false);
+        for s in out[..n].iter().filter(|s| s.kind == SignKind::Chevron) {
+            let i = s.node as usize;
+            // Outside means farther from the bend's centre: step along the road and the sign's
+            // distance to the road should stay put or grow, never shrink toward the inside.
+            let node = &t.nodes[i];
+            let side = (s.at.x - node.p.x) * node.nrm.x + (s.at.z - node.p.z) * node.nrm.z;
+            // The centre of the bend lies on the other side.
+            let (a, b) = (&t.nodes[i.saturating_sub(6)], &t.nodes[(i + 6).min(t.nodes.len() - 1)]);
+            let chord_mid = Vec3::new((a.p.x + b.p.x) * 0.5, 0.0, (a.p.z + b.p.z) * 0.5);
+            let inward = (chord_mid.x - node.p.x) * node.nrm.x + (chord_mid.z - node.p.z) * node.nrm.z;
+            assert!(inward * side <= 0.05, "chevron at node {i} is on the inside");
+        }
+    }
+}

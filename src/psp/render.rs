@@ -114,25 +114,36 @@ const EDGE_RIGHT: [Station; 2] = [
 
 // Built on the same line containment stops the car at, so what the player hits and what the player
 // sees cannot drift apart.
-const RAIL_LEFT: [Station; 2] = [
-    Station::new(-angle_zero::track::RAIL_LIMIT, 0.55, rgb(0x4E, 0x54, 0x5B)),
-    Station::new(-angle_zero::track::RAIL_LIMIT, 0.95, RAIL_COLOR),
+//
+// A W-beam in four stations, bottom to top: the lower edge, the dark fold set back a few centimetres,
+// the bright upper lip that catches the light, and the top edge. The lip is what carries the line of
+// the rail on down the road once the posts under it have stopped being drawn.
+const RAIL_LIP: u32 = rgb(0xB4, 0xBC, 0xC4);
+const RAIL_FOLD: u32 = rgb(0x44, 0x4A, 0x51);
+const RAIL_LEFT: [Station; 4] = [
+    Station::new(-angle_zero::track::RAIL_LIMIT, 0.52, rgb(0x5A, 0x61, 0x68)),
+    Station::new(-angle_zero::track::RAIL_LIMIT - 0.06, 0.7, RAIL_FOLD),
+    Station::new(-angle_zero::track::RAIL_LIMIT, 0.86, RAIL_LIP),
+    Station::new(-angle_zero::track::RAIL_LIMIT - 0.03, 0.96, RAIL_COLOR),
 ];
-const RAIL_RIGHT: [Station; 2] = [
-    Station::new(angle_zero::track::RAIL_LIMIT, 0.55, rgb(0x4E, 0x54, 0x5B)),
-    Station::new(angle_zero::track::RAIL_LIMIT, 0.95, RAIL_COLOR),
+const RAIL_RIGHT: [Station; 4] = [
+    Station::new(angle_zero::track::RAIL_LIMIT, 0.52, rgb(0x5A, 0x61, 0x68)),
+    Station::new(angle_zero::track::RAIL_LIMIT + 0.06, 0.7, RAIL_FOLD),
+    Station::new(angle_zero::track::RAIL_LIMIT, 0.86, RAIL_LIP),
+    Station::new(angle_zero::track::RAIL_LIMIT + 0.03, 0.96, RAIL_COLOR),
 ];
 
 const ROAD_CAP: usize = ribbon_capacity(5);
 const TERRAIN_CAP: usize = ribbon_capacity(12);
 const LINE_CAP: usize = ribbon_capacity(2);
+const RAIL_CAP: usize = ribbon_capacity(4);
 
 static mut TERRAIN_MESH: Ribbon<TERRAIN_CAP> = Ribbon::EMPTY;
 static mut ROAD_MESH: Ribbon<ROAD_CAP> = Ribbon::EMPTY;
 static mut EDGE_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut EDGE_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
-static mut RAIL_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
-static mut RAIL_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
+static mut RAIL_L_MESH: Ribbon<RAIL_CAP> = Ribbon::EMPTY;
+static mut RAIL_R_MESH: Ribbon<RAIL_CAP> = Ribbon::EMPTY;
 
 /// The car is not built here any more. It is compiled from a 3D model by `anglezero-asset`, loaded
 /// off the memory stick by `super::car`, and drawn straight out of the buffer it was read into —
@@ -214,8 +225,11 @@ pub const MODE_NO_TEXTURES: u32 = 16;
 /// The far scenery off: no ridgelines and no valley. Stars, moon and cloud stay.
 #[cfg(feature = "devtools")]
 pub const MODE_NO_FAR_SCENERY: u32 = 17;
+/// No headlight reflections off rails, boards and mirrors.
 #[cfg(feature = "devtools")]
-pub const DEBUG_MODES: u32 = 18;
+pub const MODE_NO_REFLECTIONS: u32 = 18;
+#[cfg(feature = "devtools")]
+pub const DEBUG_MODES: u32 = 19;
 #[cfg(feature = "devtools")]
 static mut DEBUG_MODE: u32 = 0;
 
@@ -253,6 +267,7 @@ pub fn init(track: &Track) {
         super::scenery::init(track, SKY_RADIUS);
         super::surfaces::init();
         super::trees::init(track);
+        super::roadside::init(track);
         sys::sceKernelDcacheWritebackAll();
     }
 }
@@ -1426,6 +1441,9 @@ pub fn draw_world(camera: &Camera) {
         // Pines, textured and alpha-tested, in the same cull-free state as the props.
         let tree_verts = super::trees::draw(|chunk| visible(chunk, eye, forward));
         tally(5, tree_verts);
+        // Rail posts near the eye, chevron boards and mirrors.
+        let roadside_verts = super::roadside::draw_static(eye, |chunk| visible(chunk, eye, forward));
+        tally(5, roadside_verts);
         sys::sceGuEnable(GuState::CullFace);
 
         // Light pools and lamp glows, added on top of the world they fall on. Depth-tested so a

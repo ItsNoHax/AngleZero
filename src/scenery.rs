@@ -483,3 +483,187 @@ pub fn tree_sites(track: &Track, out: &mut [TreeSite], skip: impl Fn(usize, f32)
     }
     w
 }
+
+// --- signs and reflectors -----------------------------------------------------------------------
+
+/// Something by the road that throws the headlights back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignKind {
+    /// A reflector on the guard rail.
+    Reflector,
+    /// A board of chevrons on the outside of a corner.
+    Chevron,
+    /// A convex mirror on the outside of a blind corner.
+    Mirror,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Sign {
+    pub kind: SignKind,
+    /// Centre of the reflecting face.
+    pub at: Vec3,
+    /// Horizontal unit normal of the face, pointing at the traffic it is for.
+    pub face: (f32, f32),
+    pub node: u32,
+}
+
+impl Sign {
+    pub const ZERO: Sign = Sign { kind: SignKind::Reflector, at: Vec3::ZERO, face: (0.0, 1.0), node: 0 };
+}
+
+/// Metres of rail between reflectors.
+pub const REFLECTOR_SPACING: f32 = 8.0;
+/// Height of a rail reflector: on the W-beam's upper fold.
+pub const REFLECTOR_HEIGHT: f32 = 0.8;
+/// Height of a chevron board's centre.
+pub const CHEVRON_HEIGHT: f32 = 1.35;
+/// Height of a mirror's centre.
+pub const MIRROR_HEIGHT: f32 = 2.5;
+/// How far out past the rail the boards and mirrors stand.
+pub const SIGN_SETBACK: f32 = 0.9;
+/// Beyond this many metres nothing reflects visibly.
+pub const REFLECT_FAR: f32 = 95.0;
+
+/// Which side of the road is the outside of the bend at `i`: +1 or -1 in the node's `nrm` frame,
+/// or 0 on a straight.
+pub fn outside_of_bend(track: &Track, i: usize) -> f32 {
+    let (a, b) = (i.saturating_sub(4), (i + 4).min(track.nodes.len() - 1));
+    let (da, db) = (track.nodes[a].dir, track.nodes[b].dir);
+    let n = track.nodes[i].nrm;
+    let turn = (db.x - da.x) * n.x + (db.z - da.z) * n.z;
+    if abs(turn) < 1e-4 {
+        0.0
+    } else if turn > 0.0 {
+        -1.0
+    } else {
+        1.0
+    }
+}
+
+/// How far toward `side` the bend's centre lies at node `i`, from the midpoint of a chord across it:
+/// positive when `side` is the inside.
+fn bend_inward(track: &Track, i: usize, side: f32) -> f32 {
+    let (a, b) = (&track.nodes[i.saturating_sub(6)], &track.nodes[(i + 6).min(track.nodes.len() - 1)]);
+    let n = &track.nodes[i];
+    let (mx, mz) = ((a.p.x + b.p.x) * 0.5, (a.p.z + b.p.z) * 0.5);
+    ((mx - n.p.x) * n.nrm.x + (mz - n.p.z) * n.nrm.z) * side
+}
+
+/// Corner apexes: nodes where `|curv|` peaks well above `CORNER_CURVATURE`, at least 60 nodes apart.
+pub fn apexes(track: &Track, out: &mut [u32]) -> usize {
+    use crate::track::CORNER_CURVATURE;
+    let n = track.nodes.len();
+    let mut w = 0;
+    let mut last: i64 = -1000;
+    for i in 20..n - 20 {
+        let c = abs(track.nodes[i].curv);
+        // Gentle bends get no furniture; only the ones that need braking for do.
+        if c < CORNER_CURVATURE * 1.6 {
+            continue;
+        }
+        let peak = (i - 20..=i + 20).all(|j| abs(track.nodes[j].curv) <= c);
+        if peak && (i as i64 - last) >= 60 && w < out.len() {
+            out[w] = i as u32;
+            w += 1;
+            last = i as i64;
+        }
+    }
+    w
+}
+
+/// Fills `out` with every sign on the pass and returns how many. `rail_gap(node, side)` is true
+/// where there is no rail (the lay-by).
+pub fn road_signs(track: &Track, out: &mut [Sign], rail_gap: impl Fn(usize, f32) -> bool) -> usize {
+    use crate::track::{node_at_arclength, RAIL_LIMIT};
+    let mut w = 0usize;
+    let push = |out: &mut [Sign], w: &mut usize, s: Sign| {
+        if *w < out.len() {
+            out[*w] = s;
+            *w += 1;
+        }
+    };
+    let facing = |i: usize| {
+        let d = track.nodes[i].dir;
+        (-d.x, -d.z)
+    };
+    let at = |i: usize, lateral: f32, height: f32| {
+        let n = &track.nodes[i];
+        Vec3::new(n.p.x + n.nrm.x * lateral, n.p.y + height, n.p.z + n.nrm.z * lateral)
+    };
+
+    // Rail reflectors, both sides.
+    let mut s = 4.0;
+    while s < track.length - 4.0 {
+        let i = node_at_arclength(track, s);
+        for side in [-1.0f32, 1.0] {
+            if !rail_gap(i, side) {
+                push(out, &mut w, Sign {
+                    kind: SignKind::Reflector,
+                    at: at(i, side * RAIL_LIMIT, REFLECTOR_HEIGHT),
+                    face: facing(i),
+                    node: i as u32,
+                });
+            }
+        }
+        s += REFLECTOR_SPACING;
+    }
+
+    // Chevrons before and through each apex, on the outside; a mirror at the sharpest ones.
+    let mut apex = [0u32; 64];
+    let count = apexes(track, &mut apex);
+    for &a in &apex[..count] {
+        let a = a as usize;
+        let side = outside_of_bend(track, a);
+        if side == 0.0 {
+            continue;
+        }
+        let s0 = track.nodes[a].s;
+        for off in [-14.0f32, -5.0, 4.0] {
+            let i = node_at_arclength(track, s0 + off);
+            // Out of the bend already, into the one before it: a board there would stand inside.
+            if rail_gap(i, side) || bend_inward(track, i, side) > 0.02 {
+                continue;
+            }
+            // Turned a little toward the approach, so the board faces the car coming into the bend.
+            push(out, &mut w, Sign {
+                kind: SignKind::Chevron,
+                at: at(i, side * (RAIL_LIMIT + SIGN_SETBACK), CHEVRON_HEIGHT),
+                face: facing(node_at_arclength(track, s0 + off - 10.0)),
+                node: i as u32,
+            });
+        }
+        if abs(track.nodes[a].curv) > crate::track::CORNER_CURVATURE * 1.5 && !rail_gap(a, side) {
+            push(out, &mut w, Sign {
+                kind: SignKind::Mirror,
+                at: at(a, side * (RAIL_LIMIT + SIGN_SETBACK + 0.4), MIRROR_HEIGHT),
+                face: facing(node_at_arclength(track, s0 - 20.0)),
+                node: a as u32,
+            });
+        }
+    }
+    w
+}
+
+/// How brightly a sign returns the car's headlights, `0.0..=1.0`.
+///
+/// A retro-reflector sends light back where it came from, so what matters is whether the sign is
+/// inside the beams (the angle off the car's nose), whether its face is turned toward the car, and
+/// how far away it is. `car` is where the lamps are and `forward` the car's heading as a horizontal
+/// unit vector.
+pub fn sign_gain(sign: &Sign, car: Vec3, forward: (f32, f32)) -> f32 {
+    let (dx, dz) = (sign.at.x - car.x, sign.at.z - car.z);
+    let d = sqrt(dx * dx + dz * dz);
+    if d < 0.5 || d > REFLECT_FAR {
+        return 0.0;
+    }
+    let (ux, uz) = (dx / d, dz / d);
+    // Inside the beams: full within ~20 degrees of the nose, gone by ~37. Wider than a lamp's hot
+    // spot, because a board on the outside of a bend is off to one side until the car is turning.
+    let off_axis = ux * forward.0 + uz * forward.1;
+    let beam = clamp((off_axis - 0.8) / (0.94 - 0.8), 0.0, 1.0);
+    // Face toward the car.
+    let face = max(0.0, -(ux * sign.face.0 + uz * sign.face.1));
+    let face = sqrt(face);
+    let fade = clamp(1.25 - d / REFLECT_FAR, 0.0, 1.0);
+    beam * face * fade
+}
