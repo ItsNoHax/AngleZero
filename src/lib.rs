@@ -13,6 +13,7 @@ pub mod audio;
 pub mod azcar;
 pub mod camera;
 pub mod catalogue;
+pub mod city;
 pub mod effects;
 pub mod game;
 pub mod hud;

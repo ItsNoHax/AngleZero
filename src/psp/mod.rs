@@ -7,6 +7,7 @@
 pub mod audio;
 pub mod banks;
 pub mod car;
+pub mod city;
 #[cfg(feature = "devtools")]
 pub mod atractest;
 #[cfg(feature = "devtools")]

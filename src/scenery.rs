@@ -163,7 +163,7 @@ pub fn track_footprint(track: &Track) -> (Vec3, f32) {
 // --- the valley ---------------------------------------------------------------------------------
 
 /// Lit points in the valley below the pass.
-pub const VALLEY_LIGHTS: usize = 420;
+pub const VALLEY_LIGHTS: usize = 230;
 
 /// How far below the lowest node the valley floor lies at the foot of the pass.
 ///
@@ -188,6 +188,11 @@ pub enum LightKind {
     ColdWhite,
     Amber,
     Red,
+    /// Signs in the city.
+    Pink,
+    Cyan,
+    /// Railway signals.
+    Green,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -220,7 +225,9 @@ pub fn towns(track: &Track) -> [Town; 2] {
     }
     let floor = min_y - VALLEY_FLOOR_DROP;
     [
-        Town { centre: Vec3::new(max_x + 560.0, floor, centre.z - 120.0), radius: 200.0 },
+        // The city, whose own lights and towers are `crate::city`'s. It stands here for the glow
+        // over it and the valley's floor.
+        Town { centre: crate::city::downtown(track), radius: 420.0 },
         Town { centre: Vec3::new(min_x - 600.0, floor - 15.0, centre.z + 240.0), radius: 160.0 },
     ]
 }
@@ -275,7 +282,8 @@ pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
 
     // Towns: dense at the middle, thinning out.
     for (t, town) in towns.iter().enumerate() {
-        let n = if t == 0 { 190 } else { 140 };
+        // The city has its own lights (`crate::city`); only the town gets a scatter here.
+        let n = if t == 0 { 0 } else { 140 };
         for _ in 0..n {
             let dx = rng.spread() * town.radius * 0.5;
             let dz = rng.spread() * town.radius * 0.5;
@@ -288,7 +296,7 @@ pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
 
     // A valley road through each town, running along the foot of the pass. Street lights are
     // sodium and evenly spaced, which is what makes a line of them read as a road.
-    for (t, town) in towns.iter().enumerate() {
+    for (t, town) in towns.iter().enumerate().skip(1) {
         let side = if t == 0 { 1.0 } else { -1.0 };
         for k in 0..44 {
             let u = k as f32 / 43.0 - 0.5;
@@ -307,7 +315,7 @@ pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
         let side = if rng.next() < 0.5 { -1.0 } else { 1.0 };
         let p = Vec3::new(
             centre.x + side * (380.0 + rng.next() * 700.0),
-            towns[0].centre.y + rng.next() * 30.0,
+            towns[1].centre.y + 15.0 + rng.next() * 30.0,
             centre.z + (rng.next() - 0.5) * 1300.0,
         );
         let kind = if rng.next() < 0.7 { LightKind::WarmWhite } else { LightKind::Sodium };
@@ -319,10 +327,19 @@ pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
 /// True when a light at `p` is always nearer to the eye than the nearest ridge band, from any point
 /// on the track — the condition for drawing the lights after the ridges without a depth test.
 pub fn nearer_than_ridges(track: &Track, p: Vec3) -> bool {
+    nearer_than_ridges_until(track, p, track.nodes.len())
+}
+
+/// As [`nearer_than_ridges`], but only from the first `nodes` nodes of the track.
+///
+/// The city is judged from the top of the course, where it is looked at. Further down, its far
+/// edge can be past the near ridge band, and there it paints over the band's lower slopes instead
+/// of being hidden by them: lights on the foot of a distant range, which is what they look like.
+pub fn nearer_than_ridges_until(track: &Track, p: Vec3, nodes: usize) -> bool {
     let (centre, _) = track_footprint(track);
     let near = &RIDGE_BANDS[RIDGE_BANDS.len() - 1];
     let mut i = 0;
-    while i < track.nodes.len() {
+    while i < nodes.min(track.nodes.len()) {
         let eye = track.nodes[i].p;
         let c = ridge_centre(near, centre, eye);
         // The band's closest approach to this eye.

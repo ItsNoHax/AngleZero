@@ -189,6 +189,9 @@ fn light_color(kind: LightKind) -> (u32, u32, u32) {
         LightKind::ColdWhite => (0xD8, 0xE6, 0xFF),
         LightKind::Amber => (0xFF, 0x9A, 0x4A),
         LightKind::Red => (0xFF, 0x5A, 0x4A),
+        LightKind::Pink => (0xFF, 0x5F, 0xB0),
+        LightKind::Cyan => (0x5F, 0xE6, 0xFF),
+        LightKind::Green => (0xB8, 0xFF, 0xD8),
     }
 }
 
@@ -254,6 +257,7 @@ pub unsafe fn draw_valley(camera: &Camera) {
         w += push_pixel(verts.add(w), sx, sy, l.size as f32, color);
     }
     draw_pixels(verts, w);
+    super::city::draw();
     draw_mist();
 }
 
@@ -270,7 +274,7 @@ static mut MIST: psp::Align16<[Vertex; MIST_VERTS]> = psp::Align16([Vertex::ZERO
 unsafe fn build_mist(track: &Track) {
     let out = &mut (*(&raw mut MIST)).0;
     let (centre, reach) = track_footprint(track);
-    let floor = scenery::towns(track)[0].centre.y + 22.0;
+    let floor = scenery::towns(track)[1].centre.y + 15.0 + 22.0;
     let radii = [reach + 240.0, reach + 420.0, reach + 640.0, reach + 900.0];
     let peak = [0.0f32, 1.0, 0.7, 0.0];
     let mut w = 0;
@@ -354,6 +358,7 @@ pub unsafe fn init(track: &Track, sky_radius: f32) {
     TRACK_CENTRE = track_footprint(track).0;
     build_ridges();
     build_valley(track);
+    super::city::init(track);
     build_mist(track);
     build_cloud(sky_radius);
 }
