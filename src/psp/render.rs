@@ -16,7 +16,7 @@ use angle_zero::lights;
 use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::texgen::Surface;
-use angle_zero::track::{Locator, Track, BAY_FROM, BAY_NODE, BAY_SIDE, BAY_TO, CORNER_CURVATURE};
+use angle_zero::track::{Locator, Track, BAY_NODE, BAY_SIDE, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
     self, GuPrimitive, GuState, MatrixMode, MipmapLevel, ScePspFMatrix4, ScePspFVector3,
@@ -284,7 +284,8 @@ pub fn init(track: &Track) {
         (*(&raw mut YELLOW_R_MESH)).build_masked(track, &YELLOW_RIGHT, &yellow);
 
         // The bay side has no rail across the pull-off, so the player can drive in.
-        let bay_gap = Some((BAY_FROM, BAY_TO));
+        // The rail is left out only where the lay-by is paved; its ends are closed by walls.
+        let bay_gap = Some(angle_zero::track::bay_open_nodes(track));
         if BAY_SIDE > 0.0 {
             (*(&raw mut RAIL_L_MESH)).build(track, &RAIL_LEFT);
             (*(&raw mut RAIL_R_MESH)).build_gapped(track, &RAIL_RIGHT, bay_gap);
@@ -741,12 +742,25 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
     // The parapet, chained so it follows both the curve of the road and the fall of the pass. On
     // the same cuts as the paving, so the wall starts and ends where the paving does rather than
     // overhanging it onto the shelf.
-    const WALL_LATERAL: f32 = 19.6;
+    const WALL_LATERAL: f32 = angle_zero::track::BAY_WALL;
+    use angle_zero::track::BAY_TAPER;
+    // The parapet's run between the two end walls: each step clipped to it, so the parapet meets
+    // the end walls exactly rather than stopping at the nearest paving cut.
+    let reach = BAY_HALF_LENGTH - BAY_TAPER;
+    let clip = |i: usize| (along_at(i).clamp(-reach, reach), along_at(i + 1).clamp(-reach, reach));
+    let inner = |i: usize| {
+        let (a, b) = clip(i);
+        b - a > 0.05
+    };
     for i in 0..steps {
+        if !inner(i) {
+            continue;
+        }
+        let (a0, a1) = clip(i);
         w += mesh::build_wall_segment(
             &mut out[w..],
-            at(along_at(i), WALL_LATERAL),
-            at(along_at(i + 1), WALL_LATERAL),
+            at(a0, WALL_LATERAL),
+            at(a1, WALL_LATERAL),
             0.22,
             0.78,
             0.12,
@@ -757,8 +771,29 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
 
     // An overlook rail along the top of the parapet: a thin bar on short posts, so the edge of
     // the lay-by reads against the valley lights behind it.
+    // The two ends: a wall on the diagonal from where the rail stops to the parapet, so the lay-by
+    // is closed and the car meets something where containment narrows (`track::bay_limit`).
+    for end in [-1.0f32, 1.0] {
+        const PIECES: usize = 5;
+        for k in 0..PIECES {
+            let t0 = k as f32 / PIECES as f32;
+            let t1 = (k + 1) as f32 / PIECES as f32;
+            let p = |t: f32| {
+                let along = end * (BAY_HALF_LENGTH - BAY_TAPER * t);
+                let lateral = angle_zero::track::RAIL_LIMIT + (WALL_LATERAL - angle_zero::track::RAIL_LIMIT) * t;
+                at(along, lateral)
+            };
+            let (a, b) = if end < 0.0 { (p(t0), p(t1)) } else { (p(t1), p(t0)) };
+            w += mesh::build_wall_segment(&mut out[w..], a, b, 0.22, 0.78, 0.12, rgb(0x55, 0x55, 0x4E), rgb(0x6E, 0x6E, 0x66));
+        }
+    }
+
     for i in 0..steps {
-        let (a, b) = (at(along_at(i), WALL_LATERAL), at(along_at(i + 1), WALL_LATERAL));
+        if !inner(i) {
+            continue;
+        }
+        let (a0, a1) = clip(i);
+        let (a, b) = (at(a0, WALL_LATERAL), at(a1, WALL_LATERAL));
         let lift = |p: Vec3, y: f32| Vec3::new(p.x, p.y + y, p.z);
         w += mesh::build_wall_segment(&mut out[w..], lift(a, 1.06), lift(b, 1.06), 0.03, 0.06, 0.02, rgb(0x7A, 0x80, 0x86), rgb(0xA8, 0xAE, 0xB4));
         if i % 2 == 0 {

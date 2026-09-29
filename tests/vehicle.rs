@@ -480,12 +480,37 @@ fn the_emergency_bay_is_the_one_place_the_car_can_leave_the_road() {
 
     // Positive lat is the bay side, and inside the bay the limit opens up to 16.5 m.
     let mid = (BAY_FROM + BAY_TO) / 2;
-    assert!(v.containment_limit(mid, 10.0) > 16.0);
+    assert!(v.containment_limit(&t, mid, 10.0) > 16.0);
     // The other side of the same nodes is still railed.
-    assert!((v.containment_limit(mid, -10.0) - RAIL_LIMIT).abs() < 1e-4);
+    assert!((v.containment_limit(&t, mid, -10.0) - RAIL_LIMIT).abs() < 1e-4);
     // And so is the road either side of the bay.
-    assert!((v.containment_limit(BAY_TO + 5, 10.0) - RAIL_LIMIT).abs() < 1e-4);
-    assert!((v.containment_limit(BAY_FROM - 5, 10.0) - RAIL_LIMIT).abs() < 1e-4);
+    assert!((v.containment_limit(&t, BAY_TO + 5, 10.0) - RAIL_LIMIT).abs() < 1e-4);
+    assert!((v.containment_limit(&t, BAY_FROM - 5, 10.0) - RAIL_LIMIT).abs() < 1e-4);
+}
+
+#[test]
+fn the_ends_of_the_lay_by_are_closed() {
+    use angle_zero::track::{bay_open_nodes, BAY_HALF_LENGTH, BAY_NODE};
+    let t = track();
+    let v = at_start(&t);
+    let s_bay = t.nodes[BAY_NODE].s;
+    // Past the paving, the bay side is railed even inside the old node range.
+    for i in BAY_FROM..=BAY_TO {
+        let along = (t.nodes[i].s - s_bay).abs();
+        let lim = v.containment_limit(&t, i, 10.0);
+        if along >= BAY_HALF_LENGTH {
+            assert!((lim - RAIL_LIMIT).abs() < 1e-4, "node {i} is open past the paving");
+        }
+        // And it never widens faster than the end wall does: no step for a car to snag on.
+        if i > BAY_FROM {
+            let prev = v.containment_limit(&t, i - 1, 10.0);
+            assert!((lim - prev).abs() < 3.5, "containment jumps {prev} -> {lim} at node {i}");
+        }
+    }
+    // The rail's gap lies within the paving.
+    let (a, b) = bay_open_nodes(&t);
+    assert!((t.nodes[a].s - s_bay).abs() < BAY_HALF_LENGTH);
+    assert!((t.nodes[b].s - s_bay).abs() < BAY_HALF_LENGTH);
 }
 
 #[test]

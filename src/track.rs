@@ -229,6 +229,42 @@ pub const FINISH_NODE: usize = (NODE_COUNT - 1) * 985 / 1000;
 pub const RAIL_LIMIT: f32 = 7.5;
 /// The rail is missing across the bay, so containment opens up to the far edge of the pull-off.
 pub const BAY_LIMIT: f32 = 16.5;
+
+/// How long the lay-by's closed ends are: over this much arclength at each end of the paving, an
+/// end wall runs diagonally from the rail out to the parapet, and containment narrows with it.
+///
+/// The rail used to be missing, and containment open, over the whole node range
+/// [`BAY_FROM`]..[`BAY_TO`], which reaches two and a half metres past the paving at each end. There
+/// was nothing there: the car could drive off the end of the lay-by onto the shelf's grass.
+pub const BAY_TAPER: f32 = 8.0;
+
+/// Where the parapet's outer face is, which the end walls run out to.
+pub const BAY_WALL: f32 = 19.6;
+
+/// How open the bay side of the road is at `index`: `0.0` where the rail runs, `1.0` across the
+/// lay-by proper, and in between along its tapered ends.
+pub fn bay_openness(track: &Track, index: usize) -> f32 {
+    let along = crate::math::abs(track.nodes[index.min(NODE_COUNT - 1)].s - track.nodes[BAY_NODE].s);
+    crate::math::clamp((BAY_HALF_LENGTH - along) / BAY_TAPER, 0.0, 1.0)
+}
+
+/// Containment on the bay side at `index`: the rail's line, opening out along the end walls to the
+/// lay-by's full width.
+pub fn bay_limit(track: &Track, index: usize) -> f32 {
+    RAIL_LIMIT + (BAY_LIMIT - RAIL_LIMIT) * bay_openness(track, index)
+}
+
+/// Where the end wall stands at `index`, as a lateral offset: from the rail's line at the paving's
+/// end out to the parapet.
+pub fn bay_wall_lateral(track: &Track, index: usize) -> f32 {
+    RAIL_LIMIT + (BAY_WALL - RAIL_LIMIT) * bay_openness(track, index)
+}
+
+/// The centreline nodes the lay-by is open over: where the rail on the bay side is left out.
+pub fn bay_open_nodes(track: &Track) -> (usize, usize) {
+    let s = track.nodes[BAY_NODE].s;
+    (node_at_arclength(track, s - BAY_HALF_LENGTH) + 1, node_at_arclength(track, s + BAY_HALF_LENGTH) - 1)
+}
 /// Beyond this lateral offset the car is off the tarmac and on to loose surface.
 pub const TARMAC_HALF_WIDTH: f32 = 5.3;
 

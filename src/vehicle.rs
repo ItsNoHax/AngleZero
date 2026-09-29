@@ -9,7 +9,7 @@
 
 use crate::math::{abs, atan2, clamp, cos, hypot, min, sin, signum, wrap_pi, wrap_tau};
 use crate::track::{
-    Locator, Query, Track, BAY_FROM, BAY_LIMIT, BAY_SIDE, BAY_TO, RAIL_LIMIT, TARMAC_HALF_WIDTH,
+    Locator, Query, Track, BAY_FROM, BAY_SIDE, BAY_TO, RAIL_LIMIT, TARMAC_HALF_WIDTH,
 };
 
 /// Physics runs at this fixed step regardless of frame rate.
@@ -327,10 +327,10 @@ impl Vehicle {
     }
 
     /// Lateral limit at a node. The bay side of the pull-off has no rail, so it opens up.
-    pub fn containment_limit(&self, index: usize, lat: f32) -> f32 {
+    pub fn containment_limit(&self, track: &Track, index: usize, lat: f32) -> f32 {
         let in_bay = index > BAY_FROM && index < BAY_TO && signum(lat) == BAY_SIDE;
         if in_bay {
-            BAY_LIMIT
+            crate::track::bay_limit(track, index)
         } else {
             RAIL_LIMIT
         }
@@ -474,8 +474,8 @@ impl Vehicle {
         // Both limits, rather than the one the origin happens to be nearest: the pull-off leaves
         // one side of these nodes open and the other railed, and they are 24 m apart.
         let (lim_pos, lim_neg) = (
-            self.containment_limit(q.index, 1.0),
-            self.containment_limit(q.index, -1.0),
+            self.containment_limit(track, q.index, 1.0),
+            self.containment_limit(track, q.index, -1.0),
         );
         // Which flank is through a rail, and by how much. Only ever one of them: the longest car
         // here reaches 2.7 m and the rails are 15 m apart.
