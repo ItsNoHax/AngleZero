@@ -70,6 +70,11 @@ pub const BEAM_FAR: f32 = 70.0;
 /// follows, and the edge lines sit at 5 cm — so a beam laid any lower than this is under the paint
 /// and fighting the tarmac for the depth buffer.
 pub const BEAM_LIFT: f32 = 0.08;
+/// How bright a beam's patch of road is against the lamp that throws it.
+///
+/// The beam is added over the tarmac rather than lighting it, so at the lamp's own brightness it
+/// washes the road out to a flat white pool. Two thirds reads as light on the road.
+pub const BEAM_STRENGTH: f32 = 0.65;
 
 /// Where the car's body is and how it is sitting.
 ///
@@ -332,7 +337,7 @@ pub fn beam(def: &LightDef, pose: &Pose, signals: &Signals, metres: f32) -> Opti
         far: max(def.range, far_half * 2.0),
         near_half,
         far_half,
-        color: dim(def.color, scale),
+        color: dim(def.color, scale * BEAM_STRENGTH),
     })
 }
 
