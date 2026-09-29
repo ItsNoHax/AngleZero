@@ -237,8 +237,9 @@ fn road_distance(track: &Track, p: Vec3) -> f32 {
     let mut best = f32::MAX;
     let mut i = 0;
     while i < track.nodes.len() {
-        best = crate::math::min(best, track.nodes[i].p.horizontal_distance(p));
-        i += 6;
+        let d = track.nodes[i].p.horizontal_distance(p);
+        best = crate::math::min(best, d);
+        i = track.next_in_reach(i, 6, d, best);
     }
     best
 }
@@ -270,11 +271,12 @@ fn kind_for(r: f32) -> LightKind {
 /// so the count can come in a little under `out.len()`.
 pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
     let towns = towns(track);
+    let (centre, _) = track_footprint(track);
     let mut rng = Rng::new(0x7A11_E7);
     let mut w = 0usize;
     let cap = out.len();
     let push = |out: &mut [ValleyLight], w: &mut usize, l: ValleyLight| {
-        if *w < cap && clear_of_road(track, l.p) && nearer_than_ridges(track, l.p) {
+        if *w < cap && clear_of_road(track, l.p) && nearer_than_ridges_from(track, centre, l.p, track.nodes.len()) {
             out[*w] = ValleyLight { p: on_floor(track, l.p), ..l };
             *w += 1;
         }
@@ -310,7 +312,6 @@ pub fn valley_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
     }
 
     // Farms and junctions: isolated, mostly warm, on the valley floor either side of the pass.
-    let (centre, _) = track_footprint(track);
     for _ in 0..140 {
         let side = if rng.next() < 0.5 { -1.0 } else { 1.0 };
         let p = Vec3::new(
@@ -336,18 +337,28 @@ pub fn nearer_than_ridges(track: &Track, p: Vec3) -> bool {
 /// edge can be past the near ridge band, and there it paints over the band's lower slopes instead
 /// of being hidden by them: lights on the foot of a distant range, which is what they look like.
 pub fn nearer_than_ridges_until(track: &Track, p: Vec3, nodes: usize) -> bool {
-    let (centre, _) = track_footprint(track);
+    nearer_than_ridges_from(track, track_footprint(track).0, p, nodes)
+}
+
+/// As [`nearer_than_ridges_until`], given the centre of [`track_footprint`], which takes two passes
+/// over the whole course to find: a caller asking about thousands of points finds it once.
+pub fn nearer_than_ridges_from(track: &Track, centre: Vec3, p: Vec3, nodes: usize) -> bool {
     let near = &RIDGE_BANDS[RIDGE_BANDS.len() - 1];
+    // A metre moved along the road changes the eye's distance to `p` by a metre at most, and its
+    // distance to the band's centre, which follows the eye, by `1 - follow`.
+    let drift = 1.0 + abs(1.0 - near.follow);
     let mut i = 0;
     while i < nodes.min(track.nodes.len()) {
         let eye = track.nodes[i].p;
         let c = ridge_centre(near, centre, eye);
         // The band's closest approach to this eye.
         let closest = near.radius - eye.horizontal_distance(c);
-        if eye.horizontal_distance(p) >= closest {
+        let d = eye.horizontal_distance(p);
+        if d >= closest {
             return false;
         }
-        i += 4;
+        // So the eyes that the spare cannot run out before are skipped.
+        i = track.next_in_reach(i, 4, (closest - d) / drift, 0.0);
     }
     true
 }
@@ -442,10 +453,11 @@ fn clear_of_tarmac(track: &Track, p: Vec3) -> bool {
     while i < track.nodes.len() {
         let n = &track.nodes[i].p;
         let (dx, dz) = (n.x - p.x, n.z - p.z);
-        if dx * dx + dz * dz < TREE_ROAD_CLEARANCE * TREE_ROAD_CLEARANCE {
+        let d2 = dx * dx + dz * dz;
+        if d2 < TREE_ROAD_CLEARANCE * TREE_ROAD_CLEARANCE {
             return false;
         }
-        i += 2;
+        i = track.next_in_reach(i, 2, sqrt(d2), TREE_ROAD_CLEARANCE);
     }
     true
 }
@@ -763,10 +775,16 @@ fn bank_fits(track: &Track, node: usize, side: f32) -> bool {
         let p = Vec3::new(n.p.x + n.nrm.x * lateral * side, n.p.y, n.p.z + n.nrm.z * lateral * side);
         let mut j = 0;
         while j < track.nodes.len() {
-            if (j as i64 - node as i64).abs() > 30 && track.nodes[j].p.horizontal_distance(p) < BANK_CLEARANCE {
+            if (j as i64 - node as i64).abs() <= 30 {
+                // The bank's own stretch of road is never in its way: step to the far end of it.
+                j = (node + 31).next_multiple_of(2);
+                continue;
+            }
+            let d = track.nodes[j].p.horizontal_distance(p);
+            if d < BANK_CLEARANCE {
                 return false;
             }
-            j += 2;
+            j = track.next_in_reach(j, 2, d, BANK_CLEARANCE);
         }
     }
     true
@@ -848,6 +866,13 @@ fn nearest_lamp(track: &Track, node: usize) -> Vec3 {
 /// picked out, those turned away fall into shadow, which is what lets the shape of the hill read at
 /// night. The warmth is the sodium lamps, `0.0..=1.0`, falling off over twenty-odd metres.
 pub fn hillside_light(track: &Track, node: usize, lateral: f32) -> (f32, f32) {
+    hillside_light_toward(track, node, lateral, moon_dir())
+}
+
+/// As [`hillside_light`], given [`moon_dir`]. A caller lighting every vertex of the hillside finds
+/// it once: `libm`'s sine and cosine work in doubles, which the PSP has no hardware for, and the
+/// pair for each of the terrain's 29,000 vertices cost over half a second of the boot.
+pub fn hillside_light_toward(track: &Track, node: usize, lateral: f32, moon: Vec3) -> (f32, f32) {
     let n = &track.nodes[node];
     let l = abs(lateral);
     let grade = (terrain_drop(l + 0.5) - terrain_drop(l - 0.5).max(terrain_drop(0.0))) / 1.0;
@@ -856,7 +881,7 @@ pub fn hillside_light(track: &Track, node: usize, lateral: f32) -> (f32, f32) {
     let (ox, oz) = (n.nrm.x * side, n.nrm.z * side);
     let normal = Vec3::new(-grade * ox, 1.0, -grade * oz).normalized();
     let flat = MOON_HEIGHT;
-    let k = 0.62 + 0.38 * max(0.0, normal.dot(moon_dir())) / flat;
+    let k = 0.62 + 0.38 * max(0.0, normal.dot(moon)) / flat;
     let p = Vec3::new(n.p.x + ox * l, n.p.y, n.p.z + oz * l);
     let d = p.horizontal_distance(nearest_lamp(track, node));
     let warm = clamp(1.0 - d / 24.0, 0.0, 1.0);

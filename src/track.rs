@@ -364,6 +364,24 @@ impl Track {
         derive_curvature(dst);
     }
 
+    /// The next node to test after node `j`, stepping `stride` at a time, when looking for one within
+    /// `radius` of a point `d` metres from node `j`.
+    ///
+    /// No node is nearer the point than node `j` less the road between them, so every node fewer
+    /// than `d - radius` metres further along is out of reach and is stepped over, found by binary
+    /// search on `s`. Scanning the whole course for each of thousands of scenery candidates was
+    /// most of the black screen at boot. The metre spare covers what summing `s` node by node has
+    /// lost to rounding, so the nodes stepped over are only ever ones the test would have passed.
+    pub fn next_in_reach(&self, j: usize, stride: usize, d: f32, radius: f32) -> usize {
+        let next = j + stride;
+        if next >= NODE_COUNT {
+            return next;
+        }
+        let reach = self.nodes[j].s + (d - radius - 1.0);
+        let past = next + self.nodes[next..].partition_point(|n| n.s < reach);
+        next + (past - next).div_ceil(stride) * stride
+    }
+
     #[inline]
     pub fn last_index(&self) -> usize {
         NODE_COUNT - 1

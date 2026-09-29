@@ -36,9 +36,12 @@ pub fn asin(x: f32) -> f32 {
     libm::asinf(x)
 }
 
+/// The FPU's own `sqrt.s`. `libm` has no hardware path on MIPS and takes its software routine
+/// instead, which made every distance test several times dearer and most of the boot's black
+/// screen. Both are correctly rounded, so the results are the same to the bit.
 #[inline]
 pub fn sqrt(x: f32) -> f32 {
-    libm::sqrtf(x)
+    core::f32::math::sqrt(x)
 }
 
 #[inline]

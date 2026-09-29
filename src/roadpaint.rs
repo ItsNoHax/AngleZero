@@ -153,6 +153,12 @@ impl Paint {
     /// Other drivers' tyre marks through each bend, as curves in (s, u): each call is one tyre's
     /// line, sampled at `SKID_SAMPLES` points, with how dark it is.
     pub fn skids(&self, mut each: impl FnMut(&[(f32, f32)], f32)) {
+        // The same for every line, and a cosine is dear on the PSP.
+        let mut swings = [0.0f32; SKID_SAMPLES];
+        for (j, swing) in swings.iter_mut().enumerate() {
+            let t = j as f32 / (SKID_SAMPLES - 1) as f32;
+            *swing = 0.5 - 0.5 * cos(t * PI);
+        }
         for (k, &(apex_s, outside)) in self.apexes[..self.apex_count].iter().enumerate() {
             for line in 0..5u32 {
                 let key = (k as u32) * 64 + line;
@@ -166,7 +172,7 @@ impl Paint {
                     let mut pts = [(0.0f32, 0.0f32); SKID_SAMPLES];
                     for (j, p) in pts.iter_mut().enumerate() {
                         let t = j as f32 / (SKID_SAMPLES - 1) as f32;
-                        let swing = 0.5 - 0.5 * cos(t * PI);
+                        let swing = swings[j];
                         let u = u_out + (u_in - u_out) * swing + tyre * (0.5 + 0.5 * t);
                         *p = (s0 + t * span, clamp(u, -5.1, 5.1));
                     }

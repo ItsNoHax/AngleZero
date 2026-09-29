@@ -268,8 +268,9 @@ pub fn debug_mode() -> u32 {
 /// Builds every static mesh. Call once, after the track is generated.
 pub fn init(track: &Track) {
     unsafe {
+        let moon = angle_zero::scenery::moon_dir();
         (*(&raw mut TERRAIN_MESH)).build_shelved_lit(track, &TERRAIN_STATIONS, &|node, lateral, color| {
-            let (k, warm) = angle_zero::scenery::hillside_light(track, node, lateral);
+            let (k, warm) = angle_zero::scenery::hillside_light_toward(track, node, lateral, moon);
             bake(color, k, warm)
         });
         // Resurfaced in sections, each weathered to its own shade.

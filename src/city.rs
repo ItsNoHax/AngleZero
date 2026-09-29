@@ -13,7 +13,7 @@
 //! GE transforms itself, so a city of a few thousand costs no per-light work on the CPU.
 
 use crate::math::{abs, atan2, cos, hypot, max, min, sin, Vec3, PI};
-use crate::scenery::{nearer_than_ridges_until, LightKind, Rng, ValleyLight};
+use crate::scenery::{nearer_than_ridges_from, track_footprint, LightKind, Rng, ValleyLight};
 use crate::track::{carpark_parking, Track};
 
 /// The basin floor the city stands on, relative to the start line.
@@ -63,57 +63,94 @@ pub fn broadcast_tower(track: &Track) -> (Vec3, f32) {
 
 /// Where a point lies from the car park: degrees right of its facing, and metres out.
 pub fn bearing_of(track: &Track, p: Vec3) -> (f32, f32) {
-    let (x, z, facing) = origin(track);
-    let mut d = atan2(p.z - z, p.x - x) - facing;
-    while d > PI {
-        d -= 2.0 * PI;
-    }
-    while d < -PI {
-        d += 2.0 * PI;
-    }
-    (d * 180.0 / PI, hypot(p.x - x, p.z - z))
+    Basin::new(track).bearing_of(p)
 }
 
 /// Inside the city's sector.
 pub fn in_city(track: &Track, p: Vec3) -> bool {
-    let (b, d) = bearing_of(track, p);
-    (CITY_LEFT..=CITY_RIGHT).contains(&b) && (CITY_NEAR..=CITY_FAR).contains(&d)
+    Basin::new(track).in_city(p)
+}
+
+/// The points every placement is measured from, worked out once. Each takes a walk over the car
+/// park or the whole course to find, and the street grid alone asks after some 35,000 candidate
+/// lights: finding them afresh every time was most of the black screen at boot.
+struct Basin {
+    x: f32,
+    z: f32,
+    facing: f32,
+    downtown: Vec3,
+    subcentre: Vec3,
+    track_centre: Vec3,
+}
+
+impl Basin {
+    fn new(track: &Track) -> Basin {
+        let (x, z, facing) = origin(track);
+        Basin {
+            x,
+            z,
+            facing,
+            downtown: downtown(track),
+            subcentre: subcentre(track),
+            track_centre: track_footprint(track).0,
+        }
+    }
+
+    fn bearing_of(&self, p: Vec3) -> (f32, f32) {
+        let mut d = atan2(p.z - self.z, p.x - self.x) - self.facing;
+        while d > PI {
+            d -= 2.0 * PI;
+        }
+        while d < -PI {
+            d += 2.0 * PI;
+        }
+        (d * 180.0 / PI, hypot(p.x - self.x, p.z - self.z))
+    }
+
+    fn in_city(&self, p: Vec3) -> bool {
+        let (b, d) = self.bearing_of(p);
+        (CITY_LEFT..=CITY_RIGHT).contains(&b) && (CITY_NEAR..=CITY_FAR).contains(&d)
+    }
+
+    /// How built up the city is at `p`: 1 at the middle of the clusters, falling off quickly.
+    fn density(&self, p: Vec3) -> f32 {
+        let mut k = 0.0;
+        for (c, r, w) in [(self.downtown, 420.0, 1.0), (self.subcentre, 300.0, 0.6)] {
+            let d = p.horizontal_distance(c) / r;
+            k += w / (1.0 + d * d * d * d);
+        }
+        min(1.0, 0.1 + k)
+    }
+
+    /// A place a light may go: in the sector, clear of the road, and in front of the ridges from
+    /// the top of the course.
+    fn allowed(&self, track: &Track, p: Vec3) -> bool {
+        self.in_city(p)
+            && clear_of_road(track, p)
+            && nearer_than_ridges_from(track, self.track_centre, p, CITY_SEEN_FROM)
+    }
 }
 
 fn clear_of_road(track: &Track, p: Vec3) -> bool {
     let mut i = 0;
     while i < track.nodes.len() {
-        if track.nodes[i].p.horizontal_distance(p) < CITY_CLEARANCE {
+        let d = track.nodes[i].p.horizontal_distance(p);
+        if d < CITY_CLEARANCE {
             return false;
         }
-        i += 8;
+        i = track.next_in_reach(i, 8, d, CITY_CLEARANCE);
     }
     true
-}
-
-/// How built up the city is at `p`: 1 at the middle of the clusters, falling off quickly.
-fn density(track: &Track, p: Vec3) -> f32 {
-    let mut k = 0.0;
-    for (c, r, w) in [(downtown(track), 420.0, 1.0), (subcentre(track), 300.0, 0.6)] {
-        let d = p.horizontal_distance(c) / r;
-        k += w / (1.0 + d * d * d * d);
-    }
-    min(1.0, 0.1 + k)
 }
 
 /// The stretch of course the city must stay in front of the ridges from: the summit and the first
 /// hairpin below it, where it fills the view.
 pub const CITY_SEEN_FROM: usize = 400;
 
-/// A place a light may go: in the sector, clear of the road, and in front of the ridges from the
-/// top of the course.
-fn allowed(track: &Track, p: Vec3) -> bool {
-    in_city(track, p) && clear_of_road(track, p) && nearer_than_ridges_until(track, p, CITY_SEEN_FROM)
-}
-
 /// Fills `out` with the city's lights and returns how many were placed.
 pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
     let mut rng = Rng::new(0xC17E_0011);
+    let basin = Basin::new(track);
     let mut w = 0usize;
     let cap = out.len();
     let push = |out: &mut [ValleyLight], w: &mut usize, p: Vec3, kind: LightKind| {
@@ -125,9 +162,8 @@ pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
 
     // The street grid, skewed to the view and centred on downtown: a light every 12 m along
     // streets 110 m apart, and a brighter arterial every fifth street.
-    let centre = downtown(track);
-    let (_, _, facing) = origin(track);
-    let g = facing + 40.0 * PI / 180.0;
+    let centre = basin.downtown;
+    let g = basin.facing + 40.0 * PI / 180.0;
     let (ca, sa) = (cos(g), sin(g));
     for axis in 0..2 {
         for j in -24i32..=24 {
@@ -137,8 +173,8 @@ pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
                 let s = t as f32 * 12.0;
                 let (u, v) = if axis == 0 { (s, off) } else { (off, s) };
                 let p = Vec3::new(centre.x + u * ca - v * sa, CITY_FLOOR + 1.5, centre.z + u * sa + v * ca);
-                let keep = density(track, p) * if major { 1.0 } else { 0.7 };
-                if rng.next() > keep || !allowed(track, p) {
+                let keep = basin.density(p) * if major { 1.0 } else { 0.7 };
+                if rng.next() > keep || !basin.allowed(track, p) {
                     continue;
                 }
                 let r = rng.next();
@@ -150,7 +186,7 @@ pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
                     LightKind::ColdWhite
                 };
                 // Now and then a sign, where it is busiest.
-                let d = density(track, p);
+                let d = basin.density(p);
                 let kind = if rng.next() < 0.03 * d * d {
                     match (rng.next() * 3.0) as u32 {
                         0 => LightKind::Pink,
@@ -179,7 +215,7 @@ pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
             for i in 0..n {
                 let t = i as f32 / n as f32;
                 let p = Vec3::new(a.x + (b.x - a.x) * t, CITY_FLOOR + 18.0, a.z + (b.z - a.z) * t);
-                if !allowed(track, p) {
+                if !basin.allowed(track, p) {
                     continue;
                 }
                 push(out, &mut w, p, LightKind::Sodium);
@@ -198,7 +234,7 @@ pub fn city_lights(track: &Track, out: &mut [ValleyLight]) -> usize {
         let bend = sin(t * 5.0) * 90.0;
         let p = Vec3::new(a.x + (b.x - a.x) * t + bend, CITY_FLOOR + 8.0, a.z + (b.z - a.z) * t);
         let train = t > 0.3 && t < 0.33;
-        if (train || k % 4 == 0) && allowed(track, p) {
+        if (train || k % 4 == 0) && basin.allowed(track, p) {
             push(out, &mut w, p, if train { LightKind::ColdWhite } else { LightKind::Green });
         }
     }
@@ -231,8 +267,9 @@ impl Tower {
 /// anywhere else on the course the order is nearly the same, since the city is far from all of it.
 pub fn city_towers(track: &Track, out: &mut [Tower]) -> usize {
     let mut rng = Rng::new(0x70E4_2211);
+    let basin = Basin::new(track);
     let mut w = 0usize;
-    for (c, n, spread, top) in [(downtown(track), 34, 260.0, 260.0), (subcentre(track), 14, 180.0, 170.0)] {
+    for (c, n, spread, top) in [(basin.downtown, 34, 260.0, 260.0), (basin.subcentre, 14, 180.0, 170.0)] {
         for _ in 0..n {
             if w >= out.len() {
                 break;
@@ -244,7 +281,7 @@ pub fn city_towers(track: &Track, out: &mut [Tower]) -> usize {
             let height = r * r * top * max(0.4, 1.0 - d / spread * 0.5) + 40.0;
             let (hw, hd) = (13.0 + rng.next() * 11.0, 13.0 + rng.next() * 11.0);
             let warm = rng.next() < 0.6;
-            if !allowed(track, base) {
+            if !basin.allowed(track, base) {
                 continue;
             }
             out[w] = Tower { base, half_w: hw, half_d: hd, height, warm };
@@ -252,8 +289,7 @@ pub fn city_towers(track: &Track, out: &mut [Tower]) -> usize {
         }
     }
     // Farthest first.
-    let (x, z, _) = origin(track);
-    let far = |t: &Tower| hypot(t.base.x - x, t.base.z - z);
+    let far = |t: &Tower| hypot(t.base.x - basin.x, t.base.z - basin.z);
     for i in 1..w {
         let mut j = i;
         while j > 0 && far(&out[j]) > far(&out[j - 1]) {

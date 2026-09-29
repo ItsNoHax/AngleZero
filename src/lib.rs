@@ -5,6 +5,7 @@
 //! plain `cargo test`. The PSP binary in `main.rs` is a thin input + rendering shell over this.
 
 #![no_std]
+#![feature(core_float_math)]
 
 #[cfg(test)]
 extern crate std;
