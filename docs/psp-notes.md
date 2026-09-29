@@ -1,7 +1,8 @@
 # PSP hardware notes
 
-Pitfalls that PPSSPP does not reproduce or that fail silently. All SDK references are to rust-psp
-0.3.13.
+Pitfalls that PPSSPP does not reproduce or that fail silently. SDK references are to the
+[rust-psp fork](https://github.com/ItsNoHax/rust-psp) at `a89142b`, pinned in `Cargo.toml`. Two of
+the bugs below are upstream rust-psp 0.3.13 only; they are marked.
 
 ## `sceGumLookAt` does nothing
 
@@ -16,15 +17,20 @@ gum_translate(&mut mat, &ieye);
 **Workaround:** `src/math.rs` builds the view matrix (tested in `tests/matrix.rs`) and uploads it
 with `sceGumLoadMatrix`. The matrix must be 16-byte aligned, or the VFPU `lv.q` faults.
 
-## Gum context is created lazily
+## Gum context is created lazily (0.3.13 only)
 
-rust-psp creates its VFPU matrix context only inside `sceGumLoadIdentity` and `sceGumLoadMatrix`.
+Fixed in the fork: whichever `sceGum*` call runs first creates the context.
+
+Upstream rust-psp creates its VFPU matrix context only inside `sceGumLoadIdentity` and `sceGumLoadMatrix`.
 Every other `sceGum*` call hits `unreachable` first, which surfaces as a bare `break` instruction
 rather than a panic. `psp_main` calls `sceGumLoadIdentity` once during setup.
 
-## `sceGumPushMatrix` / `sceGumPopMatrix` are mismatched
+## `sceGumPushMatrix` / `sceGumPopMatrix` are mismatched (0.3.13 only)
 
-Push advances the stack pointer then saves; pop retreats then loads. What is popped is never what
+Fixed in the fork: push saves before it advances. The workaround below stays, as it does not
+depend on the bug.
+
+Upstream, push advances the stack pointer then saves; pop retreats then loads. What is popped is never what
 was pushed. It only appears to work once an earlier draw has synced the right matrix into the slot
 below.
 
