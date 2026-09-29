@@ -1953,7 +1953,7 @@ pub fn draw_effects(effects: &Effects, camera: &Camera) {
             if let Some(verts) = alloc_verts(live * 6) {
                 let mut w = 0usize;
                 for s in effects.skids().iter().filter(|s| s.active) {
-                    let (sy, cy) = (sin(s.yaw), cos(s.yaw));
+                    let (sy, cy) = (s.sin_yaw, s.cos_yaw);
                     // 0.3 x 1.1 m, stretched lengthwise with speed.
                     let (hw, hl) = (0.15, 0.55 * s.stretch);
                     let corner = |a: f32, b: f32| {
@@ -2032,6 +2032,17 @@ const GLOW_SEGMENTS: usize = 8;
 /// Vertices one glow costs, as a triangle fan expanded into separate triangles.
 const GLOW_VERTS: usize = GLOW_SEGMENTS * 3;
 
+/// The rim of a billboarded glow as (cos, sin), one entry per segment, eighths of a turn apart.
+///
+/// Written out rather than computed: `sin` and `cos` are software routines on this target, and
+/// `push_glow` used to call three of them per rim vertex, twice per segment. A tyre-smoke puff is a
+/// glow, and at a full pool of 34 that was about 1,600 calls a frame. In PPSSPP it took a drifting
+/// frame from 9 ms to 23 ms and the game down to 30 fps.
+const GLOW_RIM: [(f32, f32); GLOW_SEGMENTS] = {
+    use core::f32::consts::FRAC_1_SQRT_2 as H;
+    [(1.0, 0.0), (H, H), (0.0, 1.0), (-H, H), (-1.0, 0.0), (-H, -H), (0.0, -1.0), (H, -H)]
+};
+
 /// Writes a camera-facing radial glow: bright in the middle, fading to nothing at the rim.
 ///
 /// Gradient sprites would be the obvious way to do these. A flat quad of the same size and opacity
@@ -2053,11 +2064,11 @@ unsafe fn push_glow(
     let rim = color & 0x00ff_ffff; // same hue, zero alpha
     let centre = Vertex::new(cx, cy, cz, core);
     let edge = |k: usize| {
-        let a = (k % GLOW_SEGMENTS) as f32 / GLOW_SEGMENTS as f32 * TAU;
+        let (ca, sa) = GLOW_RIM[k % GLOW_SEGMENTS];
         Vertex::new(
-            cx + right.0 * cos(a) * half_w,
-            cy + sin(a) * half_h,
-            cz + right.1 * cos(a) * half_w,
+            cx + right.0 * ca * half_w,
+            cy + sa * half_h,
+            cz + right.1 * ca * half_w,
             rim,
         )
     };

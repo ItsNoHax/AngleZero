@@ -25,8 +25,12 @@ pub struct Skid {
     pub x: f32,
     pub y: f32,
     pub z: f32,
-    /// Heading of the mark, matching the car at the moment it was laid.
-    pub yaw: f32,
+    /// Sine and cosine of the mark's heading, which matches the car at the moment it was laid.
+    /// Kept rather than the angle: every live mark is redrawn every frame, and `sin` and `cos` are
+    /// software routines on the PSP. Worked out per mark per frame, a full pool of 260 cost about
+    /// four milliseconds under PPSSPP; worked out here, they are already known.
+    pub sin_yaw: f32,
+    pub cos_yaw: f32,
     /// Lengthwise stretch, so faster slides leave longer marks.
     pub stretch: f32,
     pub active: bool,
@@ -88,7 +92,8 @@ impl Effects {
                 x: 0.0,
                 y: 0.0,
                 z: 0.0,
-                yaw: 0.0,
+                sin_yaw: 0.0,
+                cos_yaw: 1.0,
                 stretch: 1.0,
                 active: false,
             }; MAX_SKIDS],
@@ -153,7 +158,8 @@ impl Effects {
                 x: car.x + side * c + shape.rear_hub_z * s,
                 y: car.y + 0.05,
                 z: car.z - side * s + shape.rear_hub_z * c,
-                yaw: car.yaw,
+                sin_yaw: s,
+                cos_yaw: c,
                 stretch,
                 active: true,
             };
