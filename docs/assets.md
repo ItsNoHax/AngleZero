@@ -7,6 +7,9 @@ XMB presentation and music. Cars have their own pipeline; see [Cars](cars.md).
 ```
 assets/
   ICON0.png, PIC1.png   XMB icon and background
+  PIC0.png              XMB info panel, drawn over PIC1
+  ICON1.PMF             XMB animated icon (generated, committed)
+  ICON1_source.mp4      animated icon source
   SND0.AT3              XMB music (generated, committed)
   SND0_source.wav       music source
   configs/*.toml        car configs (committed)
@@ -22,9 +25,12 @@ Configured in `Psp.toml` and packed into the EBOOT by `cargo psp`.
 |---|---|---|
 | `ICON0` | `assets/ICON0.png` | 144 × 80 PNG, 24-bit RGB |
 | `PIC1` | `assets/PIC1.png` | 480 × 272 PNG, 24-bit RGB |
+| `ICON1` | `assets/ICON1.PMF` | 144 × 80 H.264 PMF, 29.97 fps, 4.8 s seamless loop |
+| `PIC0` | `assets/PIC0.png` | 310 × 180 PNG, 32-bit RGBA |
 | `SND0` | `assets/SND0.AT3` | ATRAC3 LP4 (66 kbps), 44.1 kHz stereo, RIFF |
 
-The PNGs must have no alpha channel; some firmwares and packers reject it. To convert RGBA art:
+ICON0 and PIC1 must have no alpha channel; some firmwares and packers reject it. PIC0 keeps its
+alpha: it is an overlay, and the slot is meant to be transparent. To convert RGBA art:
 
 ```bash
 magick in.png -background black -alpha remove -alpha off -define png:color-type=2 out.png
@@ -42,6 +48,25 @@ for i, n in enumerate(['PARAM.SFO','ICON0.PNG','ICON1.PMF','PIC0.PNG','PIC1.PNG'
     if size:
         print(f'{n:<12}{size:>9} bytes')
 PY
+```
+
+## Animated icon
+
+The XMB plays `ICON1.PMF` in place of `ICON0` while the game is selected. `ICON1_source.mp4` is
+its source: 144 frames at 29.97 fps, two passes of a 2.4 s animation, so it loops without a seam.
+
+```bash
+python3 scripts/make_pmf.py assets/ICON1_source.mp4 assets/ICON1.PMF
+```
+
+The script needs `ffmpeg` with `libx264`. ffmpeg can read PMF but cannot write it, so the script
+re-encodes the video and writes the container itself; its docstring lists the format rules. It is
+ported unchanged from SSB64PSP, whose icons it produced animate on a PSP Slim with firmware 6.61.
+ffmpeg decoding the result does not prove the XMB will play it: the console's decoder is stricter,
+and only a physical PSP shows the animation.
+
+```bash
+ffprobe -v error -count_frames -show_entries stream=profile,level,nb_read_frames assets/ICON1.PMF
 ```
 
 ## Music
