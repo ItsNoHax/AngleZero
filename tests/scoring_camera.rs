@@ -183,7 +183,7 @@ fn the_title_camera_holds_its_shot_and_eases_in() {
     }
     let d1 = hypot(cam.pos.x - car.x, cam.pos.z - car.z);
     // It has pushed in a little and then stopped, never swinging round.
-    assert!(d1 < d0 - 1.0 && d1 > d0 - 2.0, "pushed in from {d0:.2} to {d1:.2}");
+    assert!(d1 < d0 - 0.4 && d1 > d0 - 1.0, "pushed in from {d0:.2} to {d1:.2}");
     let moved = hypot(cam.pos.x - start.x, cam.pos.z - start.z);
     assert!(moved < 2.0, "the title camera wandered {moved:.2} m");
     let settled = cam.pos;

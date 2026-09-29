@@ -11,13 +11,13 @@ use crate::vehicle::CarState;
 /// right and up, then turned left of the way the car faces and pitched down. From there the first
 /// hairpin sweeps across the left of the frame, the city fills the right, and the car stands in
 /// the middle against the rail.
-pub const TITLE_BACK: f32 = 8.5;
+pub const TITLE_BACK: f32 = 10.5;
 pub const TITLE_RIGHT: f32 = 1.5;
-pub const TITLE_UP: f32 = 5.0;
+pub const TITLE_UP: f32 = 5.6;
 pub const TITLE_TURN: f32 = 18.0 * PI / 180.0;
-pub const TITLE_PITCH: f32 = -14.0 * PI / 180.0;
+pub const TITLE_PITCH: f32 = -17.0 * PI / 180.0;
 /// A slow push-in over the first seconds on the title screen: this much closer, over this long.
-const TITLE_PUSH: f32 = 1.5;
+pub const TITLE_PUSH: f32 = 0.6;
 const TITLE_PUSH_TIME: f32 = 20.0;
 pub const TITLE_FOV: f32 = 54.0;
 const RUN_FOV_BASE: f32 = 60.0;

@@ -55,3 +55,26 @@ fn the_title_shot_frames_the_car_and_the_first_hairpin() {
     }
     assert!(seen > 20, "only {seen} nodes of the first hairpin are on the left of the title shot");
 }
+
+/// The whole car stays in the title shot once the camera has eased in, with room to spare above
+/// the name in the bottom corner — for a car as long and wide as any in the catalogue.
+#[test]
+fn the_title_shot_keeps_the_whole_car_in_frame() {
+    let t = track();
+    let (x, y, z, yaw, _) = angle_zero::track::carpark_parking(&t);
+    let car = angle_zero::vehicle::CarState { x, y, z, yaw, ..Default::default() };
+    let mut cam = angle_zero::camera::Camera::new();
+    cam.fov = angle_zero::camera::TITLE_FOV;
+    for _ in 0..400 {
+        cam.update_title(&car, 0.1);
+    }
+    let (fx, fz) = (yaw.sin(), yaw.cos());
+    let (rx, rz) = (-fz, fx);
+    for (a, c) in [(2.5f32, 1.0f32), (2.5, -1.0), (-2.5, 1.0), (-2.5, -1.0)] {
+        for h in [0.0f32, 1.4] {
+            let p = angle_zero::math::Vec3::new(x + fx * a + rx * c, y + h, z + fz * a + rz * c);
+            let (sx, sy) = project(&cam, p).expect("car corner behind the camera");
+            assert!((20.0..460.0).contains(&sx) && (20.0..238.0).contains(&sy), "car corner at {sx:.0}, {sy:.0}");
+        }
+    }
+}

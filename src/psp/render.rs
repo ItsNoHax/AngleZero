@@ -830,11 +830,13 @@ fn build_carpark_props(track: &Track, out: &mut [Vertex]) -> usize {
 const CARPARK_VEND_ALONG: f32 = 4.2;
 const CARPARK_VEND_LATERAL: f32 = 15.0;
 
-/// The car park lamp's foot, as `(along, lateral)`: 8 m back from the middle of the parapet.
+/// The car park lamp's foot, as `(along, lateral)`: behind the title camera, so its pole never
+/// stands in the shot while its pool still reaches the parked car.
 fn carpark_lamp(track: &Track) -> (f32, f32) {
     let ((na, nl), (sa, sl)) = angle_zero::track::carpark_parapet(track);
-    let k = 8.0 * core::f32::consts::FRAC_1_SQRT_2;
-    ((na + sa) * 0.5 - k - 3.0, (nl + sl) * 0.5 - k + 3.0)
+    let k = core::f32::consts::FRAC_1_SQRT_2;
+    // Straight back from the middle bay by 17 m, and 1.5 m over to where the camera stands.
+    ((na + sa) * 0.5 - 17.3 * k - 1.5 * k, (nl + sl) * 0.5 - 17.3 * k + 1.5 * k)
 }
 
 /// The car park's mesh: its paving, walls and dressing. Its own buffer rather than a prop chunk's,
