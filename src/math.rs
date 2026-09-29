@@ -255,7 +255,7 @@ impl Vec2 {
     /// The design calls this the "left normal", but in a right-handed, +Y-up
     /// frame it points to the car's **right** when travelling forward. The formula is kept
     /// exactly as it was — only the name is corrected — because every sign
-    /// convention downstream (`lat`, the bay side, rail pushes) is built on it.
+    /// convention downstream (`lat`, the car park's side, rail pushes) is built on it.
     #[inline]
     pub fn lateral_normal(self) -> Vec2 {
         Vec2::new(-self.z, self.x)

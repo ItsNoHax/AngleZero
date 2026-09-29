@@ -400,7 +400,7 @@ pub fn psp_main() {
             // is the right treatment for smoke and the wrong one for lights: the orbiting camera is
             // the only view in the game that sees the front of the car, so it was the one place the
             // headlights could have been looked at and the one place they were switched off. A car
-            // parked at night with its lights on is also just what a car in a lay-by at night looks
+            // parked at night with its lights on is also just what a car in a car park at night looks
             // like.
             render::draw_light_beams(&game.vehicle, track, game.braking_hint());
             wet::draw(game.wet, &game.vehicle, &game.camera, track);

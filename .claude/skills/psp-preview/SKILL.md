@@ -91,7 +91,7 @@ that has stopped drawing it. Check the directory before debugging the renderer.
 ## A car takes a few frames to arrive
 
 A car is not resident at boot: it is read a chunk per frame, about thirty of them, and what stands
-in the lay-by meanwhile is its **silhouette** — the car's outline in flat near-black, with a
+in the car park meanwhile is its **silhouette** — the car's outline in flat near-black, with a
 progress bar under its name. That is working correctly, not a car that has failed to draw.
 
 It matters here because capture is on a timer. The first emit is at frame 30, which is roughly when

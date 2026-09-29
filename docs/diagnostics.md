@@ -80,7 +80,7 @@ while cycling cars; growth means residency is leaking.
 | 14 | Eight different cars (benchmark) |
 | 15 | Every lamp on every car lit |
 | 16 | No surface textures on the road, hillside and banks; trees left out |
-| 17 | No ridgelines or valley |
+| 17 | No ridgelines, valley or city |
 | 18 | No headlight reflections off rails, boards and mirrors |
 
 Modes 1–12 each remove one suspect: if the fault disappears, that is the cause. Removing a pass and

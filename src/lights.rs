@@ -391,7 +391,7 @@ pub const BEAM_VERTS: usize = (BEAM_STATIONS.len() - 1) * 3 * 6;
 /// centimetres a metre, so a horizontal patch 24 m long is a metre out by its far end — floating in
 /// the air where the road drops away, and buried under the tarmac where it climbs. Buried is what it
 /// actually did, and a beam that reached two metres in front of the bumper and stopped dead was the
-/// result. `push_bay_pool` lays the lay-by's light pool on its paving for exactly this reason.
+/// result. `push_bay_pool` lays the car park's light pools on its paving for exactly this reason.
 ///
 /// Sampled once per station and not once per vertex: the height is a property of how far up the
 /// road the light has reached, and asking the track eighteen times for a beam that has three

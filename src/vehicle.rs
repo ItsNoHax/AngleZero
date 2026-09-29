@@ -354,7 +354,7 @@ impl Vehicle {
         self.query = self.locator.nearest(track, self.state.x, self.state.z);
     }
 
-    /// Parks the car at an arbitrary pose (used for the title screen's pull-off).
+    /// Parks the car at an arbitrary pose (used for the title screen's car park).
     pub fn place_at(&mut self, track: &Track, x: f32, y: f32, z: f32, yaw: f32, index: usize) {
         self.state.x = x;
         self.state.y = y;
@@ -389,7 +389,7 @@ impl Vehicle {
     pub fn step(&mut self, track: &Track, input: Input, dt: f32) -> StepOutcome {
         let mut out = StepOutcome::default();
         // Integrated on a local copy so the borrow checker still lets us query the track and
-        // the bay limits mid-step; written back before containment runs.
+        // the car park's limits mid-step; written back before containment runs.
         let mut st = self.state;
 
         // The car's own numbers, taken once: every force below is scaled by one of them.
@@ -471,7 +471,7 @@ impl Vehicle {
         let (bias, reach) = self.shape.lateral_span(fwd, side);
         // Where the middle of the bodywork sits, and where its two flanks end.
         let middle = q.lat + bias;
-        // Both limits, rather than the one the origin happens to be nearest: the pull-off leaves
+        // Both limits, rather than the one the origin happens to be nearest: the car park leaves
         // one side of these nodes open and the other railed, and they are 24 m apart.
         let (lim_pos, lim_neg) = (
             self.containment_limit(track, q.index, 1.0),

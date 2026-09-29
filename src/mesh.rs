@@ -117,7 +117,7 @@ pub fn ribbon_spacing(track: &Track) -> f32 {
 ///
 /// A surface that butts against the ribbon over some span has to put its cuts exactly here.
 /// Anywhere else meets the ribbon in the middle of an edge, and a T-junction is a crack you can
-/// see the sky through — which is why the pull-off's paving used to be slid under the road
+/// see the sky through — which is why the old lay-by's paving used to be slid under the road
 /// instead, and why that overlap then fought for the depth buffer. Snapping inwards keeps the
 /// butting surface inside the span it was given rather than overhanging it.
 ///
@@ -163,7 +163,7 @@ impl<const V: usize> Ribbon<V> {
         self.build_shaped(track, stations, None, false)
     }
 
-    /// As `build`, but cuts the emergency pull-off's shelf into the hillside — see
+    /// As `build`, but cuts the summit car park's shelf and cliff into the hillside — see
     /// `track::bay_shelf_offset`. Only the terrain wants this; the road is already flat.
     pub fn build_shelved(&mut self, track: &Track, stations: &[Station]) {
         self.build_shaped(track, stations, None, true)
@@ -176,7 +176,7 @@ impl<const V: usize> Ribbon<V> {
     }
 
     /// As `build`, but collapses the ribbon to zero width across `gap` (a range of *centreline*
-    /// node indices). The guard rail uses this to leave the emergency pull-off open.
+    /// node indices). The guard rail uses this to leave the car park open.
     pub fn build_gapped(
         &mut self,
         track: &Track,

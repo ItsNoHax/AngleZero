@@ -283,7 +283,7 @@ pub fn heading(track: &Track, s: f32) -> (f32, f32) {
 
 /// Where the traffic cones stand, as (s, u): a handful of spots rather than a cone every few
 /// metres. Each spot has a reason to be there — shoulder works round a drain, a rock fall on the
-/// inside of a bend, the entrance to the lay-by — and all of them keep to the shoulders, so none
+/// inside of a bend — and all of them keep to the shoulders, so none
 /// stands in a lane the car is driving through.
 pub fn cones(track: &Track, paint: &Paint, mut each: impl FnMut(f32, f32)) {
     let len = track.length;

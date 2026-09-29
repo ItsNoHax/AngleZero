@@ -352,7 +352,7 @@ fn start(index: usize, show: bool) -> Result<bool, LoadError> {
 
         // The first chunk is read here rather than left to the next frame, and that one frame is
         // the whole difference between a car that is replaced by its own shadow and a car that
-        // blinks out of the lay-by for a sixtieth of a second on its way to being one. The
+        // blinks out of the car park for a sixtieth of a second on its way to being one. The
         // silhouette lives at the front of the file, so this read is what puts it in memory.
         Ok(read(CHUNK_BYTES))
     }

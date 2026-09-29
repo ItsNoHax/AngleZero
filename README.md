@@ -6,6 +6,10 @@ A night-time downhill drift game for the Sony PSP, written in Rust.
   <img src="docs/screenshot.png" width="880"
        alt="The S15 sideways through a left-hander on Sekira Pass at night">
 </p>
+<p align="center">
+  <img src="docs/title.png" width="880"
+       alt="The title screen: the S15 parked in the summit car park, the first hairpin below on the left and the city on the right">
+</p>
 
 ## Install
 

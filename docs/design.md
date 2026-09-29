@@ -7,8 +7,12 @@ The intent behind the game. Where this and the code disagree, the code is author
 One car, one road, one run. Start at the top of a mountain pass at night and drive to the bottom.
 No opponents, no traffic, nothing to collect.
 
-**Sekira Pass** is roughly 3.5 km of switchbacks with ~170 m of descent and around ten hairpins.
+**Sekira Pass** is roughly 3.5 km of switchbacks with ~190 m of descent and around ten hairpins.
 It is generated at boot from a list of turns, so it costs no storage and is identical every run.
+
+The run starts at the summit, beside a car park looking out over a city in the basin below. The
+title screen parks the car there, nose to the rail, and holds one shot from above and behind it:
+the first hairpin on the left, 28 m down the steep drop off the summit, and the city on the right.
 
 ## Rules
 
@@ -40,8 +44,9 @@ a pixel is either drawn only up close (rail posts) or snapped to whole pixels (s
 lights). Cars are textured models compiled offline from third-party sources (see
 [Cars](cars.md)).
 
-Beyond the road: three rings of moonlit ridgeline, and below them the lights of two towns and
-the roads between, under a haze and a band of mist. Hard bends are cut into the hillside on
+Beyond the road: three rings of moonlit ridgeline, and below them a city, a town and the roads
+between, under a haze and a band of mist. The city is a street grid of lights round a downtown
+of towers with red beacons, a lattice broadcast tower, two elevated expressways and a railway. Hard bends are cut into the hillside on
 their inside and marked with chevrons on their outside; the rail carries reflectors. All three
 answer the headlights. On the title screen, Up or Down wets the road, which puts each lamp's
 reflection in the tarmac. It changes nothing about the handling.

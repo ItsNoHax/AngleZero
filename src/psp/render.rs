@@ -325,9 +325,9 @@ static mut PROP_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
 /// Additive light pools and lamp glows. Kept in their own chunked buffer
 /// because they need a separate blended, depth-write-off pass after the opaque world.
 ///
-/// The chunk holding the pull-off is the one that sets this. Its roadside lamps come first, and
-/// the pull-off's pools, cut into bands so the title camera can orbit inside them, need room
-/// after them; at 576 they no longer fit and the whole pull-off goes dark.
+/// The chunk holding the car park is the one that sets this. Its roadside lamps come first, and
+/// the car park's pools, cut into bands so a camera inside them never loses a slice, need room
+/// after them; at 576 they no longer fit and the car park goes dark.
 const GLOWS_PER_CHUNK: usize = 640;
 const PROP_GLOW_VERTS: usize = GLOWS_PER_CHUNK * mesh::CHUNK_COUNT;
 static mut PROP_GLOW_MESH: psp::Align16<[Vertex; PROP_GLOW_VERTS]> =
@@ -533,7 +533,6 @@ unsafe fn build_props(track: &Track) {
             }
         }
 
-        // --- the emergency pull-off's furniture ---
         // Cones, in the few spots `roadpaint::cones` puts them.
         let (s_lo, s_hi) = (track.nodes[first_node].s, track.nodes[last_node].s);
         angle_zero::roadpaint::cones(track, &paint, |cs, cu| {
@@ -669,15 +668,13 @@ fn build_finish(track: &Track, out: &mut [Vertex]) -> usize {
     w
 }
 
-/// The viewpoint — the lay-by the title screen looks at.
+/// The summit car park, where the title screen parks the car.
 ///
-/// A widened, paved shoulder rather than a gravel pad dropped onto the hillside: the surface is
-/// the same asphalt as the road and runs straight out of it, and a low stone parapet follows the
-/// outer edge. The parapet is the point of the thing. The hillside has to be cut back to make
-/// level ground here, and a raw cut looks like a mistake; a wall along it looks like a road
-/// engineer put it there, which is what a mountain lay-by actually has.
+/// A widened, paved shoulder rather than a pad dropped onto the hillside: the surface is the same
+/// asphalt as the road and runs straight out of it, out to a guard rail along a 45° parapet that
+/// faces down the valley toward the city. Past it the hillside is a cliff (`track::carpark_ground`).
 ///
-/// A lit vending machine does the rest of the work — it is the one warm light for a hundred
+/// A lit vending machine does the rest of the work — it is the one cold light for a hundred
 /// metres, it says somebody comes up here, and it costs two boxes.
 fn build_carpark_props(track: &Track, out: &mut [Vertex]) -> usize {
     use angle_zero::track::{
@@ -1572,7 +1569,7 @@ pub fn draw_car(vehicle: &Vehicle, track: &Track) {
 
     // A car that is still being read stands as its own shadow. This is the only moment the game
     // draws something that is not the car — and it is drawn instead of the last one rather than
-    // beside it, because two cars in the same lay-by is not a thing that happens.
+    // beside it, because two cars in the same bay is not a thing that happens.
     if super::car::is_loading() {
         if let Some(sil) = super::car::loading_silhouette() {
             unsafe { draw_silhouette(&sil, [st.x, st.y, st.z], st.yaw, pitch, roll) };
@@ -2098,7 +2095,7 @@ unsafe fn push_ground_glow(
     }
 }
 
-/// A ground pool laid on the pull-off's paving rather than on a horizontal plane.
+/// A ground pool laid on the car park's paving rather than on a horizontal plane.
 ///
 /// [`push_ground_glow`] puts every vertex at one height, which is right on the flat but wrong here:
 /// the pass falls 7.4 cm per metre, so a 12 m disc pinned to a single node is buried nearly a metre
@@ -2106,7 +2103,7 @@ unsafe fn push_ground_glow(
 /// the paving the depth comparison is marginal, and the crossing line crawls and shimmers as the
 /// camera orbits — the flicker on the tarmac.
 ///
-/// Laying it out in the pull-off's own `(along, lateral)` frame fixes both halves of that at once:
+/// Laying it out in the car park's own `(along, lateral)` frame fixes both halves of that at once:
 /// every vertex takes its height from the node it actually stands above, exactly as the paving
 /// does, and the disc follows the road's curve instead of running straight off it.
 ///
@@ -2153,7 +2150,7 @@ unsafe fn push_bay_pool(
     }
 }
 
-/// Around the pull-off's pools. More than a roadside pool's eight, so the outer bands of the big
+/// Around the car park's pools. More than a roadside pool's eight, so the outer bands of the big
 /// one are no longer than its inner ones are wide.
 const BAY_POOL_SEGMENTS: usize = 12;
 
@@ -2419,7 +2416,7 @@ pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
         for (car, pose) in lit_cars(vehicle, track) {
             let metres = eye_distance(&pose);
             // How far the road rises or falls between the car and each station, rather than how
-            // high it is. The two are the same on the road itself and are not in the pull-off,
+            // high it is. The two are the same on the road itself and are not in the car park,
             // where the car stands on paving laid over the centreline's own shelf — a beam taking
             // absolute heights there would be laid a foot underground. A relative one starts at
             // whatever the car is standing on and follows the slope from there, which is all a

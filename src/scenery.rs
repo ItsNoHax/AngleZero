@@ -451,7 +451,7 @@ fn clear_of_tarmac(track: &Track, p: Vec3) -> bool {
 }
 
 /// Fills `out` with tree sites in node order, and returns how many. `skip(node, side)` excludes
-/// ground the caller has other plans for (the lay-by).
+/// ground the caller has other plans for (the car park).
 ///
 /// `ground(node, lateral)` is the height of anything built over the hillside there (a cut bank),
 /// which a tree stands on instead.
@@ -600,7 +600,7 @@ pub fn apexes(track: &Track, out: &mut [u32]) -> usize {
 }
 
 /// Fills `out` with every sign on the pass and returns how many. `rail_gap(node, side)` is true
-/// where there is no rail (the lay-by).
+/// where there is no rail (beside the car park).
 pub fn road_signs(track: &Track, out: &mut [Sign], rail_gap: impl Fn(usize, f32) -> bool) -> usize {
     use crate::track::{node_at_arclength, RAIL_LIMIT};
     let mut w = 0usize;
@@ -773,7 +773,7 @@ fn bank_fits(track: &Track, node: usize, side: f32) -> bool {
 }
 
 /// The cut banks on the pass: one around each apex that needs braking for, on the inside, trimmed to
-/// where the ground is clear of the road's other legs. `skip(node, side)` excludes the lay-by.
+/// where the ground is clear of the road's other legs. `skip(node, side)` excludes the car park.
 pub fn cut_banks(track: &Track, out: &mut [BankSpan], skip: impl Fn(usize, f32) -> bool) -> usize {
     let mut apex = [0u32; 64];
     let count = apexes(track, &mut apex);
