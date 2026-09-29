@@ -151,3 +151,20 @@ fn text_and_bars_do_not_overlap() {
         }
     });
 }
+
+#[test]
+fn cones_are_few_and_on_the_shoulders() {
+    use angle_zero::roadpaint::{cones, SHOULDER_IN};
+    let t = track();
+    let p = Paint::new(&t);
+    let mut all = Vec::new();
+    cones(&t, &p, |s, u| all.push((s, u)));
+    assert!(all.len() >= 8 && all.len() <= 25, "{} cones", all.len());
+    for &(s, u) in &all {
+        assert!(u.abs() >= SHOULDER_IN && u.abs() <= TARMAC_HALF_WIDTH + 0.6, "cone in a lane at {s} {u}");
+        assert!(s > 0.0 && s < t.length);
+    }
+    // In a few spots, not spread along the pass: most cones have another within 5 m.
+    let clustered = all.iter().filter(|a| all.iter().any(|b| b != *a && (a.0 - b.0).abs() < 5.0)).count();
+    assert!(clustered * 10 >= all.len() * 9);
+}

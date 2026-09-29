@@ -357,7 +357,6 @@ const VEND_GLOW: u32 = rgba(0xDC, 0xEA, 0xFF, 0x70);
 const FLOOD_POOL: u32 = rgba(0xDA, 0xE4, 0xF2, 0x4A);
 
 use angle_zero::scenery::LAMP_STRIDE;
-const CONE_STRIDE: usize = 11;
 const FLOODLIGHT_STRIDE: usize = 90;
 /// The design puts a tyre stack every third node of every corner. At 2620 nodes that is thousands
 /// of eight-sided cylinders, so they are thinned out — the wall still reads as continuous.
@@ -371,6 +370,7 @@ const LAMP_POLE: u32 = rgb(0x3A, 0x40, 0x46);
 const LAMP_HEAD: u32 = rgb(0xFF, 0xEC, 0xBE);
 
 unsafe fn build_props(track: &Track) {
+    let paint = angle_zero::roadpaint::Paint::new(track);
     let verts = core::slice::from_raw_parts_mut(&raw mut PROP_MESH as *mut Vertex, PROP_VERTS);
     let glows =
         core::slice::from_raw_parts_mut(&raw mut PROP_GLOW_MESH as *mut Vertex, PROP_GLOW_VERTS);
@@ -468,26 +468,6 @@ unsafe fn build_props(track: &Track) {
                 }
             }
 
-            // --- cones, alternating sides of the road ---
-            if i % CONE_STRIDE == 0 && w + 18 <= budget {
-                let side = if (i / CONE_STRIDE) % 2 == 0 { -1.0 } else { 1.0 };
-                let lateral = 6.0 * side;
-                let before = w;
-                w += mesh::build_cone(
-                    &mut verts[w..],
-                    6,
-                    0.24,
-                    0.62,
-                    node.p.x + node.nrm.x * lateral,
-                    node.p.y,
-                    node.p.z + node.nrm.z * lateral,
-                    CONE_COLOR,
-                );
-                for v in &verts[before..w] {
-                    note(&(*v), &mut lo, &mut hi);
-                }
-            }
-
             // --- tyre walls on the outside of corners ---
             if i % TYRE_WALL_STRIDE == 0 && node.curv.abs() >= CORNER_CURVATURE {
                 // `curv` is signed by turn direction, so the outside of the corner is the side
@@ -553,6 +533,20 @@ unsafe fn build_props(track: &Track) {
         }
 
         // --- the emergency pull-off's furniture ---
+        // Cones, in the few spots `roadpaint::cones` puts them.
+        let (s_lo, s_hi) = (track.nodes[first_node].s, track.nodes[last_node].s);
+        angle_zero::roadpaint::cones(track, &paint, |cs, cu| {
+            if cs < s_lo || cs >= s_hi || w + 18 > budget {
+                return;
+            }
+            let p = angle_zero::roadpaint::surface(track, cs, cu, -0.02);
+            let before = w;
+            w += mesh::build_cone(&mut verts[w..], 6, 0.24, 0.62, p.x, p.y, p.z, CONE_COLOR);
+            for v in &verts[before..w] {
+                note(&(*v), &mut lo, &mut hi);
+            }
+        });
+
         if first_node <= angle_zero::track::FINISH_NODE
             && angle_zero::track::FINISH_NODE <= last_node
         {

@@ -280,3 +280,40 @@ pub fn heading(track: &Track, s: f32) -> (f32, f32) {
     let n = &track.nodes[node_at_arclength(track, clamp(s, 0.0, track.length))];
     (n.dir.x, n.dir.z)
 }
+
+/// Where the traffic cones stand, as (s, u): a handful of spots rather than a cone every few
+/// metres. Each spot has a reason to be there — shoulder works round a drain, a rock fall on the
+/// inside of a bend, the entrance to the lay-by — and all of them keep to the shoulders, so none
+/// stands in a lane the car is driving through.
+pub fn cones(track: &Track, paint: &Paint, mut each: impl FnMut(f32, f32)) {
+    let len = track.length;
+    let shoulder = SHOULDER_IN + 0.15;
+
+    // Shoulder works on the left, about a quarter of the way down: a line of cones along the edge
+    // line, tapering out to the verge at each end.
+    let works = |each: &mut dyn FnMut(f32, f32), s0: f32, side: f32, n: usize| {
+        each(s0 - 4.0, side * (shoulder + 0.9));
+        each(s0 - 2.0, side * (shoulder + 0.4));
+        for k in 0..n {
+            each(s0 + k as f32 * 2.5, side * shoulder);
+        }
+        let end = s0 + (n - 1) as f32 * 2.5;
+        each(end + 2.0, side * (shoulder + 0.4));
+    };
+    works(&mut each, len * 0.27, -1.0, 4);
+    works(&mut each, len * 0.71, 1.0, 3);
+
+    // A rock fall on the inside of a bend near the middle of the pass: three cones round it.
+    if paint.apex_count > 0 {
+        let (s, outside) = paint.apexes[paint.apex_count / 2];
+        let u = -outside * (shoulder + 0.6);
+        each(s - 2.2, u);
+        each(s + 0.4, u - outside * 0.5);
+        each(s + 2.6, u);
+    }
+
+    // Two at the lay-by's entrance.
+    let bay = track.nodes[crate::track::BAY_FROM].s;
+    each(bay - 3.0, crate::track::BAY_SIDE * (shoulder + 0.6));
+    each(bay - 0.5, crate::track::BAY_SIDE * (shoulder + 1.0));
+}
