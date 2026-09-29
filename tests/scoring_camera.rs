@@ -204,7 +204,7 @@ fn the_chase_camera_settles_behind_the_car() {
     assert!(cam.pos.z < -6.0, "camera sat at z {}", cam.pos.z);
     let dist = hypot(cam.pos.x - car.x, cam.pos.z - car.z);
     assert!(
-        (7.4..=10.7).contains(&dist),
+        (7.4..=8.8).contains(&dist),
         "chase distance was {dist}, expected 7.4 + speed term"
     );
     assert!(cam.pos.y > car.y + 3.0);
@@ -224,11 +224,11 @@ fn the_chase_camera_backs_off_and_widens_as_speed_rises() {
 
     let (slow_d, slow_fov) = settle(5.0);
     let (fast_d, fast_fov) = settle(45.0);
-    assert!(fast_d > slow_d + 2.0, "{slow_d} -> {fast_d}");
-    assert!(fast_fov > slow_fov + 5.0, "{slow_fov} -> {fast_fov}");
+    assert!(fast_d > slow_d + 0.8, "{slow_d} -> {fast_d}");
+    assert!(fast_fov > slow_fov + 3.0, "{slow_fov} -> {fast_fov}");
     // Both terms are capped.
-    assert!(fast_d <= 10.7);
-    assert!(fast_fov <= 72.1);
+    assert!(fast_d <= 8.8);
+    assert!(fast_fov <= 65.1);
 }
 
 #[test]

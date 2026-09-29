@@ -131,10 +131,12 @@ impl Camera {
         };
         self.yaw += wrap_pi(target - self.yaw) * min(1.0, 3.2 * dt);
 
-        let dist = 7.4 + min(3.2, speed * 0.075);
+        // Speed backs the camera off and widens it only a little: enough to feel, never so much that
+        // the car shrinks away at the bottom of the frame.
+        let dist = 7.4 + min(1.3, speed * 0.03);
         let want = Vec3::new(
             car.x - sin(self.yaw) * dist,
-            car.y + 3.3 + min(1.2, speed * 0.02),
+            car.y + 3.3 + min(0.5, speed * 0.012),
             car.z - cos(self.yaw) * dist,
         );
 
@@ -162,7 +164,7 @@ impl Camera {
             car.z + cos(self.yaw) * 9.0,
         );
 
-        let want_fov = RUN_FOV_BASE + min(12.0, speed * 0.28);
+        let want_fov = RUN_FOV_BASE + min(5.0, speed * 0.12);
         self.fov = lerp(self.fov, want_fov, min(1.0, 3.0 * dt));
     }
 }
