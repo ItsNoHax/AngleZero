@@ -1,0 +1,15 @@
+[package]
+name = "anglezero-eboot"
+version = "0.1.0"
+edition = "2021"
+
+# Turns the EBOOT cargo-psp writes into one official firmware will boot. cargo-psp leaves DATA.PSP
+# as a plain module, which only custom firmware and emulators accept; this encrypts it. A host
+# program, run by scripts/release.sh, and never compiled for the console.
+[[bin]]
+name = "anglezero-eboot"
+path = "src/main.rs"
+
+[dependencies]
+# Pinned like rust-psp, so a release is reproducible and cargo fetches it: nothing to install.
+pspbuild = { git = "https://github.com/ItsNoHax/pspbuild", rev = "4fe3c5fd597636be7f42a79ced576daae3982a51" }

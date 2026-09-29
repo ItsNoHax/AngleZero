@@ -13,7 +13,7 @@ A night-time downhill drift game for the Sony PSP, written in Rust.
 
 ## Install
 
-Requires a PSP running custom firmware.
+Runs on any PSP, on official or custom firmware.
 
 1. Download the latest `AngleZero.<version>.zip` from [Releases](https://github.com/ItsNoHax/AngleZero/releases).
 2. Unzip it at the root of the memory stick.
@@ -27,8 +27,12 @@ title screen lists whatever is there.
 ```bash
 cargo psp --release   # target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP
 cargo test            # host-side test suite, no PSP or emulator needed
-scripts/release.sh    # dist/AngleZero.<version>.zip
+scripts/release.sh    # dist/AngleZero.<version>.zip, EBOOT encrypted for official firmware
 ```
+
+The EBOOT that `cargo psp` writes is unencrypted, so it runs only on custom firmware or in PPSSPP.
+`scripts/release.sh` encrypts it with [`pspbuild`](https://github.com/ItsNoHax/pspbuild), a
+workspace dependency that cargo fetches itself, so it also boots on official firmware.
 
 See [Building and running](docs/building.md) for toolchain setup and controls.
 

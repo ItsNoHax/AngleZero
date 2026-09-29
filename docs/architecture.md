@@ -9,6 +9,7 @@ Game logic is target-agnostic and tested on the host. Only a thin shell touches 
 | `src/*.rs` | `no_std` game core: track, vehicle physics, engine and sound synthesis, scoring, camera, screen flow, HUD values, mesh building, lighting, scenery placement, procedural textures, `.azcar` format, car catalogue, load streaming, save format |
 | `src/psp/` | PSP shell: GU setup, renderer, controller, audio, save I/O, car loading, diagnostics. Compiled only for `target_os = "psp"` |
 | `tools/anglezero-asset/` | Host-only car compiler and `azview` renderer. See [Cars](cars.md) |
+| `tools/anglezero-eboot/` | Host-only EBOOT encrypter for official firmware, run by `scripts/release.sh` |
 | `tests/` | Host tests for everything in `src/*.rs` |
 | `scripts/` | Release, car builds, music encoding, glitch hunt, capture retrieval, asset checks |
 | `assets/` | XMB assets, car configs and compiled cars. See [Assets](assets.md) |

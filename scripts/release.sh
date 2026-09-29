@@ -11,6 +11,10 @@
 # EBOOT because they are build artifacts of their own: recompiling one at a
 # different triangle budget replaces a file and does not rebuild the game.
 #
+# The EBOOT is encrypted with the pspbuild library (tools/anglezero-eboot), so
+# it boots on official firmware as well as custom firmware. The one cargo-psp
+# writes is plain and runs only on custom firmware or an emulator.
+#
 # The version comes from Cargo.toml unless one is given:
 #
 #     scripts/release.sh            # version from Cargo.toml
@@ -62,7 +66,12 @@ fi
 
 echo ">> staging"
 mkdir -p "$STAGE/PSP/GAME/${NAME}"
-cp "$PBP" "$STAGE/PSP/GAME/${NAME}/EBOOT.PBP"
+
+# Official firmware refuses a plain module, so encrypt DATA.PSP; the other
+# sections (PARAM.SFO, icon, background, music) are carried over unchanged.
+# The tool decrypts the result back and refuses unless it is the same module.
+echo ">> encrypting the EBOOT for official firmware"
+cargo run --release -q -p anglezero-eboot -- "$PBP" "$STAGE/PSP/GAME/${NAME}/EBOOT.PBP" | sed 's/^/   /'
 
 # The cars. A build without them runs and says so on the title screen, which is
 # not something to ship, so this refuses instead.

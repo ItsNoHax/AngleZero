@@ -30,11 +30,19 @@ Output in `target/mipsel-sony-psp/<profile>/`:
 
 | File | Used by |
 |---|---|
-| `angle-zero.EBOOT.PBP` | PSP, PPSSPP GUI |
+| `angle-zero.EBOOT.PBP` | PSP on custom firmware, PPSSPP GUI |
 | `angle-zero.prx` | `PPSSPPHeadless` |
 
-The workspace also contains the host-only car compiler, `tools/anglezero-asset`. It is not a
-default member, so `cargo psp` never builds it. Use `-p anglezero-asset` or `--workspace`.
+This EBOOT is unencrypted. Official firmware refuses it; the release script's encrypted EBOOT runs
+on both.
+
+The workspace also contains two host-only tools, neither a default member, so `cargo psp` never
+builds them. Use `-p <name>` or `--workspace`.
+
+| Crate | Purpose |
+|---|---|
+| `tools/anglezero-asset` | The car compiler |
+| `tools/anglezero-eboot` | Encrypts an EBOOT for official firmware with the [`pspbuild`](https://github.com/ItsNoHax/pspbuild) library, pinned by git revision |
 
 ### Features
 
@@ -114,8 +122,11 @@ The script:
 2. Runs `cargo test`.
 3. Refuses to continue if the `.prx` contains devtools-only strings (`ms0:/ANGLEZERO/`, render-mode
    labels, diagnostic filenames).
-4. Refuses to continue if `assets/compiled/` has no cars.
-5. Writes `dist/AngleZero.<version>.zip`:
+4. Encrypts the EBOOT's `DATA.PSP` with `anglezero-eboot`, so it boots on official firmware. The
+   tool verifies the result and refuses unless it decrypts back to the same module. The other
+   sections are copied unchanged.
+5. Refuses to continue if `assets/compiled/` has no cars.
+6. Writes `dist/AngleZero.<version>.zip`:
 
 ```
 PSP/GAME/AngleZero/EBOOT.PBP

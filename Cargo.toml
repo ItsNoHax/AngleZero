@@ -3,7 +3,7 @@
 # host program with host dependencies and would not survive being built for `mipsel-sony-psp`.
 # Reach it explicitly: `cargo run -p anglezero-asset`, `cargo test --workspace`.
 [workspace]
-members = [".", "tools/anglezero-asset"]
+members = [".", "tools/anglezero-asset", "tools/anglezero-eboot"]
 default-members = ["."]
 
 [package]
