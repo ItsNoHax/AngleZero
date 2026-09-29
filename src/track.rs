@@ -52,6 +52,28 @@ const PLAN: [(f32, u16); 34] = [
 /// Horizontal distance covered by one turtle step.
 const STEP: f32 = 12.0;
 
+/// Sections of [`PLAN`] that fall at a fixed rate instead of by their curvature, as
+/// `(section, metres dropped per step)`.
+///
+/// The first 324 m fall at 12.5 %, so the course drops off the summit where the car park is, and
+/// the first hairpin lies about 30 m below it. The title camera looks down on that hairpin from the
+/// car park; at the curvature rule's 0.5-0.9 m a step it lay only 14 m down and showed as a line
+/// along the horizon.
+const STEEP: [(usize, f32); 4] = [(0, 1.5), (1, 1.5), (2, 1.5), (3, 1.5)];
+
+/// Metres section `i` falls per turtle step.
+fn section_drop(i: usize, degrees: f32) -> f32 {
+    let mut k = 0;
+    while k < STEEP.len() {
+        if STEEP[k].0 == i {
+            return STEEP[k].1;
+        }
+        k += 1;
+    }
+    // Tight turns descend more shallowly, which keeps hairpins from becoming ski jumps.
+    0.92 - crate::math::min(0.45, crate::math::abs(degrees) * 0.045)
+}
+
 const fn count_control_points() -> usize {
     // Two lead-in points, then one per turtle step. The turtle's own origin is not a control
     // point — the first step has already moved by the time the first one is pushed.
@@ -338,10 +360,9 @@ fn build_control_points() -> [Vec3; CONTROL_POINT_COUNT] {
     let mut heading = PI;
     let mut w = 2;
 
-    for &(degrees, steps) in PLAN.iter() {
+    for (i, &(degrees, steps)) in PLAN.iter().enumerate() {
         let curvature = radians(degrees);
-        // Tight turns descend more shallowly, which keeps hairpins from becoming ski jumps.
-        let drop = 0.92 - crate::math::min(0.45, crate::math::abs(degrees) * 0.045);
+        let drop = section_drop(i, degrees);
         for _ in 0..steps {
             heading += curvature;
             x += sin(heading) * STEP;
