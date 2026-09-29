@@ -2,13 +2,22 @@
 name = "anglezero-eboot"
 version = "0.1.0"
 edition = "2021"
+default-run = "anglezero-eboot"
 
-# Turns the EBOOT cargo-psp writes into one official firmware will boot. cargo-psp leaves DATA.PSP
-# as a plain module, which only custom firmware and emulators accept; this encrypts it. A host
-# program, run by scripts/release.sh, and never compiled for the console.
+# Host programs for what goes into the EBOOT, never compiled for the console.
+#
+# anglezero-eboot turns the EBOOT cargo-psp writes into one official firmware will boot. cargo-psp
+# leaves DATA.PSP as a plain module, which only custom firmware and emulators accept; this
+# encrypts it. Run by scripts/release.sh.
 [[bin]]
 name = "anglezero-eboot"
 path = "src/main.rs"
+
+# anglezero-snd0 encodes the XMB music, assets/SND0.AT3, with a loop point. Run by
+# scripts/encode_music.sh.
+[[bin]]
+name = "anglezero-snd0"
+path = "src/bin/snd0.rs"
 
 [dependencies]
 # Pinned like rust-psp, so a release is reproducible and cargo fetches it: nothing to install.

@@ -10,7 +10,7 @@ assets/
   PIC0.png              XMB info panel, drawn over PIC1
   ICON1.PMF             XMB animated icon (generated, committed)
   ICON1_source.mp4      animated icon source
-  SND0.AT3              XMB music (generated, committed)
+  SND0.AT3              XMB music, looping (generated, committed)
   SND0_source.wav       music source
   configs/*.toml        car configs (committed)
   compiled/*.azcar      compiled cars (committed)
@@ -78,23 +78,35 @@ fade or trim the ends.
 scripts/encode_music.sh
 ```
 
-The script builds [atracdenc](https://github.com/dcherednik/atracdenc) at a pinned revision,
-applies `scripts/patches/atracdenc-psp-bands.patch`, low-passes the source at 15.5 kHz, encodes,
-and verifies every frame.
+The script encodes with [`pspbuild`](https://github.com/ItsNoHax/pspbuild), a workspace
+dependency, through `tools/anglezero-eboot`. It needs nothing installed beyond cargo. It refuses to
+write a file that pspbuild's validator finds anything wrong with, warnings included, or one that
+does not loop.
 
 ### XMB requirements
 
-ffmpeg can decode ATRAC3 but not encode it. Stock atracdenc output decodes on a PC but is silently
-rejected by the XMB. A playable `SND0.AT3` must have:
+ffmpeg can decode ATRAC3 but not encode it. A playable, looping `SND0.AT3` must have:
 
-| Property | Required | Handled by |
-|---|---|---|
-| Container | RIFF/WAVE | `--container riff` |
-| Mode | LP4: 66144 bps, block align 192, joint stereo | `-e atrac3_lp4` (LP2 will not play) |
-| `bands_coded` per frame | 2 (first frame byte `A2`); atracdenc writes 3 (`A3`) | the patch |
-| `fact` chunk | absent (`fmt`, then `data`) | stripped by the script |
+| Property | Required |
+|---|---|
+| Container | RIFF/WAVE: `fmt `, `fact`, `smpl`, `data` |
+| Mode | LP4: 66144 bps, block align 192, joint stereo (LP2 is unproven) |
+| `bands_coded` per frame | 3 bands (first frame byte `A2`); a frame coding four (`A3`) makes the XMB silent |
+| Loop | `fact` = (loop length, 1024) and a `smpl` loop from 1024, forever. Without both, the XMB plays the track once and stops; `smpl` alone plays nothing |
+| Length | at most 55 s |
 
-The script refuses to emit a file unless every frame has `bands_coded=2`.
+pspbuild low-passes the source at 15.5 kHz, since the fourth band, where anything higher would go,
+is never coded. The loop is exactly the source's length, so the source must be a seamless loop.
+Its [AUDIO.md](https://github.com/ItsNoHax/pspbuild/blob/main/docs/AUDIO.md) has the evidence for
+each rule.
+
+Check a file, or the copy inside a built EBOOT:
+
+```bash
+cargo run --release -q -p anglezero-eboot -- target/mipsel-sony-psp/release/angle-zero.EBOOT.PBP /tmp/EBOOT.PBP
+```
+
+Its output includes `VALID: SND0.AT3 ...` and, if anything is off, a `WARNING: SND0.AT3:` line.
 
 ### Debugging playback
 

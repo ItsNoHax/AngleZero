@@ -42,7 +42,7 @@ builds them. Use `-p <name>` or `--workspace`.
 | Crate | Purpose |
 |---|---|
 | `tools/anglezero-asset` | The car compiler |
-| `tools/anglezero-eboot` | Encrypts an EBOOT for official firmware with the [`pspbuild`](https://github.com/ItsNoHax/pspbuild) library, pinned by git revision |
+| `tools/anglezero-eboot` | Encrypts an EBOOT for official firmware, and encodes the looping XMB music, with the [`pspbuild`](https://github.com/ItsNoHax/pspbuild) library, pinned by git revision |
 
 ### Features
 
