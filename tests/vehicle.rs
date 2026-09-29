@@ -819,3 +819,48 @@ fn the_throttle_holds_a_drift_and_lifting_off_ends_it() {
         on.slip_angle
     );
 }
+
+#[test]
+fn the_handbrake_with_counter_steer_switches_a_drift_to_the_other_side() {
+    // Held in place, because a slide at this speed reaches a rail inside a second and the rail is
+    // not what is being tested. Position feeds nothing in the car's dynamics but those queries.
+    let t = track();
+    let mut v = Vehicle::new();
+    v.place_at_node(&t, 300);
+    v.state.vx = 28.0;
+    let (x, z) = (v.state.x, v.state.z);
+    let sideslip = |v: &Vehicle| atan2(v.state.vy, v.state.vx.abs().max(2.2));
+    let pinned = |v: &mut Vehicle, seconds: f32, i: Input| {
+        for _ in 0..(seconds / FIXED_DT) as usize {
+            v.step(&t, i, FIXED_DT);
+            v.state.x = x;
+            v.state.z = z;
+        }
+    };
+    let throttle = Input {
+        throttle: 1.0,
+        ..Input::default()
+    };
+
+    // Into a left-hand slide and held there on the throttle.
+    pinned(&mut v, 0.4, Input { steer_in: 1.0, handbrake: true, ..throttle });
+    pinned(&mut v, 2.1, throttle);
+    let before = sideslip(&v);
+    assert!(before < -0.5, "the car was not sliding left before the switch: {before} rad");
+
+    // A tap of the handbrake with the stick right, the way the car is already counter-steering.
+    let yaw = v.state.yaw;
+    pinned(&mut v, 0.3, Input { steer_in: -1.0, handbrake: true, ..throttle });
+    pinned(&mut v, 2.0, throttle);
+    let after = sideslip(&v);
+    assert!(
+        after > 0.25 && after < 1.2,
+        "the switch left the car at {after} rad of slip, not sliding right"
+    );
+    // The car turned right, not round: a spin would have gone the other way by a full turn.
+    let turned = v.state.yaw - yaw;
+    assert!(
+        turned < 0.0 && turned > -core::f32::consts::PI,
+        "the car turned {turned} rad through the switch"
+    );
+}

@@ -14,6 +14,9 @@
 //! real driver holds it with constant small corrections. The drift assist makes those corrections
 //! only at the edges of a corridor of angles, so inside it the angle is the player's.
 //!
+//! The handbrake with the stick toward the counter-steer, mid-slide, is a switch: the car swings
+//! through straight into a slide the other way. See `SWITCH_TARGET`.
+//!
 //! Signs: `+lat` is to the car's right (see `Vec2::lateral_normal`), `+steer` turns left,
 //! `vx` is forward and `vy` lateral in the body frame.
 
@@ -245,6 +248,25 @@ const ASSIST_GAIN: f32 = 14.0;
 /// Yaw acceleration per rad/s of sideslip change, 1/s. Damps the drift's natural instability.
 const ASSIST_DAMPING: f32 = 2.2;
 
+/// Sideslip a switch swings the car to on the other side, radians (about 26 degrees): inside the
+/// corridor, so the drift assist can take over from it without a jolt.
+///
+/// A switch is the handbrake with the stick toward the counter-steer while already sliding: a
+/// flick from a slide one way into a slide the other. Taken literally that input spins the car,
+/// because what swings a car back through straight is the rear tyres gripping, and the handbrake
+/// takes that grip away. So until the car is past straight the rear keeps its grip, and an assist
+/// drives the angle across. Past straight the handbrake is simply a handbrake again, which is what
+/// kicks the tail out the new way.
+const SWITCH_TARGET: f32 = 0.45;
+/// Yaw acceleration per radian short of the switch's target, 1/s².
+const SWITCH_GAIN: f32 = 16.0;
+/// Yaw acceleration per rad/s of sideslip change during a switch, 1/s.
+const SWITCH_DAMPING: f32 = 3.0;
+/// Stick deflection toward the counter-steer that turns a handbrake into a switch.
+const SWITCH_STEER: f32 = 0.3;
+/// A switch that has not arrived by now is given up on, s.
+const SWITCH_TIMEOUT: f32 = 1.2;
+
 /// Sideslip stability control lets through in grip mode before it starts to correct, radians.
 const ESC_SLIP: f32 = 0.10;
 /// Stability control's yaw acceleration per radian of excess sideslip, 1/s².
@@ -350,6 +372,11 @@ pub struct Vehicle {
     calm_timer: f32,
     /// Last substep's signed sideslip, for its rate of change.
     prev_beta: f32,
+    /// A switch from one side to the other in progress: the sign of the sideslip being swung to,
+    /// or zero when there is none. See `SWITCH_TARGET`.
+    pub switch_to: f32,
+    /// How long the switch has been going, s.
+    switch_timer: f32,
 }
 
 impl Default for Vehicle {
@@ -395,6 +422,8 @@ impl Vehicle {
             tc_cut: 0.0,
             calm_timer: 0.0,
             prev_beta: 0.0,
+            switch_to: 0.0,
+            switch_timer: 0.0,
         }
     }
 
@@ -441,6 +470,8 @@ impl Vehicle {
         self.tc_cut = 0.0;
         self.calm_timer = 0.0;
         self.prev_beta = 0.0;
+        self.switch_to = 0.0;
+        self.switch_timer = 0.0;
     }
 
     /// Parks the car at an arbitrary pose (used for the title screen's car park).
@@ -522,10 +553,6 @@ impl Vehicle {
         let grip = surface * (0.92 + 0.22 * self.grip_assist) * car.grip;
         self.on_road = on_road;
 
-        let cf = 105_000.0 * grip;
-        let cr = 118_000.0 * grip * if input.handbrake { 0.34 } else { 1.0 };
-        let max_ff = 0.5 * car.mass * G * 1.42 * grip;
-        let max_fr = max_ff * if input.handbrake { 0.30 } else { 1.0 };
 
         // --- grip mode or drift mode -----------------------------------------------------
         // Floor the longitudinal speed used for slip so the model does not blow up at rest.
@@ -533,6 +560,34 @@ impl Vehicle {
         let beta = atan2(st.vy, vxs);
         let beta_rate = (beta - self.prev_beta) / dt;
         self.prev_beta = beta;
+        // Counter-steer points the front wheels the way the car is sliding, which is the sign of
+        // `beta`, so the stick agreeing with it is a request to swing the other way.
+        if self.drift_mode
+            && self.switch_to == 0.0
+            && input.handbrake
+            && input.steer_in * signum(beta) > SWITCH_STEER
+            && abs(beta) > DRIFT_SLIP
+            && speed > DRIFT_SPEED
+        {
+            self.switch_to = -signum(beta);
+            self.switch_timer = 0.0;
+        }
+        if self.switch_to != 0.0 {
+            self.switch_timer += dt;
+            let arrived = beta * self.switch_to > SWITCH_TARGET;
+            if arrived || self.switch_timer > SWITCH_TIMEOUT || speed < DRIFT_SPEED * 0.6 {
+                self.switch_to = 0.0;
+            }
+        }
+        // Still on the old side of straight, where the rear's grip is what swings the car across.
+        let swinging_back = self.switch_to != 0.0 && beta * self.switch_to < 0.0;
+        let released = input.handbrake && !swinging_back;
+
+        let cf = 105_000.0 * grip;
+        let cr = 118_000.0 * grip * if released { 0.34 } else { 1.0 };
+        let max_ff = 0.5 * car.mass * G * 1.42 * grip;
+        let max_fr = max_ff * if released { 0.30 } else { 1.0 };
+
         if !self.drift_mode {
             if speed > DRIFT_SPEED && (input.handbrake || abs(beta) > DRIFT_ENTRY_SLIP) {
                 self.drift_mode = true;
@@ -631,7 +686,11 @@ impl Vehicle {
             }
             yaw_aid *= aids;
         }
-        if self.drift_mode && !input.handbrake && speed > DRIFT_SPEED * 0.6 {
+        if self.switch_to != 0.0 {
+            // A switch: drive the angle to the target on the other side, whatever the pedals do.
+            let target = self.switch_to * SWITCH_TARGET;
+            yaw_aid += ((beta - target) * SWITCH_GAIN + beta_rate * SWITCH_DAMPING) * (1.0 - aids);
+        } else if self.drift_mode && !input.handbrake && speed > DRIFT_SPEED * 0.6 {
             // The drift assist: hold the angle inside the corridor, and damp how fast it moves.
             // It only lifts the angle while the throttle is down, so lifting off still ends it.
             let (lo, hi) = DRIFT_CORRIDOR;
