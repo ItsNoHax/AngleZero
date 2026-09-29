@@ -504,6 +504,8 @@ pub enum SignKind {
     Chevron,
     /// A convex mirror on the outside of a blind corner.
     Mirror,
+    /// A raised marker between the double yellow lines.
+    Stud,
 }
 
 #[derive(Clone, Copy, Debug)]

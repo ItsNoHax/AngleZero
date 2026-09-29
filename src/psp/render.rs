@@ -41,10 +41,8 @@ pub const FOG_FAR: f32 = 330.0;
 /// Projection far plane. Lives in the core so the far scenery can be tested against it.
 pub const DRAW_DISTANCE: f32 = angle_zero::scenery::DRAW_DISTANCE;
 
-const ROAD_COLOR: u32 = rgb(0x1A, 0x1C, 0x20);
 const EDGE_COLOR: u32 = rgb(0xA9, 0xA2, 0x93);
 const RAIL_COLOR: u32 = rgb(0x7C, 0x84, 0x8C);
-const DASH_COLOR: u32 = rgb(0x8C, 0x7A, 0x45);
 // The car's palette is not here any more. Its colours are baked per vertex by the asset compiler,
 // out of the source model's own materials, so there is nothing left for the renderer to decide.
 
@@ -102,24 +100,48 @@ const fn tarmac(c: u32) -> u32 {
     rgb((c & 0xff) * k / 100, ((c >> 8) & 0xff) * k / 100, ((c >> 16) & 0xff) * k / 100)
 }
 
-const ROAD_STATIONS: [Station; 5] = [
-    Station::new(-angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(rgb(0x14, 0x16, 0x19))),
-    Station::new(-5.2, 0.02, tarmac(ROAD_COLOR)),
-    Station::new(0.0, 0.03, tarmac(rgb(0x1E, 0x20, 0x25))),
-    Station::new(5.2, 0.02, tarmac(ROAD_COLOR)),
-    Station::new(angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(rgb(0x14, 0x16, 0x19))),
+/// The road across, left to right: a paler paved shoulder out to the edge line, then in each lane
+/// two darker wheel tracks either side of a lighter crown. The heights are the crown, falling 1 cm
+/// from the centre to the lane edges (`roadpaint::surface` lays the paint on the same crown).
+const SHOULDER_OUT: u32 = rgb(0x18, 0x19, 0x1B);
+const SHOULDER: u32 = rgb(0x22, 0x23, 0x25);
+const LANE: u32 = rgb(0x1C, 0x1E, 0x22);
+const TRACK_WEAR: u32 = rgb(0x15, 0x16, 0x19);
+const CROWN: u32 = rgb(0x1F, 0x21, 0x26);
+const ROAD_STATIONS: [Station; 13] = [
+    Station::new(-angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(SHOULDER_OUT)),
+    Station::new(-3.85, 0.0226, tarmac(SHOULDER)),
+    Station::new(-3.8, 0.0227, tarmac(LANE)),
+    Station::new(-2.5, 0.0252, tarmac(TRACK_WEAR)),
+    Station::new(-1.8, 0.0265, tarmac(LANE)),
+    Station::new(-1.1, 0.0279, tarmac(TRACK_WEAR)),
+    Station::new(0.0, 0.03, tarmac(CROWN)),
+    Station::new(1.1, 0.0279, tarmac(TRACK_WEAR)),
+    Station::new(1.8, 0.0265, tarmac(LANE)),
+    Station::new(2.5, 0.0252, tarmac(TRACK_WEAR)),
+    Station::new(3.8, 0.0227, tarmac(LANE)),
+    Station::new(3.85, 0.0226, tarmac(SHOULDER)),
+    Station::new(angle_zero::track::ROAD_SHOULDER, 0.0, tarmac(SHOULDER_OUT)),
 ];
 
 // The two edge lines must be separate ribbons. Built as one four-station ribbon, the quad
 // between the inner stations paints the entire road white.
 const EDGE_LEFT: [Station; 2] = [
-    Station::new(-5.05, 0.05, EDGE_COLOR),
-    Station::new(-4.75, 0.05, EDGE_COLOR),
+    Station::new(-angle_zero::roadpaint::EDGE_OUT, 0.05, EDGE_COLOR),
+    Station::new(-angle_zero::roadpaint::EDGE_IN, 0.05, EDGE_COLOR),
 ];
 const EDGE_RIGHT: [Station; 2] = [
-    Station::new(4.75, 0.05, EDGE_COLOR),
-    Station::new(5.05, 0.05, EDGE_COLOR),
+    Station::new(angle_zero::roadpaint::EDGE_IN, 0.05, EDGE_COLOR),
+    Station::new(angle_zero::roadpaint::EDGE_OUT, 0.05, EDGE_COLOR),
 ];
+
+/// The double solid yellow, built along the whole road and collapsed wherever the centre is
+/// dashed instead.
+const YELLOW: u32 = rgb(0xC8, 0x92, 0x26);
+const YO: f32 = angle_zero::roadpaint::YELLOW_OFFSET;
+const YW: f32 = angle_zero::roadpaint::YELLOW_WIDTH * 0.5;
+const YELLOW_LEFT: [Station; 2] = [Station::new(-YO - YW, 0.05, YELLOW), Station::new(-YO + YW, 0.05, YELLOW)];
+const YELLOW_RIGHT: [Station; 2] = [Station::new(YO - YW, 0.05, YELLOW), Station::new(YO + YW, 0.05, YELLOW)];
 
 // Built on the same line containment stops the car at, so what the player hits and what the player
 // sees cannot drift apart.
@@ -142,7 +164,7 @@ const RAIL_RIGHT: [Station; 4] = [
     Station::new(angle_zero::track::RAIL_LIMIT + 0.03, 0.96, RAIL_COLOR),
 ];
 
-const ROAD_CAP: usize = ribbon_capacity(5);
+const ROAD_CAP: usize = ribbon_capacity(13);
 const TERRAIN_CAP: usize = ribbon_capacity(12);
 const LINE_CAP: usize = ribbon_capacity(2);
 const RAIL_CAP: usize = ribbon_capacity(4);
@@ -151,6 +173,8 @@ static mut TERRAIN_MESH: Ribbon<TERRAIN_CAP> = Ribbon::EMPTY;
 static mut ROAD_MESH: Ribbon<ROAD_CAP> = Ribbon::EMPTY;
 static mut EDGE_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut EDGE_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
+static mut YELLOW_L_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
+static mut YELLOW_R_MESH: Ribbon<LINE_CAP> = Ribbon::EMPTY;
 static mut RAIL_L_MESH: Ribbon<RAIL_CAP> = Ribbon::EMPTY;
 static mut RAIL_R_MESH: Ribbon<RAIL_CAP> = Ribbon::EMPTY;
 
@@ -159,17 +183,6 @@ static mut RAIL_R_MESH: Ribbon<RAIL_CAP> = Ribbon::EMPTY;
 /// see `draw_car`.
 
 /// Centre dashes, bucketed by chunk so they cull with everything else.
-const DASH_STRIDE: usize = 7;
-const DASHES_PER_CHUNK: usize = (mesh::CHUNK_NODES * mesh::RENDER_STRIDE) / DASH_STRIDE + 2;
-const DASH_VERTS: usize = DASHES_PER_CHUNK * 6 * mesh::CHUNK_COUNT;
-static mut DASH_MESH: psp::Align16<[Vertex; DASH_VERTS]> = psp::Align16([Vertex::ZERO; DASH_VERTS]);
-static mut DASH_CHUNKS: [Chunk; mesh::CHUNK_COUNT] = [Chunk {
-    start: 0,
-    count: 0,
-    center: Vec3::ZERO,
-    radius: 0.0,
-}; mesh::CHUNK_COUNT];
-
 const VERTEX_FORMAT: VertexType = VertexType::from_bits_truncate(
     VertexType::COLOR_8888.bits() | VertexType::VERTEX_32BITF.bits() | VertexType::TRANSFORM_3D.bits(),
 );
@@ -259,9 +272,16 @@ pub fn init(track: &Track) {
             let (k, warm) = angle_zero::scenery::hillside_light(track, node, lateral);
             bake(color, k, warm)
         });
-        (*(&raw mut ROAD_MESH)).build(track, &ROAD_STATIONS);
+        // Resurfaced in sections, each weathered to its own shade.
+        (*(&raw mut ROAD_MESH)).build_toned(track, &ROAD_STATIONS, &|node, _, color| {
+            bake(color, angle_zero::roadpaint::tone(track.nodes[node].s), 0.0)
+        });
         (*(&raw mut EDGE_L_MESH)).build(track, &EDGE_LEFT);
         (*(&raw mut EDGE_R_MESH)).build(track, &EDGE_RIGHT);
+        let paint = angle_zero::roadpaint::Paint::new(track);
+        let yellow = |node: usize| paint.yellow_at(track.nodes[node].s);
+        (*(&raw mut YELLOW_L_MESH)).build_masked(track, &YELLOW_LEFT, &yellow);
+        (*(&raw mut YELLOW_R_MESH)).build_masked(track, &YELLOW_RIGHT, &yellow);
 
         // The bay side has no rail across the pull-off, so the player can drive in.
         let bay_gap = Some((BAY_FROM, BAY_TO));
@@ -273,7 +293,7 @@ pub fn init(track: &Track) {
             (*(&raw mut RAIL_R_MESH)).build(track, &RAIL_RIGHT);
         }
 
-        build_dashes(track);
+        super::paint::init(track);
         build_props(track);
         build_starfield();
         super::scenery::init(track, SKY_RADIUS);
@@ -286,86 +306,6 @@ pub fn init(track: &Track) {
 }
 
 /// Centre dashes: flat quads laid along the road, every seventh centreline node.
-unsafe fn build_dashes(track: &Track) {
-    let verts = &raw mut DASH_MESH as *mut Vertex;
-    let mut w = 0usize;
-
-    for c in 0..mesh::CHUNK_COUNT {
-        let start = w;
-        let first_node = c * mesh::CHUNK_NODES * mesh::RENDER_STRIDE;
-        let last_node = core::cmp::min(
-            first_node + mesh::CHUNK_NODES * mesh::RENDER_STRIDE,
-            angle_zero::track::NODE_COUNT - 1,
-        );
-
-        let (mut lo, mut hi) = (
-            Vec3::new(f32::MAX, f32::MAX, f32::MAX),
-            Vec3::new(f32::MIN, f32::MIN, f32::MIN),
-        );
-
-        let mut n = first_node - first_node % DASH_STRIDE;
-        if n < first_node {
-            n += DASH_STRIDE;
-        }
-        while n <= last_node {
-            let node = &track.nodes[n];
-            // 0.16 x 2.6 m, aligned to the road heading.
-            let (fx, fz) = (node.dir.x * 1.3, node.dir.z * 1.3);
-            let (sx, sz) = (node.nrm.x * 0.08, node.nrm.z * 0.08);
-            let y = node.p.y + 0.06;
-            let corner = |a: f32, b: f32| {
-                Vertex::new(
-                    node.p.x + fx * a + sx * b,
-                    y,
-                    node.p.z + fz * a + sz * b,
-                    DASH_COLOR,
-                )
-            };
-            let quad = [
-                corner(-1.0, -1.0),
-                corner(1.0, -1.0),
-                corner(1.0, 1.0),
-                corner(-1.0, -1.0),
-                corner(1.0, 1.0),
-                corner(-1.0, 1.0),
-            ];
-            for v in quad.iter() {
-                *verts.add(w) = *v;
-                w += 1;
-                lo = Vec3::new(
-                    fmin(lo.x, v.x),
-                    fmin(lo.y, v.y),
-                    fmin(lo.z, v.z),
-                );
-                hi = Vec3::new(
-                    fmax(hi.x, v.x),
-                    fmax(hi.y, v.y),
-                    fmax(hi.z, v.z),
-                );
-            }
-            n += DASH_STRIDE;
-        }
-
-        let count = w - start;
-        let center = if count > 0 {
-            lo.add(hi).scale(0.5)
-        } else {
-            Vec3::ZERO
-        };
-        let mut radius = 0.0f32;
-        for i in start..w {
-            let v = *verts.add(i);
-            let d = Vec3::new(v.x, v.y, v.z).sub(center).length();
-            radius = fmax(radius, d);
-        }
-        DASH_CHUNKS[c] = Chunk {
-            start: start as u32,
-            count: count as u32,
-            center,
-            radius,
-        };
-    }
-}
 
 /// Roadside props: street lamps and trees.
 ///
@@ -1469,21 +1409,14 @@ pub fn draw_world(camera: &Camera) {
         draw_ribbon(&*(&raw const EDGE_L_MESH), span);
         draw_ribbon(&*(&raw const EDGE_R_MESH), span);
 
-        let dash_verts = &raw const DASH_MESH as *const Vertex;
-        let dash_chunks = &*(&raw const DASH_CHUNKS);
-        for (index, chunk) in dash_chunks.iter().enumerate() {
-            if index < span.0 || index > span.1 || chunk.count == 0 {
-                continue;
-            }
-            tally(4, chunk.count);
-            sys::sceGumDrawArray(
-                GuPrimitive::Triangles,
-                VERTEX_FORMAT,
-                chunk.count as i32,
-                core::ptr::null(),
-                dash_verts.add(chunk.start as usize) as *const c_void,
-            );
-        }
+        draw_ribbon(&*(&raw const YELLOW_L_MESH), span);
+        draw_ribbon(&*(&raw const YELLOW_R_MESH), span);
+
+        // Dashes, bars, patches, words and other people's tyre marks, all lying on the tarmac.
+        sys::sceGuDisable(GuState::CullFace);
+        let paint_verts = super::paint::draw(|chunk| visible(chunk, eye, forward));
+        tally(4, paint_verts);
+        sys::sceGuEnable(GuState::CullFace);
 
         // The rails are double-sided. A two-station ribbon standing vertically has
         // one winding, so with culling on it disappears when seen from behind — which for the

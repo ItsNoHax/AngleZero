@@ -42,7 +42,7 @@ static mut POSTS: psp::Align16<[Vertex; POST_VERTS]> = psp::Align16([Vertex::ZER
 static mut POST_CHUNK: [Chunk; POST_CHUNKS] =
     [Chunk { start: 0, count: 0, center: Vec3::ZERO, radius: 0.0 }; POST_CHUNKS];
 
-const MAX_SIGNS: usize = 1100;
+const MAX_SIGNS: usize = 1500;
 static mut SIGNS: [Sign; MAX_SIGNS] = [Sign::ZERO; MAX_SIGNS];
 static mut SIGN_COUNT: usize = 0;
 
@@ -167,6 +167,20 @@ fn disc(out: &mut [Vertex], w: &mut usize, c: Vec3, face: (f32, f32), radius: f3
 unsafe fn build_signs(track: &Track) {
     let signs = &mut *(&raw mut SIGNS);
     SIGN_COUNT = scenery::road_signs(track, signs, rail_gap);
+    // The raised markers between the yellow lines answer the headlights the same way.
+    let paint = angle_zero::roadpaint::Paint::new(track);
+    paint.studs(|s| {
+        if SIGN_COUNT < MAX_SIGNS {
+            let (dx, dz) = angle_zero::roadpaint::heading(track, s);
+            signs[SIGN_COUNT] = Sign {
+                kind: SignKind::Stud,
+                at: angle_zero::roadpaint::surface(track, s, 0.0, 0.04),
+                face: (-dx, -dz),
+                node: node_at_arclength(track, s) as u32,
+            };
+            SIGN_COUNT += 1;
+        }
+    });
     let out = &mut (*(&raw mut SIGN_MESH)).0;
     let chunks = &mut *(&raw mut SIGN_CHUNKS);
     let nodes_per_chunk = mesh::CHUNK_NODES * mesh::RENDER_STRIDE;
@@ -183,7 +197,8 @@ unsafe fn build_signs(track: &Track) {
             let ground = n.p.y + scenery::terrain_drop(RAIL_LIMIT + 1.0) - 0.2;
             match sign.kind {
                 // Reflectors have no body worth drawing: at night only their return is visible.
-                SignKind::Reflector => {}
+                // A stud's body is painted with the rest of the road (`paint.rs`).
+                SignKind::Reflector | SignKind::Stud => {}
                 SignKind::Chevron => {
                     let p = |u: f32, y: f32, lift: f32| Vec3::new(at.x + r.0 * u + f.0 * lift, y, at.z + r.1 * u + f.1 * lift);
                     let (top, bottom) = (at.y + 0.3, at.y - 0.3);
@@ -302,11 +317,12 @@ pub unsafe fn draw_reflections(vehicle: &Vehicle, camera: &Camera, track: &Track
     let signs = &all[..SIGN_COUNT];
     // What the lit signs will cost, counted before asking the arena for it: a fixed budget large
     // enough for the worst corner would take most of the arena every frame.
-    const MAX_LIT: usize = 64;
+    const MAX_LIT: usize = 96;
     let verts_for = |k: SignKind| match k {
         SignKind::Reflector => 24,
         SignKind::Chevron => 60,
         SignKind::Mirror => 24,
+        SignKind::Stud => 24,
     };
     let lit_now = |sign: &Sign| {
         let (dx, dz) = (sign.at.x - car.x, sign.at.z - car.z);
@@ -345,6 +361,10 @@ pub unsafe fn draw_reflections(vehicle: &Vehicle, camera: &Camera, track: &Track
             SignKind::Chevron => {
                 chevrons(out, &mut w, track, sign, 0.03, alpha(rgba(0xFF, 0xD2, 0x3C, 0xE0), g));
                 glow(out, &mut w, sign.at, right, 1.3, alpha(rgba(0xFF, 0xC8, 0x40, 0x40), g));
+            }
+            SignKind::Stud => {
+                let radius = 0.12 + d * 0.0065;
+                glow(out, &mut w, sign.at, right, radius, alpha(rgba(0xFF, 0xD8, 0x98, 0xFF), g));
             }
             SignKind::Mirror => {
                 let at = Vec3::new(sign.at.x + sign.face.0 * 0.05, sign.at.y, sign.at.z + sign.face.1 * 0.05);

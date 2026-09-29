@@ -20,6 +20,8 @@ pub mod lights;
 pub mod math;
 pub mod mesh;
 pub mod save;
+pub mod roadglyphs;
+pub mod roadpaint;
 pub mod scenery;
 pub mod scoring;
 pub mod stream;

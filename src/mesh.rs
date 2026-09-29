@@ -172,7 +172,7 @@ impl<const V: usize> Ribbon<V> {
     /// As `build_shelved`, with every vertex's colour passed through `light(node, lateral, color)`
     /// on the way in: how the hillside's lighting is baked.
     pub fn build_shelved_lit(&mut self, track: &Track, stations: &[Station], light: &dyn Fn(usize, f32, u32) -> u32) {
-        self.build_lit(track, stations, None, true, Some(light))
+        self.build_lit(track, stations, None, true, Some(light), None)
     }
 
     /// As `build`, but collapses the ribbon to zero width across `gap` (a range of *centreline*
@@ -193,7 +193,18 @@ impl<const V: usize> Ribbon<V> {
         gap: Option<(usize, usize)>,
         shelf: bool,
     ) {
-        self.build_lit(track, stations, gap, shelf, None)
+        self.build_lit(track, stations, gap, shelf, None, None)
+    }
+
+    /// As `build`, with every vertex's colour passed through `light(node, lateral, color)`.
+    pub fn build_toned(&mut self, track: &Track, stations: &[Station], light: &dyn Fn(usize, f32, u32) -> u32) {
+        self.build_lit(track, stations, None, false, Some(light), None)
+    }
+
+    /// As `build`, but collapsed to zero width wherever `keep(node)` is false: a line that is only
+    /// painted along parts of the road, such as the double yellow through the bends.
+    pub fn build_masked(&mut self, track: &Track, stations: &[Station], keep: &dyn Fn(usize) -> bool) {
+        self.build_lit(track, stations, None, false, None, Some(keep))
     }
 
     fn build_lit(
@@ -203,14 +214,16 @@ impl<const V: usize> Ribbon<V> {
         gap: Option<(usize, usize)>,
         shelf: bool,
         light: Option<&dyn Fn(usize, f32, u32) -> u32>,
+        keep: Option<&dyn Fn(usize) -> bool>,
     ) {
-        let station_vertex = |track: &Track, n: i32, st: &Station, shelf: bool| {
+        let lit_vertex = |track: &Track, n: i32, st: &Station, shelf: bool| {
             let (mut v, index) = station_vertex(track, n, st, shelf);
             if let Some(light) = light {
                 v.color = light(index, st.lateral, v.color);
             }
-            v
+            (v, index)
         };
+        let station_vertex = |track: &Track, n: i32, st: &Station, shelf: bool| lit_vertex(track, n, st, shelf).0;
         let mut w = 0usize;
 
         for c in 0..CHUNK_COUNT {
@@ -242,10 +255,10 @@ impl<const V: usize> Ribbon<V> {
                     w += 1;
                 }
                 for n in first..=last {
-                    let a = station_vertex(track, n, &stations[s], shelf);
+                    let (a, index) = lit_vertex(track, n, &stations[s], shelf);
                     // Inside the gap both corners collapse onto the first station, so every
                     // triangle there has zero area and rasterises nothing.
-                    let b = if in_gap(n, gap) {
+                    let b = if in_gap(n, gap) || keep.is_some_and(|k| !k(index)) {
                         a
                     } else {
                         station_vertex(track, n, &stations[s + 1], shelf)

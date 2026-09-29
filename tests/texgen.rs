@@ -108,3 +108,18 @@ fn pines_stay_inside_their_cells() {
         assert!((x0..x0 + PINE_CELL).any(|x| a[(ATLAS_H - 1) * ATLAS_W + x] > 0));
     }
 }
+
+#[test]
+fn road_text_glyphs_are_all_there() {
+    use angle_zero::texgen::{text_atlas, TEXT_H, TEXT_W};
+    let mut a = [0u8; TEXT_W * TEXT_H];
+    text_atlas(&mut a);
+    for g in 0..angle_zero::roadglyphs::GLYPHS.len() {
+        let painted = (0..TEXT_H)
+            .flat_map(|y| (g * 32..g * 32 + 32).map(move |x| (x, y)))
+            .filter(|&(x, y)| a[y * TEXT_W + x] > 0)
+            .count();
+        assert!(painted > 40, "glyph {g} has {painted} texels");
+    }
+    assert!(a.iter().all(|&i| i < 16));
+}

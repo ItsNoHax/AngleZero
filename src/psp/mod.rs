@@ -16,6 +16,7 @@ pub mod harness;
 #[cfg(feature = "devtools")]
 pub mod trace;
 pub mod hud;
+pub mod paint;
 pub mod render;
 pub mod roadside;
 pub mod scenery;

@@ -271,3 +271,44 @@ pub fn downsample_alpha(src: &[u8], w: usize, h: usize, dst: &mut [u8]) {
         }
     }
 }
+
+// --- road text ----------------------------------------------------------------------------------
+
+/// The road-text atlas: each of `roadglyphs::GLYPHS` in its own 32-texel cell, left to right.
+pub const TEXT_W: usize = 256;
+pub const TEXT_H: usize = 32;
+
+/// Index 0 is bare road; 1..=15 paint, from worn to fresh.
+pub fn text_palette() -> [(u8, u8, u8, u8); 16] {
+    let mut out = [(0u8, 0u8, 0u8, 0u8); 16];
+    for (i, px) in out.iter_mut().enumerate().skip(1) {
+        let t = (i - 1) as f32 / 14.0;
+        let c = lerp(150.0, 255.0, t) as u8;
+        *px = (c, c, (c as f32 * 0.96) as u8, 255);
+    }
+    out
+}
+
+/// Paints the glyphs into the atlas, worn: a little grain everywhere and the odd texel gone
+/// where tyres have taken the paint off.
+pub fn text_atlas(out: &mut [u8; TEXT_W * TEXT_H]) {
+    use crate::roadglyphs::{GLYPHS, GLYPH_SIZE};
+    out.fill(0);
+    for (g, rows) in GLYPHS.iter().enumerate() {
+        for (y, row) in rows.iter().enumerate() {
+            // Thickened by a texel each side: road paint is bolder than the font, and a stroke
+            // four texels wide is under a pixel by the time it is twenty metres off.
+            let bold = row | row << 1 | row >> 1;
+            for x in 0..GLYPH_SIZE {
+                if bold >> x & 1 == 0 {
+                    continue;
+                }
+                let n = (hash((g * 4096 + y * 64 + x) as u32 ^ 0x7E47) >> 8) as f32 / (1u32 << 24) as f32;
+                if n < 0.07 {
+                    continue;
+                }
+                out[y * TEXT_W + g * GLYPH_SIZE + x] = 1 + (10.0 + n * 4.9) as u8;
+            }
+        }
+    }
+}
