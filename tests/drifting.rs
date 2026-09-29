@@ -115,7 +115,9 @@ fn counter_steering_out_of_a_handbrake_stab_sustains_a_scoring_drift() {
 #[test]
 fn holding_full_lock_and_the_handbrake_spins_rather_than_drifts() {
     // The counterpart to the test above, and the reason it exists: this input looks like it
-    // should drift and does not, because speed collapses before the slip angle counts.
+    // should drift and does not. The car swings through the scoring angles on its way round, which
+    // is fast enough now to count for a moment, but it spins and the speed collapses, so it scores
+    // a fraction of what the real technique does.
     let mut track = Box::new(Track::EMPTY);
     Track::generate(&mut track);
     let mut g = Box::new(Game::new());
@@ -123,6 +125,7 @@ fn holding_full_lock_and_the_handbrake_spins_rather_than_drifts() {
 
     let dt = 1.0 / 60.0;
     let mut scoring_frames = 0;
+    let mut worst: f32 = 0.0;
     for i in 0..(90.0 / dt) as usize {
         let secs = i as f32 * dt;
         let b = if secs < 22.0 {
@@ -140,10 +143,12 @@ fn holding_full_lock_and_the_handbrake_spins_rather_than_drifts() {
         if g.vehicle.slip_angle > DRIFT_SLIP_THRESHOLD && sp > 9.0 {
             scoring_frames += 1;
         }
+        worst = worst.max(g.vehicle.slip_angle);
     }
-    assert_eq!(
-        scoring_frames, 0,
-        "pinned lock plus handbrake unexpectedly scored — the drift thresholds may have moved"
+    assert!(worst > 1.4, "the car never spun: the worst slip was {worst} rad");
+    assert!(
+        scoring_frames < 120,
+        "pinned lock plus handbrake scored for {scoring_frames} frames, which is a drift, not a spin"
     );
 }
 

@@ -4,6 +4,16 @@
 //! 1/120 s so behaviour does not change with frame rate. Gravity along the road's pitch is what
 //! actually drives the game: the car accelerates downhill with no throttle at all.
 //!
+//! The car runs in one of two modes. In grip mode, traction control keeps the rear tyres from
+//! spinning and stability control stops the car rotating faster than its grip can explain, the way
+//! a road car's aids do. A handbrake stab, or a slide past `DRIFT_ENTRY_SLIP`, pops it into drift
+//! mode. There both aids are off, so the throttle spins the rear wheels and a spinning tyre has
+//! less sideways grip: the throttle holds the angle, and lifting off lets the car grip up again.
+//!
+//! A drift is unstable by nature. Left alone, the car either spins or snaps back into line, and a
+//! real driver holds it with constant small corrections. The drift assist makes those corrections
+//! only at the edges of a corridor of angles, so inside it the angle is the player's.
+//!
 //! Signs: `+lat` is to the car's right (see `Vec2::lateral_normal`), `+steer` turns left,
 //! `vx` is forward and `vy` lateral in the body frame.
 
@@ -143,7 +153,7 @@ pub struct CarHandling {
     pub front_axle: f32,
     /// Rear axle behind it, m.
     pub rear_axle: f32,
-    /// Drive force at full throttle from rest, N.
+    /// Drive force at full throttle from rest, N, before `POWER` scales it.
     pub engine: f32,
     /// Where that force has tailed off to its floor, m/s. The top speed in all but name.
     pub top_speed: f32,
@@ -200,12 +210,59 @@ impl Default for CarHandling {
 
 const G: f32 = 9.81;
 
+/// Scales every car's authored `engine`. Applied here rather than to the numbers in each car's
+/// config, so the cars keep their power relative to one another and nothing needs reconverting.
+/// At 1.5 the default car does 0–100 km/h in about 4.7 s against 6.7 s at 1.0; below about
+/// 60 km/h it is grip rather than power that limits it, and traction control is what holds it there.
+pub const POWER: f32 = 1.5;
+
 /// Slip angle beyond which the car counts as drifting.
 pub const DRIFT_SLIP: f32 = 0.16;
 /// Minimum speed for a slide to score.
 pub const DRIFT_SPEED: f32 = 9.0;
 /// Beyond this lateral offset a slide stops scoring.
 pub const DRIFT_LAT: f32 = 7.0;
+
+/// Sideslip that pops the car into drift mode without the handbrake, radians (about 11 degrees).
+pub const DRIFT_ENTRY_SLIP: f32 = 0.20;
+/// Sideslip the car must stay under for `DRIFT_EXIT_TIME` before the aids come back.
+pub const DRIFT_EXIT_SLIP: f32 = 0.09;
+/// How long the car has to be straight before a drift counts as over, s. Long enough that the
+/// straight moment in a transition from one corner to the next does not end it.
+pub const DRIFT_EXIT_TIME: f32 = 0.5;
+/// Time for the aids to fade out on entering a drift, and back in on leaving one, s.
+const AIDS_OFF_TIME: f32 = 0.08;
+const AIDS_ON_TIME: f32 = 0.45;
+
+/// The drift assist's corridor, radians of sideslip (about 14 to 43 degrees).
+///
+/// Below it, with the throttle down, the assist lifts the angle back up so the slide does not die
+/// mid-corner. Above it the assist pulls the angle back down so the car does not spin. Inside it
+/// the assist only damps how fast the angle changes.
+pub const DRIFT_CORRIDOR: (f32, f32) = (0.25, 0.75);
+/// Yaw acceleration per radian outside the corridor, 1/s².
+const ASSIST_GAIN: f32 = 14.0;
+/// Yaw acceleration per rad/s of sideslip change, 1/s. Damps the drift's natural instability.
+const ASSIST_DAMPING: f32 = 2.2;
+
+/// Sideslip stability control lets through in grip mode before it starts to correct, radians.
+const ESC_SLIP: f32 = 0.10;
+/// Stability control's yaw acceleration per radian of excess sideslip, 1/s².
+const ESC_SLIP_GAIN: f32 = 5.0;
+/// Stability control's yaw acceleration per rad/s of yaw rate past what grip can explain, 1/s.
+const ESC_YAW_GAIN: f32 = 6.0;
+/// How far past the front tyres' peak slip the steering limiter lets the wheels go.
+const STEER_LIMIT_MARGIN: f32 = 1.6;
+/// How much of the front's direction of travel a released wheel follows in a drift.
+const CASTER: f32 = 0.9;
+/// Share of the rear tyre's grip that traction control leaves for drive.
+const TC_MARGIN: f32 = 0.92;
+/// Drive traction control always lets through, so a car sliding in grip mode is not left dead.
+const TC_FLOOR: f32 = 0.15;
+/// Share of the rear's sideways grip a fully spinning tyre loses.
+const SPIN_GRIP_LOSS: f32 = 0.35;
+/// How far the rear's sideways force falls once the tyre is sliding: kinetic grip below static.
+const SLIDE_FALLOFF: f32 = 0.12;
 
 /// What the driver is asking for this substep.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -278,6 +335,21 @@ pub struct Vehicle {
     pub on_road: bool,
     pub slip_angle: f32,
     pub drifting: bool,
+
+    // --- driver aids ---
+    /// Drift mode: the aids are off and the drift assist is on. See the module docs.
+    pub drift_mode: bool,
+    /// How much of the aids is in effect, 0.0–1.0. Fades rather than switching, so they do not
+    /// snap on at the end of a drift.
+    pub aids: f32,
+    /// How far the rear wheels are spinning up, 0.0–1.0.
+    pub wheelspin: f32,
+    /// Share of the requested drive that traction control took away this substep.
+    pub tc_cut: f32,
+    /// How long the car has been straight while in drift mode.
+    calm_timer: f32,
+    /// Last substep's signed sideslip, for its rate of change.
+    prev_beta: f32,
 }
 
 impl Default for Vehicle {
@@ -317,6 +389,12 @@ impl Vehicle {
             on_road: false,
             slip_angle: 0.0,
             drifting: false,
+            drift_mode: false,
+            aids: 1.0,
+            wheelspin: 0.0,
+            tc_cut: 0.0,
+            calm_timer: 0.0,
+            prev_beta: 0.0,
         }
     }
 
@@ -351,7 +429,18 @@ impl Vehicle {
         self.wall_timer = 0.0;
         self.wrong_timer = 0.0;
         self.hit_cooldown = 0.0;
+        self.reset_aids();
         self.query = self.locator.nearest(track, self.state.x, self.state.z);
+    }
+
+    /// Back to grip mode with the aids fully on, for a car that has just been put somewhere.
+    fn reset_aids(&mut self) {
+        self.drift_mode = false;
+        self.aids = 1.0;
+        self.wheelspin = 0.0;
+        self.tc_cut = 0.0;
+        self.calm_timer = 0.0;
+        self.prev_beta = 0.0;
     }
 
     /// Parks the car at an arbitrary pose (used for the title screen's car park).
@@ -365,6 +454,7 @@ impl Vehicle {
         self.state.yaw_rate = 0.0;
         self.state.steer = 0.0;
         self.locator.reset_to(index);
+        self.reset_aids();
         self.query = self.locator.nearest(track, x, z);
     }
 
@@ -382,6 +472,7 @@ impl Vehicle {
         self.wall_timer = 0.0;
         self.wrong_timer = 0.0;
         self.hit_cooldown = 0.6;
+        self.reset_aids();
         self.query = self.locator.nearest(track, self.state.x, self.state.z);
     }
 
@@ -397,7 +488,29 @@ impl Vehicle {
 
         // --- steering ------------------------------------------------------------------
         let speed = hypot(st.vx, st.vy);
-        let target = input.steer_in * car.steer_max(speed);
+        let lock = car.steer_max(speed);
+        let mut target = input.steer_in * lock;
+        let travel = atan2(st.vy + st.yaw_rate * car.front_axle, crate::math::max(2.2, abs(st.vx)));
+        if st.vx > 0.5 && self.aids > 0.0 && !input.handbrake {
+            // Steering limiter. Past the slip angle where the front tyres peak, more lock turns
+            // the car no harder and only scrubs speed, and a d-pad asks for full lock on every
+            // tap. So in grip mode the wheels stop at the peak, the way a good driver's hands
+            // would. It fades out with the other aids: a drift wants all the lock there is.
+            let peak = 0.5 * car.mass * G * 1.42 / 105_000.0 * STEER_LIMIT_MARGIN;
+            let limited = if target > 0.0 {
+                min(target, crate::math::max(0.0, travel + peak))
+            } else {
+                crate::math::max(target, min(0.0, travel - peak))
+            };
+            target += (limited - target) * self.aids;
+        }
+        if self.drift_mode {
+            // Caster: a front wheel left to itself trails the way the front of the car is moving,
+            // which in a slide is opposite lock. It is how a real car catches a slide when the
+            // driver lets the wheel go, and it is what a d-pad, which only knows full lock or
+            // none, needs to hold one. Whatever the stick does not ask for goes to the caster.
+            target += clamp(travel * CASTER, -lock, lock) * (1.0 - abs(input.steer_in));
+        }
         // Winding on is slower than letting go; the tyres load up either way.
         let rate = if abs(target) > abs(st.steer) { 6.0 } else { 9.0 };
         st.steer += clamp(target - st.steer, -rate * dt, rate * dt);
@@ -414,22 +527,78 @@ impl Vehicle {
         let max_ff = 0.5 * car.mass * G * 1.42 * grip;
         let max_fr = max_ff * if input.handbrake { 0.30 } else { 1.0 };
 
-        // --- tyre forces ---------------------------------------------------------------
+        // --- grip mode or drift mode -----------------------------------------------------
         // Floor the longitudinal speed used for slip so the model does not blow up at rest.
         let vxs = crate::math::max(2.2, abs(st.vx));
+        let beta = atan2(st.vy, vxs);
+        let beta_rate = (beta - self.prev_beta) / dt;
+        self.prev_beta = beta;
+        if !self.drift_mode {
+            if speed > DRIFT_SPEED && (input.handbrake || abs(beta) > DRIFT_ENTRY_SLIP) {
+                self.drift_mode = true;
+                self.calm_timer = 0.0;
+            }
+        } else {
+            let calm = abs(beta) < DRIFT_EXIT_SLIP || speed < DRIFT_SPEED * 0.6;
+            self.calm_timer = if calm { self.calm_timer + dt } else { 0.0 };
+            if self.calm_timer > DRIFT_EXIT_TIME && !input.handbrake {
+                self.drift_mode = false;
+            }
+        }
+        self.aids = if self.drift_mode {
+            crate::math::max(0.0, self.aids - dt / AIDS_OFF_TIME)
+        } else {
+            min(1.0, self.aids + dt / AIDS_ON_TIME)
+        };
+        let aids = self.aids;
+
+        // --- tyre forces ---------------------------------------------------------------
         let dir_sign = if st.vx == 0.0 { 1.0 } else { signum(st.vx) };
         let slip_f = atan2(st.vy + st.yaw_rate * car.front_axle, vxs) - st.steer * dir_sign;
         let slip_r = atan2(st.vy - st.yaw_rate * car.rear_axle, vxs);
         let ff = clamp(-cf * slip_f, -max_ff, max_ff);
-        let fr = clamp(-cr * slip_r, -max_fr, max_fr);
+
+        // Drive goes through the rear tyres, so it shares their grip with cornering: a friction
+        // circle. Engine, tailing off toward ~58 m/s.
+        let mut drive =
+            input.throttle * car.engine * POWER * crate::math::max(0.08, 1.0 - abs(st.vx) / car.top_speed);
+        if input.handbrake {
+            drive *= 0.35;
+        }
+        let lat_demand = cr * abs(slip_r);
+        // Traction control: only as much drive as the circle has room for once cornering has
+        // taken its share. Blended by `aids`, so it is fully off in a drift.
+        let lat_used = min(lat_demand, max_fr * TC_MARGIN);
+        let room = crate::math::sqrt(crate::math::max(
+            0.0,
+            (max_fr * TC_MARGIN) * (max_fr * TC_MARGIN) - lat_used * lat_used,
+        ));
+        let allowed = min(drive, crate::math::max(room, drive * TC_FLOOR));
+        let requested = drive;
+        drive += (allowed - drive) * aids;
+        self.tc_cut = if requested > 0.0 { 1.0 - drive / requested } else { 0.0 };
+        // Asking the rear for more than it has spins the wheels up. The aids never let it.
+        let overdriven = hypot(drive, lat_demand) > max_fr && input.throttle > 0.0;
+        self.wheelspin = if overdriven && aids < 0.5 {
+            min(1.0, self.wheelspin + 5.0 * dt)
+        } else {
+            crate::math::max(0.0, self.wheelspin - 3.0 * dt)
+        };
+        let fx_rear = min(drive, max_fr * 0.95);
+        // What the circle leaves for cornering, and less again for a tyre that is spinning.
+        let lat_cap = crate::math::sqrt(crate::math::max(0.0, max_fr * max_fr - fx_rear * fx_rear))
+            * (1.0 - SPIN_GRIP_LOSS * self.wheelspin);
+        // Past the limit the tyre is sliding, and sliding grip is a little below the peak. That
+        // drop is what lets a slide, once started, keep going.
+        let fr = if lat_demand > lat_cap {
+            let over = min(1.0, (lat_demand / crate::math::max(lat_cap, 1.0) - 1.0) * 0.5);
+            -signum(slip_r) * lat_cap * (1.0 - SLIDE_FALLOFF * over)
+        } else {
+            -cr * slip_r
+        };
 
         // --- longitudinal forces -------------------------------------------------------
-        // Engine, tailing off toward ~58 m/s.
-        let mut fx =
-            input.throttle * car.engine * crate::math::max(0.08, 1.0 - abs(st.vx) / car.top_speed);
-        if input.handbrake {
-            fx *= 0.35;
-        }
+        let mut fx = drive;
         if input.brake {
             // Reverse is a fraction of forward braking, so that holding the brake at a standstill
             // backs the car off a rail rather than launching it.
@@ -444,14 +613,49 @@ impl Vehicle {
         // The downhill pull. This is what makes the game a descent rather than a track day.
         fx += -G * sin(near.node_pitch(track)) * car.mass * 0.85;
 
+        // --- aids and assist -----------------------------------------------------------
+        // Yaw acceleration from the aids, 1/s². Sideslip changes as `beta' = Fy/(m vx) - r`, so
+        // yaw rate in the direction of `beta` straightens the car and against it adds angle.
+        let mut yaw_aid = 0.0;
+        if aids > 0.0 {
+            // Stability control: no faster rotation than grip can explain at this speed, and no
+            // more sideslip than a road car's aids would allow.
+            let r_cap = 1.42 * grip * G / crate::math::max(speed, 6.0) * 1.1;
+            let spin = abs(st.yaw_rate) - r_cap;
+            if spin > 0.0 {
+                yaw_aid -= signum(st.yaw_rate) * spin * ESC_YAW_GAIN;
+            }
+            let slide = abs(beta) - ESC_SLIP;
+            if slide > 0.0 {
+                yaw_aid += signum(beta) * slide * ESC_SLIP_GAIN;
+            }
+            yaw_aid *= aids;
+        }
+        if self.drift_mode && !input.handbrake && speed > DRIFT_SPEED * 0.6 {
+            // The drift assist: hold the angle inside the corridor, and damp how fast it moves.
+            // It only lifts the angle while the throttle is down, so lifting off still ends it.
+            let (lo, hi) = DRIFT_CORRIDOR;
+            let want_more = if abs(beta) < lo && input.throttle > 0.0 {
+                lo - abs(beta)
+            } else if abs(beta) > hi {
+                hi - abs(beta)
+            } else {
+                0.0
+            };
+            let fade = min(1.0, speed / 15.0) * (1.0 - aids);
+            yaw_aid += (-signum(beta) * want_more * ASSIST_GAIN + beta_rate * ASSIST_DAMPING) * fade;
+        }
+
         // --- integrate -----------------------------------------------------------------
         let ax = fx / car.mass - ff * sin(st.steer) / car.mass + st.yaw_rate * st.vy;
         let ay = (ff * cos(st.steer) + fr) / car.mass - st.yaw_rate * st.vx;
         st.vx += ax * dt;
         st.vy += ay * dt;
         st.yaw_rate +=
-            ((car.front_axle * ff * cos(st.steer) - car.rear_axle * fr) / car.inertia) * dt;
-        st.yaw_rate *= 1.0 - 1.6 * dt;
+            ((car.front_axle * ff * cos(st.steer) - car.rear_axle * fr) / car.inertia + yaw_aid)
+                * dt;
+        // Less damping in a drift, where the yaw rate is what holds the angle.
+        st.yaw_rate *= 1.0 - (0.6 + 1.0 * aids) * dt;
 
         st.yaw += st.yaw_rate * dt;
         let (s, c) = (sin(st.yaw), cos(st.yaw));

@@ -741,3 +741,81 @@ fn spun(t: &Track, v: &mut Vehicle, seconds: f32) -> f32 {
     }
     total
 }
+
+// ---------------------------------------------------------------- driver aids
+
+/// A handbrake turn at 28 m/s, which every aid test below starts from.
+fn popped(t: &Track) -> Vehicle {
+    let mut v = at_start(t);
+    v.state.vx = 28.0;
+    run(t, &mut v, 0.4, |_| Input {
+        throttle: 1.0,
+        steer_in: 1.0,
+        handbrake: true,
+        ..Input::default()
+    });
+    v
+}
+
+#[test]
+fn traction_control_keeps_the_rear_from_spinning_in_grip_mode() {
+    let t = track();
+    let mut v = at_start(&t);
+    v.state.vx = 22.0;
+    let (mut cut, mut spun) = (0.0f32, false);
+    run(&t, &mut v, 1.0, |v| {
+        cut = cut.max(v.tc_cut);
+        spun |= !v.drift_mode && v.wheelspin > 0.0;
+        Input {
+            throttle: 1.0,
+            steer_in: 0.6,
+            ..Input::default()
+        }
+    });
+    assert!(!spun, "the rear spun up with traction control on");
+    assert!(cut > 0.0, "cornering on full throttle never needed traction control");
+}
+
+#[test]
+fn the_handbrake_switches_the_aids_off() {
+    let t = track();
+    let v = popped(&t);
+    assert!(v.drift_mode);
+    assert_eq!(v.aids, 0.0);
+}
+
+#[test]
+fn the_aids_come_back_once_the_car_is_straight() {
+    let t = track();
+    let mut v = popped(&t);
+    run(&t, &mut v, 2.5, |_| Input::default());
+    assert!(!v.drift_mode, "still in drift mode at {} rad of slip", v.slip_angle);
+    assert_eq!(v.aids, 1.0);
+}
+
+#[test]
+fn the_throttle_holds_a_drift_and_lifting_off_ends_it() {
+    let t = track();
+    let mut on = popped(&t);
+    let mut off = popped(&t);
+    // Hands off the wheel, so the caster is doing the counter-steering in both. Short, because
+    // this is the straight out of the start and a slide there reaches the rail inside a second.
+    run(&t, &mut on, 0.6, |_| Input {
+        throttle: 1.0,
+        ..Input::default()
+    });
+    run(&t, &mut off, 0.6, |_| Input::default());
+    assert_eq!(on.wall_timer, 0.0, "the slide reached the rail, so the comparison says nothing");
+    assert!(on.wheelspin > 0.5, "full throttle in a drift did not spin the rear");
+    assert!(
+        on.slip_angle > 0.25 && on.slip_angle < 0.87,
+        "throttle held the slide at {} rad",
+        on.slip_angle
+    );
+    assert!(
+        off.slip_angle < on.slip_angle * 0.7,
+        "lifting off left {} rad of slip against {} on the throttle",
+        off.slip_angle,
+        on.slip_angle
+    );
+}
