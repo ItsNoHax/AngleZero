@@ -293,29 +293,6 @@ fn the_run_clock_formats_as_minutes_seconds_hundredths() {
 }
 
 #[test]
-fn the_gearbox_has_six_gears_and_a_reverse() {
-    assert_eq!(hud::gear(0.0), hud::Gear::Forward(1));
-    assert_eq!(hud::gear(9.0), hud::Gear::Forward(1));
-    assert_eq!(hud::gear(9.6), hud::Gear::Forward(2));
-    assert_eq!(hud::gear(100.0), hud::Gear::Forward(6));
-    assert_eq!(hud::gear(-2.0), hud::Gear::Reverse);
-    // Just rolling back is not reverse yet.
-    assert_eq!(hud::gear(-0.3), hud::Gear::Forward(1));
-}
-
-#[test]
-fn the_rev_counter_sweeps_within_each_gear_and_stays_in_range() {
-    let mut v = 0.0;
-    while v < 80.0 {
-        let r = hud::rpm(v, 1.0);
-        assert!((0.0..=1.0).contains(&r), "rpm {r} at {v} m/s");
-        v += 0.13;
-    }
-    // Throttle lifts the needle.
-    assert!(hud::rpm(20.0, 1.0) > hud::rpm(20.0, 0.0));
-}
-
-#[test]
 fn the_rev_bar_changes_colour_at_the_documented_thresholds() {
     assert_eq!(hud::rev_zone(0.5), hud::RevZone::Green);
     assert_eq!(hud::rev_zone(0.8), hud::RevZone::Amber);

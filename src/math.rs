@@ -17,6 +17,11 @@ pub fn cos(x: f32) -> f32 {
 }
 
 #[inline]
+pub fn exp(x: f32) -> f32 {
+    libm::expf(x)
+}
+
+#[inline]
 pub fn tan(x: f32) -> f32 {
     libm::tanf(x)
 }

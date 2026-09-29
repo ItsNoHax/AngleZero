@@ -15,6 +15,7 @@ pub mod camera;
 pub mod catalogue;
 pub mod city;
 pub mod effects;
+pub mod engine;
 pub mod game;
 pub mod hud;
 pub mod lights;

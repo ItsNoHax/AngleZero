@@ -51,6 +51,17 @@ their inside and marked with chevrons on their outside; the rail carries reflect
 answer the headlights. On the title screen, Up or Down wets the road, which puts each lamp's
 reflection in the tarmac. It changes nothing about the handling.
 
+## Sound
+
+A turbocharged four heard from the chase camera, not an oscillator. Every sound is synthesised
+on the console as it plays; nothing is sampled. The engine is a train of cylinder firings rung
+through exhaust resonances, with a slight unevenness between cylinders that burbles at idle. A
+six-speed gearbox that exists only for the sound and the rev counter makes the note climb
+through each gear and drop at every shift. It changes down under braking and flares when the
+rear wheels spin in a drift. The low revs are kept below the top end, so the sound builds
+rather than booms. Over it sit a faint turbo whistle and tyre squeal: a narrow tone that
+wanders, not hiss. Road rumble and wind rise with speed, and a rail hit makes a thud.
+
 ## Constraints
 
 - **333 MHz CPU, fixed-function GPU.** World lighting is baked into vertices at boot.

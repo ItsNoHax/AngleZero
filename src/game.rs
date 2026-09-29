@@ -6,6 +6,7 @@
 
 use crate::camera::Camera;
 use crate::effects::Effects;
+use crate::engine::Engine;
 use crate::math::{clamp, min};
 use crate::save::Record;
 use crate::scoring::Scoring;
@@ -125,6 +126,10 @@ pub struct Game {
     last_throttle: f32,
     /// Whether the brake or handbrake was applied, which the tail lamps read.
     last_braking: bool,
+    /// Whether the brake pedal alone was applied, which the gearbox changes down for.
+    last_brake_pedal: bool,
+    /// Revs, gear and boost, for the sound and the rev counter.
+    pub engine: Engine,
     /// Counts guard-rail impacts. The shell watches it to fire the thud once per hit.
     impacts: u32,
 
@@ -167,6 +172,8 @@ impl Game {
             toast_timer: 0.0,
             last_throttle: 0.0,
             last_braking: false,
+            last_brake_pedal: false,
+            engine: Engine::new(),
             impacts: 0,
             prev: Buttons {
                 cross: false,
@@ -367,6 +374,17 @@ impl Game {
             }
         }
 
+        // The engine carries on ticking over everywhere but the pause, where nothing moves. Off the
+        // road it has no throttle: the car is parked or rolling to a stop.
+        if self.phase != Phase::Paused {
+            let st = &self.vehicle.state;
+            let running = self.phase == Phase::Run;
+            let (throttle, brake) =
+                if running { (self.last_throttle, self.last_brake_pedal) } else { (0.0, false) };
+            let slip = if running && self.vehicle.drifting { self.vehicle.slip_angle } else { 0.0 };
+            self.engine.update(st.vx, throttle, brake, slip, frame_dt);
+        }
+
         // A toast holds its place while the game is paused rather than fading out behind the menu.
         if self.phase != Phase::Paused && self.toast_timer > 0.0 {
             self.toast_timer -= frame_dt;
@@ -381,6 +399,7 @@ impl Game {
         let input = Self::drive_input(&buttons);
         self.last_throttle = input.throttle;
         self.last_braking = input.brake || input.handbrake;
+        self.last_brake_pedal = input.brake;
         self.accumulator += frame_dt;
 
         let mut guard = 0;

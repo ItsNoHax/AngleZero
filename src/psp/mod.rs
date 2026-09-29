@@ -361,10 +361,8 @@ pub fn psp_main() {
 
             audio::set_impact_count(game.impact_count());
             audio::set_params(angle_zero::audio::params_for(
-                game.vehicle.state.vx,
-                angle_zero::hud::rpm(game.vehicle.state.vx, game.throttle_hint()),
-                game.throttle_hint(),
-                game.phase == Phase::Run,
+                &game.engine,
+                angle_zero::math::hypot(game.vehicle.state.vx, game.vehicle.state.vy),
                 game.vehicle.drifting,
                 game.vehicle.slip_angle,
             ));

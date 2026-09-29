@@ -601,7 +601,7 @@ fn draw_run(game: &Game, track: &Track) {
     text::draw_shadowed(d, 380.0, 224.0, 2.5, TEXT);
     text::draw_shadowed(b"KM/H", 380.0, 246.0, 1.0, DIM);
 
-    let gear_label: [u8; 1] = match core_hud::gear(st.vx) {
+    let gear_label: [u8; 1] = match game.engine.gear() {
         Gear::Reverse => [b'R'],
         Gear::Forward(g) => [b'0' + g],
     };
@@ -612,7 +612,7 @@ fn draw_run(game: &Game, track: &Track) {
     text::draw_shadowed(&gear_label, 451.0, 226.0, 1.6, AMBER);
 
     // Rev bar, 96 x 4 px.
-    let rpm = core_hud::rpm(st.vx, game.throttle_hint());
+    let rpm = game.engine.rev_fraction();
     let zone = match core_hud::rev_zone(rpm) {
         RevZone::Green => GREEN,
         RevZone::Amber => AMBER,

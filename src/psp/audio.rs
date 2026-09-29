@@ -11,15 +11,10 @@ use psp::sys::{self, AudioFormat, ThreadAttributes};
 
 /// Written by the game thread each frame, read by the audio thread each buffer.
 ///
-/// Deliberately unsynchronised. These are four independent `f32`s describing a continuous
+/// Deliberately unsynchronised. These are independent `f32`s describing a continuous
 /// signal; the worst a torn read can do is use one buffer's worth of slightly stale pitch, which
 /// is inaudible. A lock here would risk stalling the audio thread, which is audible.
-static mut PARAMS: Params = Params {
-    engine_freq: 52.0,
-    engine_gain: 0.012,
-    cutoff: 700.0,
-    squeal_gain: 0.0,
-};
+static mut PARAMS: Params = Params::IDLE;
 
 static mut SYNTH: Synth = Synth::new();
 static mut BUFFER: psp::Align16<[i16; FRAMES_PER_BUFFER * 2]> =
