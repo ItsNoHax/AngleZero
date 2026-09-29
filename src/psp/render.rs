@@ -1207,7 +1207,24 @@ pub fn set_camera(camera: &Camera) {
 /// 93k a frame against 18k — for geometry nobody can see. Not worth it. The fault this was
 /// briefly suspected of causing turned out to be the ribbon simply ending; see `mesh::APRON_NODES`.
 fn visible(chunk: &Chunk, eye: Vec3, forward: Vec3) -> bool {
-    mesh::chunk_visible(chunk, eye, forward, FOG_FAR)
+    mesh::chunk_visible(chunk, eye, forward, unsafe { FOG_REACH })
+}
+
+/// How far the fog lets the world be seen this frame, and so how far chunks are drawn out to.
+static mut FOG_REACH: f32 = FOG_FAR;
+
+/// On the title screen the fog is pushed out to this, so the first hairpin, 250-300 m below the car
+/// park, shows in the shot instead of fading into the night. It costs more chunks than the run's
+/// 330 m would, but the title screen has a parked car and nothing else to pay for.
+pub const TITLE_FOG_FAR: f32 = 650.0;
+
+/// Sets the fog for this frame: the title screen's long view, or the run's.
+pub fn set_fog(title: bool) {
+    let far = if title { TITLE_FOG_FAR } else { FOG_FAR };
+    unsafe {
+        FOG_REACH = far;
+        sys::sceGuFog(FOG_NEAR, far, FOG_COLOR);
+    }
 }
 
 /// Per-frame tally of what actually got submitted to the GE.

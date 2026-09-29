@@ -95,7 +95,7 @@ fn past_the_parapet_the_hillside_falls_away_as_a_cliff() {
     let beyond = carpark_ground(&t, mid.0, mid.1 + 15.0, natural);
     assert!(beyond < -15.0, "15 m past the parapet the ground is only {beyond:.1} m down");
     // Well clear of the car park, the hillside is left as it was.
-    assert_eq!(carpark_ground(&t, 120.0, 30.0, natural), natural);
+    assert_eq!(carpark_ground(&t, 260.0, 30.0, natural), natural);
 }
 
 #[test]

@@ -388,6 +388,7 @@ pub fn psp_main() {
             sys::sceGuDisable(GuState::Texture2D);
 
             render::set_camera(&game.camera);
+            render::set_fog(game.phase == Phase::Title);
             render::draw_sky(&game.camera);
             render::draw_world(&game.camera);
             render::draw_car(&game.vehicle, track);

@@ -216,40 +216,54 @@ pub fn carpark_surface(track: &Track, along: f32, lateral: f32) -> Vec3 {
 
 /// How far down the hillside past the parapet falls for each metre out from it.
 pub const CARPARK_CLIFF: f32 = 1.2;
-/// Over how many metres along the road the ground eases back into the natural hillside past each
-/// end of the car park.
+/// Over how many metres along the road the shelf under the paving eases back into the natural
+/// hillside past each end of the car park.
 pub const CARPARK_GROUND_BLEND: f32 = 16.0;
+/// How far down the road past the car park the cliff carries on, and over how many metres it then
+/// eases back into the hillside. The summit is a spur: below the car park the road runs down its
+/// flank, and the ground on the valley side keeps falling away steeply, so from the car park the
+/// first hairpin is in view over it rather than behind a shoulder of hillside.
+pub const CARPARK_CLIFF_RUN: f32 = 90.0;
+pub const CARPARK_CLIFF_BLEND: f32 = 40.0;
 
 /// Height of the ground below the node, `lateral` metres out on the car park's side, given the
 /// natural hillside's height `natural` there.
 ///
 /// Under the paving the hillside is cut to a shelf a quarter of a metre below it, so the paving
 /// always wins the depth test. Past the parapet it drops away as a cliff, steeper than the natural
-/// hillside, so the camera in the car park looks straight down into the valley. Either side of the
-/// car park the ground blends back into the hillside over [`CARPARK_GROUND_BLEND`] metres.
+/// hillside, so the camera in the car park looks straight down into the valley; the cliff carries
+/// on down the road past the car park for [`CARPARK_CLIFF_RUN`] metres. Either side the ground
+/// blends back into the hillside.
 pub fn carpark_ground(track: &Track, along: f32, lateral: f32, natural: f32) -> f32 {
     let (s0, s1) = carpark_span(track);
-    let w = if along < s0 {
-        1.0 - (s0 - along) / CARPARK_GROUND_BLEND
+    let ramp = |d: f32, over: f32| crate::math::clamp(1.0 - d / over, 0.0, 1.0);
+    let shelf_w = if along < s0 {
+        ramp(s0 - along, CARPARK_GROUND_BLEND)
     } else if along > s1 {
-        1.0 - (along - s1) / CARPARK_GROUND_BLEND
+        ramp(along - s1, CARPARK_GROUND_BLEND)
     } else {
         1.0
     };
-    if w <= 0.0 {
+    let cliff_w = if along < s0 {
+        ramp(s0 - along, CARPARK_GROUND_BLEND)
+    } else if along > s1 + CARPARK_CLIFF_RUN {
+        ramp(along - s1 - CARPARK_CLIFF_RUN, CARPARK_CLIFF_BLEND)
+    } else {
+        1.0
+    };
+    if shelf_w <= 0.0 && cliff_w <= 0.0 {
         return natural;
     }
-    // Inside the car park the edge is where the wall stands; past its ends, carry the end wall's
-    // line on so the blend has an edge to fall away from.
-    let edge = crate::math::max(carpark_edge(track, crate::math::clamp(along, s0 + 0.01, s1 - 0.01)), RAIL_LIMIT);
+    // Inside the car park the edge is where the wall stands; past its ends, the rail's line.
+    let edge = if along > s0 && along < s1 { carpark_edge(track, along) } else { RAIL_LIMIT };
     let l = crate::math::abs(lateral);
     let shelf = carpark_fall(l) - 0.25;
-    let cut = if l <= edge + 1.0 {
-        shelf
+    if l <= edge + 1.0 {
+        crate::math::lerp(natural, crate::math::max(shelf, natural), shelf_w)
     } else {
-        crate::math::min(natural, shelf - (l - edge - 1.0) * CARPARK_CLIFF)
-    };
-    crate::math::lerp(natural, cut, crate::math::clamp(w, 0.0, 1.0))
+        let cliff = crate::math::min(natural, shelf - (l - edge - 1.0) * CARPARK_CLIFF);
+        crate::math::lerp(natural, cliff, cliff_w)
+    }
 }
 
 /// The node nearest a given distance along the track, by binary search on cumulative arclength.
