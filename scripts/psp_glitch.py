@@ -104,7 +104,8 @@ def write_script(anglezero, burst, frames, script_lines, node=None, kph=90, mode
     if node is not None:
         # Start the run immediately, then drop the car where it is wanted: there is no reason to sit
         # through the title camera when the point of the run is a corner half a mile down the hill.
-        body = ["0 -", "1 x", f"place 3 {node} {kph}"]
+        # Any --hold lines still apply, so the placed car can be steered from there.
+        body = ["0 -", "1 x", f"place 3 {node} {kph}", *(script_lines or [])]
     head = [f"burst {burst} {frames}"]
     if mode:
         head.append(f"mode {mode}")

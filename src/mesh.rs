@@ -254,14 +254,37 @@ impl<const V: usize> Ribbon<V> {
                     self.verts[w] = next;
                     w += 1;
                 }
+                let pair = |n: i32| {
+                    (station_vertex(track, n, &stations[s], shelf), station_vertex(track, n, &stations[s + 1], shelf))
+                };
+                let gapped = |n: i32| in_gap(n, station_vertex_index(track, n), gap);
                 for n in first..=last {
                     let (a, index) = lit_vertex(track, n, &stations[s], shelf);
-                    // Inside the gap both corners collapse onto the first station, so every
-                    // triangle there has zero area and rasterises nothing.
-                    let b = if in_gap(n, index, gap) || keep.is_some_and(|k| !k(index)) {
-                        a
+                    let (a, b) = if gapped(n) {
+                        // The gap is cut square. Collapsing each pair onto one station instead
+                        // leaves the quad on either side of the gap half drawn, a wedge running
+                        // to a point, and a rail of several strips ends in a fan of spikes. So
+                        // the gap repeats the last pair before it, turns over in one pair
+                        // across the gap, then repeats the first pair after it: every triangle
+                        // in the gap, and on either edge of it, has zero area.
+                        let (mut p, mut q) = (n - 1, n + 1);
+                        while gapped(p) {
+                            p -= 1;
+                        }
+                        while gapped(q) {
+                            q += 1;
+                        }
+                        let (before, after) = (pair(p), pair(q));
+                        if q == n + 1 {
+                            (before.1, after.0)
+                        } else {
+                            before
+                        }
+                    } else if keep.is_some_and(|k| !k(index)) {
+                        // Collapsed onto the first station, so every triangle has zero area.
+                        (a, a)
                     } else {
-                        station_vertex(track, n, &stations[s + 1], shelf)
+                        (a, station_vertex(track, n, &stations[s + 1], shelf))
                     };
                     self.verts[w] = a;
                     self.verts[w + 1] = b;
@@ -297,7 +320,6 @@ impl<const V: usize> Ribbon<V> {
 }
 
 /// Whether a render node falls inside a gap expressed in centreline node indices.
-/// Whether a render node falls inside a gap expressed in centreline node indices.
 ///
 /// Decided by the centreline node the render node was actually placed on (`index`, which
 /// `station_vertex` finds by arclength), not by scaling the render node's number. Render nodes are
@@ -312,6 +334,19 @@ fn in_gap(render_node: i32, index: usize, gap: Option<(usize, usize)>) -> bool {
 }
 
 use crate::track::node_at_arclength;
+
+/// The centreline node a render node is placed on, as `station_vertex` finds it.
+fn station_vertex_index(track: &Track, render_node: i32) -> usize {
+    let spacing = track.length / (RENDER_NODES - 1) as f32;
+    let target = render_node as f32 * spacing;
+    if target < 0.0 {
+        0
+    } else if target > track.length {
+        NODE_COUNT - 1
+    } else {
+        node_at_arclength(track, target)
+    }
+}
 
 /// Position of one station at one render node.
 ///

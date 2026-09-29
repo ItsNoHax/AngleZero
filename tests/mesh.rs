@@ -420,24 +420,39 @@ fn a_wall_segment_follows_the_line_it_is_given() {
 #[test]
 fn a_ribbons_gap_lands_where_its_nodes_are() {
     use angle_zero::mesh::{ribbon_capacity, Ribbon, Station};
-    use angle_zero::track::{bay_open_nodes, Track, BAY_NODE};
+    use angle_zero::track::{bay_open_nodes, Track, BAY_NODE, BAY_HALF_LENGTH};
     const CAP: usize = ribbon_capacity(2);
     let mut t = Box::new(Track::EMPTY);
     Track::generate(&mut t);
-    let gap = bay_open_nodes(&t);
-    let mut r: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
-    r.build_gapped(&t, &[Station::new(7.5, 0.5, 0), Station::new(7.5, 0.9, 0)], Some(gap));
-    // Every collapsed pair (both vertices at the lower station's height) lies within the gap's
-    // stretch of road, and there are some.
-    let (s0, s1) = (t.nodes[gap.0].s, t.nodes[gap.1].s);
+    let rail = [Station::new(7.5, 0.5, 0), Station::new(7.5, 0.9, 0)];
+    let mut whole: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
+    whole.build(&t, &rail);
+    let mut cut: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
+    cut.build_gapped(&t, &rail, Some(bay_open_nodes(&t)));
+    assert_eq!(whole.len, cut.len);
+
+    let area = |v: &[angle_zero::mesh::Vertex]| {
+        let (ax, ay, az) = (v[1].x - v[0].x, v[1].y - v[0].y, v[1].z - v[0].z);
+        let (bx, by, bz) = (v[2].x - v[0].x, v[2].y - v[0].y, v[2].z - v[0].z);
+        let (cx, cy, cz) = (ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx);
+        (cx * cx + cy * cy + cz * cz).sqrt() * 0.5
+    };
     let bay = t.nodes[BAY_NODE].p;
-    let mut collapsed = 0;
-    for pair in r.verts[..r.len].chunks(2) {
-        if pair.len() == 2 && (pair[0].y - pair[1].y).abs() < 1e-4 && pair[0].x == pair[1].x {
-            collapsed += 1;
-            let d = ((pair[0].x - bay.x).powi(2) + (pair[0].z - bay.z).powi(2)).sqrt();
-            assert!(d < (s1 - s0) * 0.5 + 12.0, "gap vertex {d:.1} m from the lay-by");
+    let mut removed = 0;
+    // Pairs start at even offsets, so each quad is the triangles at an even index and the next.
+    for i in (0..cut.len - 3).step_by(2) {
+        let (w0, w1) = (area(&whole.verts[i..i + 3]), area(&whole.verts[i + 1..i + 4]));
+        let (c0, c1) = (area(&cut.verts[i..i + 3]), area(&cut.verts[i + 1..i + 4]));
+        if c0 > 1e-4 || c1 > 1e-4 {
+            // Anything still drawn is the rail as it was, and never half a quad: that is a
+            // wedge, and the rail's end becomes a spike.
+            assert!((c0 - w0).abs() < 1e-3 && (c1 - w1).abs() < 1e-3, "triangle {i} changed shape");
+        } else if w0 > 1e-4 && w1 > 1e-4 {
+            removed += 1;
+            let v = whole.verts[i];
+            let d = ((v.x - bay.x).powi(2) + (v.z - bay.z).powi(2)).sqrt();
+            assert!(d < BAY_HALF_LENGTH + 2.0, "rail removed {d:.1} m from the lay-by");
         }
     }
-    assert!(collapsed > 4);
+    assert!(removed > 4);
 }
