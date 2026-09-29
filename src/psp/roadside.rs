@@ -51,8 +51,12 @@ static mut SIGN_MESH: psp::Align16<[Vertex; SIGN_VERTS]> = psp::Align16([Vertex:
 static mut SIGN_CHUNKS: [Chunk; mesh::CHUNK_COUNT] =
     [Chunk { start: 0, count: 0, center: Vec3::ZERO, radius: 0.0 }; mesh::CHUNK_COUNT];
 
+/// Where the rail is left out for the lay-by, set at `init`: the posts and reflectors go with it.
+static mut OPEN: (usize, usize) = (BAY_FROM, BAY_TO);
+
 fn rail_gap(node: usize, side: f32) -> bool {
-    side * BAY_SIDE > 0.0 && node >= BAY_FROM && node <= BAY_TO
+    let (from, to) = unsafe { OPEN };
+    side * BAY_SIDE > 0.0 && node >= from && node <= to
 }
 
 /// Bounds of a run of vertices as a culling sphere.
@@ -240,6 +244,7 @@ unsafe fn build_signs(track: &Track) {
 }
 
 pub unsafe fn init(track: &Track) {
+    OPEN = angle_zero::track::bay_open_nodes(track);
     build_ring();
     build_posts(track);
     build_signs(track);

@@ -416,3 +416,28 @@ fn a_wall_segment_follows_the_line_it_is_given() {
         assert!(off <= 0.22 + 1e-3, "vertex {off} m off the wall line");
     }
 }
+
+#[test]
+fn a_ribbons_gap_lands_where_its_nodes_are() {
+    use angle_zero::mesh::{ribbon_capacity, Ribbon, Station};
+    use angle_zero::track::{bay_open_nodes, Track, BAY_NODE};
+    const CAP: usize = ribbon_capacity(2);
+    let mut t = Box::new(Track::EMPTY);
+    Track::generate(&mut t);
+    let gap = bay_open_nodes(&t);
+    let mut r: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
+    r.build_gapped(&t, &[Station::new(7.5, 0.5, 0), Station::new(7.5, 0.9, 0)], Some(gap));
+    // Every collapsed pair (both vertices at the lower station's height) lies within the gap's
+    // stretch of road, and there are some.
+    let (s0, s1) = (t.nodes[gap.0].s, t.nodes[gap.1].s);
+    let bay = t.nodes[BAY_NODE].p;
+    let mut collapsed = 0;
+    for pair in r.verts[..r.len].chunks(2) {
+        if pair.len() == 2 && (pair[0].y - pair[1].y).abs() < 1e-4 && pair[0].x == pair[1].x {
+            collapsed += 1;
+            let d = ((pair[0].x - bay.x).powi(2) + (pair[0].z - bay.z).powi(2)).sqrt();
+            assert!(d < (s1 - s0) * 0.5 + 12.0, "gap vertex {d:.1} m from the lay-by");
+        }
+    }
+    assert!(collapsed > 4);
+}

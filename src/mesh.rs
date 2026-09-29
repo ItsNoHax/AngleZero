@@ -258,7 +258,7 @@ impl<const V: usize> Ribbon<V> {
                     let (a, index) = lit_vertex(track, n, &stations[s], shelf);
                     // Inside the gap both corners collapse onto the first station, so every
                     // triangle there has zero area and rasterises nothing.
-                    let b = if in_gap(n, gap) || keep.is_some_and(|k| !k(index)) {
+                    let b = if in_gap(n, index, gap) || keep.is_some_and(|k| !k(index)) {
                         a
                     } else {
                         station_vertex(track, n, &stations[s + 1], shelf)
@@ -297,17 +297,17 @@ impl<const V: usize> Ribbon<V> {
 }
 
 /// Whether a render node falls inside a gap expressed in centreline node indices.
-fn in_gap(render_node: i32, gap: Option<(usize, usize)>) -> bool {
+/// Whether a render node falls inside a gap expressed in centreline node indices.
+///
+/// Decided by the centreline node the render node was actually placed on (`index`, which
+/// `station_vertex` finds by arclength), not by scaling the render node's number. Render nodes are
+/// evenly spaced by distance and centreline nodes are not — they are 2-3 m apart on the lead-in and
+/// 1.34 m after it — so scaling put the lay-by's gap in the rail tens of metres too early, and the
+/// rail was missing along the start of the pass while its posts stood there on their own.
+fn in_gap(render_node: i32, index: usize, gap: Option<(usize, usize)>) -> bool {
     match gap {
         None => false,
-        Some((from, to)) => {
-            if render_node < 0 {
-                return false;
-            }
-            // The gap is given in centreline nodes, so scale it the same way the mesh is spaced.
-            let i = render_node as usize * NODE_COUNT / RENDER_NODES;
-            i >= from && i <= to
-        }
+        Some((from, to)) => render_node >= 0 && index >= from && index <= to,
     }
 }
 
