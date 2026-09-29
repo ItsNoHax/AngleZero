@@ -21,7 +21,11 @@ const CACHE_LINE: usize = 64;
 /// Bit that turns a main-memory address into an uncached view of the same bytes.
 const UNCACHED: u32 = 0x4000_0000;
 
-const SCRATCH_BYTES: usize = 96 * 1024;
+/// Sized for a sustained drift, which is the busiest frame the game draws: every skid mark and smoke
+/// puff live at once, the starfield, the roadside reflections, then the HUD. That peaked at 99,456
+/// bytes including alignment, past the 96 KB this used to be — and because the HUD draws last, it
+/// was the HUD's text that went missing.
+const SCRATCH_BYTES: usize = 128 * 1024;
 
 #[repr(C, align(64))]
 struct CacheAligned<T>(T);

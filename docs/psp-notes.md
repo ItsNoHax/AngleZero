@@ -74,5 +74,6 @@ from the frame arena.
 |---|---|---|
 | Car arena (`src/psp/car.rs`) | 2 slots × 1.25 MB = 2.5 MB | 5 slots = 6.25 MB |
 | Display list | 1 MB | 1 MB |
+| Frame arena (`src/psp/scratch.rs`) | 128 KB | 128 KB |
 
 The PSP has 24 MB of user memory.
