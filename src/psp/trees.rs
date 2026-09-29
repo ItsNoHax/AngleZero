@@ -11,7 +11,7 @@ use angle_zero::math::Vec3;
 use angle_zero::mesh::{self, Chunk};
 use angle_zero::scenery::{self, TreeSite};
 use angle_zero::texgen::{self, pine_palette, ATLAS_H, ATLAS_W, PINE_CELL, PINE_PITCH};
-use angle_zero::track::{Track, BAY_FROM, BAY_SIDE, BAY_TO};
+use angle_zero::track::{Track, CARPARK_SIDE};
 use psp::sys::{
     self, AlphaFunc, ClutPixelFormat, GuPrimitive, GuState, GuTexWrapMode, MipmapLevel,
     TextureColorComponent, TextureEffect, TextureFilter, TextureLevelMode, TextureMapMode,
@@ -86,9 +86,10 @@ unsafe fn build_atlas() {
 
 unsafe fn build_mesh(track: &Track) {
     let sites = &mut *(&raw mut SITES);
-    let bay = |node: usize, side: f32| {
-        side * BAY_SIDE > 0.0 && node + 6 >= BAY_FROM && node <= BAY_TO + 6
-    };
+    // None on the car park's side beside it: they would stand in the paving, or on the cliff
+    // below the parapet right across the title camera's view of the city.
+    let open_to = angle_zero::track::carpark_open_nodes(track).1;
+    let bay = |node: usize, side: f32| side * CARPARK_SIDE > 0.0 && node <= open_to + 10;
     let count = scenery::tree_sites(track, sites, bay, super::banks::surface);
     let verts = &mut (*(&raw mut MESH)).0;
     let chunks = &mut *(&raw mut CHUNKS);

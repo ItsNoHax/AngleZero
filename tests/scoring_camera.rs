@@ -169,23 +169,26 @@ fn car_at(x: f32, z: f32, yaw: f32, vx: f32) -> CarState {
 }
 
 #[test]
-fn the_title_camera_orbits_the_parked_car() {
+fn the_title_camera_holds_its_shot_and_eases_in() {
     let mut cam = Camera::new();
     let car = car_at(10.0, -20.0, 0.5, 0.0);
-
     cam.update_title(&car, 0.0);
-    let start_angle = cam.orbit_angle;
-    // 0.16 rad/s.
-    cam.update_title(&car, 1.0);
-    assert!((cam.orbit_angle - start_angle - 0.16).abs() < 1e-4);
-
-    // It stays a fixed distance out, circling the car.
-    for _ in 0..40 {
+    let start = cam.pos;
+    // Behind the car, above it, and looking down past it.
+    assert!(cam.pos.y > car.y + 4.0);
+    assert!(cam.look_at.y < cam.pos.y);
+    let d0 = hypot(cam.pos.x - car.x, cam.pos.z - car.z);
+    for _ in 0..400 {
         cam.update_title(&car, 0.1);
-        let d = hypot(cam.pos.x - car.x, cam.pos.z - car.z);
-        assert!((d - 10.5).abs() < 1e-3, "orbit radius drifted to {d}");
-        assert!(cam.pos.y > car.y);
     }
+    let d1 = hypot(cam.pos.x - car.x, cam.pos.z - car.z);
+    // It has pushed in a little and then stopped, never swinging round.
+    assert!(d1 < d0 - 1.0 && d1 > d0 - 2.0, "pushed in from {d0:.2} to {d1:.2}");
+    let moved = hypot(cam.pos.x - start.x, cam.pos.z - start.z);
+    assert!(moved < 2.0, "the title camera wandered {moved:.2} m");
+    let settled = cam.pos;
+    cam.update_title(&car, 0.1);
+    assert_eq!(cam.pos.x, settled.x);
 }
 
 #[test]

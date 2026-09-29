@@ -420,7 +420,7 @@ fn a_wall_segment_follows_the_line_it_is_given() {
 #[test]
 fn a_ribbons_gap_lands_where_its_nodes_are() {
     use angle_zero::mesh::{ribbon_capacity, Ribbon, Station};
-    use angle_zero::track::{bay_open_nodes, Track, BAY_NODE, BAY_HALF_LENGTH};
+    use angle_zero::track::{carpark_open_nodes, carpark_span, Track};
     const CAP: usize = ribbon_capacity(2);
     let mut t = Box::new(Track::EMPTY);
     Track::generate(&mut t);
@@ -428,7 +428,7 @@ fn a_ribbons_gap_lands_where_its_nodes_are() {
     let mut whole: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
     whole.build(&t, &rail);
     let mut cut: Box<Ribbon<CAP>> = Box::new(Ribbon::EMPTY);
-    cut.build_gapped(&t, &rail, Some(bay_open_nodes(&t)));
+    cut.build_gapped(&t, &rail, Some(carpark_open_nodes(&t)));
     assert_eq!(whole.len, cut.len);
 
     let area = |v: &[angle_zero::mesh::Vertex]| {
@@ -437,7 +437,8 @@ fn a_ribbons_gap_lands_where_its_nodes_are() {
         let (cx, cy, cz) = (ay * bz - az * by, az * bx - ax * bz, ax * by - ay * bx);
         (cx * cx + cy * cy + cz * cz).sqrt() * 0.5
     };
-    let bay = t.nodes[BAY_NODE].p;
+    let (s0, s1) = carpark_span(&t);
+    let top = t.nodes[0];
     let mut removed = 0;
     // Pairs start at even offsets, so each quad is the triangles at an even index and the next.
     for i in (0..cut.len - 3).step_by(2) {
@@ -449,9 +450,11 @@ fn a_ribbons_gap_lands_where_its_nodes_are() {
             assert!((c0 - w0).abs() < 1e-3 && (c1 - w1).abs() < 1e-3, "triangle {i} changed shape");
         } else if w0 > 1e-4 && w1 > 1e-4 {
             removed += 1;
+            // The road is straight beside the car park, so how far down it a vertex is is its
+            // distance along the first node's direction.
             let v = whole.verts[i];
-            let d = ((v.x - bay.x).powi(2) + (v.z - bay.z).powi(2)).sqrt();
-            assert!(d < BAY_HALF_LENGTH + 2.0, "rail removed {d:.1} m from the lay-by");
+            let along = (v.x - top.p.x) * top.dir.x + (v.z - top.p.z) * top.dir.z;
+            assert!(along > s0 - 0.1 && along < s1 + 0.1, "rail removed {along:.1} m down the road, outside the car park");
         }
     }
     assert!(removed > 4);

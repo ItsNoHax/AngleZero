@@ -9,7 +9,7 @@
 
 use crate::math::{abs, atan2, clamp, cos, hypot, min, sin, signum, wrap_pi, wrap_tau};
 use crate::track::{
-    Locator, Query, Track, BAY_FROM, BAY_SIDE, BAY_TO, RAIL_LIMIT, TARMAC_HALF_WIDTH,
+    Locator, Query, Track, CARPARK_SIDE, RAIL_LIMIT, TARMAC_HALF_WIDTH,
 };
 
 /// Physics runs at this fixed step regardless of frame rate.
@@ -326,11 +326,11 @@ impl Vehicle {
         self.handling.steer_max(speed)
     }
 
-    /// Lateral limit at a node. The bay side of the pull-off has no rail, so it opens up.
+    /// Lateral limit at a node. The car park's side has no rail beside it, so it opens up to the
+    /// car park's walls.
     pub fn containment_limit(&self, track: &Track, index: usize, lat: f32) -> f32 {
-        let in_bay = index > BAY_FROM && index < BAY_TO && signum(lat) == BAY_SIDE;
-        if in_bay {
-            crate::track::bay_limit(track, index)
+        if signum(lat) == CARPARK_SIDE {
+            crate::track::carpark_limit(track, index)
         } else {
             RAIL_LIMIT
         }

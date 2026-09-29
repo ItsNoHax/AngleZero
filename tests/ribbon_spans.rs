@@ -22,7 +22,7 @@
 
 use angle_zero::math::Vec3;
 use angle_zero::mesh::{chunk_visible, Ribbon, Station, CHUNK_COUNT};
-use angle_zero::track::{Track, BAY_NODE, NODE_COUNT};
+use angle_zero::track::{carpark_parking, Track, NODE_COUNT};
 
 const FOG_FAR: f32 = 330.0;
 
@@ -61,11 +61,20 @@ fn span<const V: usize>(r: &Ribbon<V>, eye: Vec3, forward: Vec3) -> Option<(usiz
     lo.map(|l| (l, hi))
 }
 
-/// Every camera the game actually puts you at: the title orbit, and the chase camera down the run.
+/// Every camera the game actually puts you at: the title shot, as it starts and once it has eased
+/// in, and the chase camera down the run. An orbit round the parked car is kept as well, for
+/// coverage of the car park from every side.
 fn cameras(t: &Track) -> Vec<(Vec3, Vec3)> {
     let mut out = Vec::new();
 
-    let car = t.nodes[BAY_NODE].p;
+    let (x, y, z, yaw, _) = carpark_parking(t);
+    let car = Vec3::new(x, y, z);
+    let state = angle_zero::vehicle::CarState { x, y, z, yaw, ..Default::default() };
+    let mut cam = angle_zero::camera::Camera::new();
+    for dt in [0.0, 30.0] {
+        cam.update_title(&state, dt);
+        out.push((cam.pos, cam.look_at.sub(cam.pos).normalized()));
+    }
     for step in 0..72 {
         let a = step as f32 / 72.0 * core::f32::consts::TAU;
         let eye = Vec3::new(car.x + a.sin() * 10.5, car.y + 3.1, car.z + a.cos() * 10.5);

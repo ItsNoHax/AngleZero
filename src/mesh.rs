@@ -375,16 +375,12 @@ fn station_vertex(track: &Track, render_node: i32, st: &Station, shelf: bool) ->
         (i, &track.nodes[i], 0.0)
     };
 
-    // Across the pull-off the hillside is cut back to a shelf, so the ground the car parks on is
-    // real geometry rather than a flat pad laid over a slope.
+    // Beside the summit car park the hillside is cut back to a shelf under the paving and falls
+    // away as a cliff past the parapet, so the ground the car parks on is real geometry rather
+    // than a flat pad laid over a slope.
     let mut y = st.y;
-    if shelf && crate::math::signum(st.lateral) == crate::track::BAY_SIDE {
-        let blend =
-            crate::track::bay_shelf_blend(index) * crate::track::bay_shelf_lateral_blend(st.lateral);
-        if blend > 0.0 {
-            let cut = crate::track::bay_shelf_offset(st.lateral);
-            y = crate::math::lerp(st.y, cut, blend);
-        }
+    if shelf && crate::math::signum(st.lateral) == crate::track::CARPARK_SIDE {
+        y = crate::track::carpark_ground(track, n.s + along, st.lateral, st.y);
     }
 
     (

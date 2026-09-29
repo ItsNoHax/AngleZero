@@ -360,13 +360,17 @@ fn draw_pause(game: &Game) {
 
 fn draw_title(game: &Game) {
     text::bind();
-    // Kept clear of the middle of the frame so the orbiting car stays visible behind it.
-    text::draw_centered(b"ANGLEZERO", SCREEN_W * 0.5, 26.0, 3.0, TEXT);
-    text::draw_centered(b"SEKIRA DESCENT", SCREEN_W * 0.5, 58.0, 1.0, DIM);
+    // In the corners, as the title shot is composed: the sky over the hairpin carries the name,
+    // and the car stands clear in the middle against the rail with the city behind it.
+    const LEFT: f32 = 18.0;
+    const RIGHT: f32 = SCREEN_W - 18.0;
+    text::draw_shadowed(b"ANGLEZERO", LEFT, 18.0, 3.0, TEXT);
+    text::draw_shadowed(b"SEKIRA DESCENT", LEFT + 2.0, 50.0, 1.0, DIM);
     let weather: &[u8] = if game.wet { b"UP/DOWN  ROAD: WET" } else { b"UP/DOWN  ROAD: DRY" };
-    text::draw_centered(weather, SCREEN_W * 0.5, 72.0, 1.0, DIM);
-    text::draw_centered(b"PRESS X TO START", SCREEN_W * 0.5, 232.0, 1.0, GREEN);
-    draw_best(game, 250.0);
+    text::draw_shadowed(weather, LEFT + 2.0, 64.0, 1.0, DIM);
+    let press: &[u8] = b"PRESS X TO START";
+    text::draw_shadowed(press, RIGHT - text::width(press, 1.0), 232.0, 1.0, GREEN);
+    draw_best(game, 246.0, Some(RIGHT));
     #[cfg(all(feature = "devtools", not(feature = "harness")))]
     draw_car_diagnostics();
 
@@ -378,19 +382,19 @@ fn draw_title(game: &Game) {
     // than when the read finishes.
     if let Some((index, progress)) = super::car::loading() {
         let name = super::car::display_name(index);
-        text::draw_centered(name.as_bytes(), SCREEN_W * 0.5, 202.0, 1.0, TEXT);
-        loading_bar(214.0, progress.fraction());
+        text::draw_shadowed(name.as_bytes(), LEFT, 232.0, 1.0, TEXT);
+        loading_bar(LEFT, 246.0, progress.fraction());
     } else if let Some(car) = super::car::current() {
         let name = car.name_of_car();
         if !name.is_empty() {
-            text::draw_centered(name, SCREEN_W * 0.5, 202.0, 1.0, TEXT);
+            text::draw_shadowed(name, LEFT, 232.0, 1.0, TEXT);
         }
         if game.car_count > 1 {
-            text::draw_centered(b"< LEFT/RIGHT TO CHANGE CAR >", SCREEN_W * 0.5, 214.0, 1.0, DIM);
+            text::draw_shadowed(b"< LEFT/RIGHT >", LEFT, 246.0, 1.0, DIM);
         }
         let credit = car.credit();
         if !credit.is_empty() {
-            text::draw_centered(credit, SCREEN_W * 0.5, 264.0, 1.0, DIM);
+            text::draw_centered(credit, SCREEN_W * 0.5, 262.0, 1.0, DIM);
         }
     }
 
@@ -452,10 +456,10 @@ fn draw_car_diagnostics() {
 /// It sits where `< LEFT/RIGHT TO CHANGE CAR >` sits, because it is answering the press that line
 /// invited and the two never need to be read at once. A bar rather than a percentage: what it is there to
 /// say is "this is going to happen", and the exact figure is nobody's business at a title screen.
-fn loading_bar(y: f32, fraction: f32) {
+/// A loading bar with its left end at `x`.
+fn loading_bar(x: f32, y: f32, fraction: f32) {
     const W: f32 = 96.0;
     const H: f32 = 3.0;
-    let x = SCREEN_W * 0.5 - W * 0.5;
     fill_rect(x, y, W, H, rgba(0x9F, 0xB0, 0xBD, 0x40));
     fill_rect(x, y, W * fraction, H, GREEN);
     // The font is bound by the caller and `fill_rect` unbinds it, so put it back for whatever
@@ -464,7 +468,8 @@ fn loading_bar(y: f32, fraction: f32) {
 }
 
 /// The stored record, shown once there is one to show.
-fn draw_best(game: &Game, y: f32) {
+/// The best run, centred, or ending at `right` when given.
+fn draw_best(game: &Game, y: f32, right: Option<f32>) {
     let r = &game.record;
     if !r.has_time() {
         return;
@@ -512,7 +517,12 @@ fn draw_best(game: &Game, y: f32) {
         line[w] = c;
         w += 1;
     }
-    text::draw_centered(&line[..w], SCREEN_W * 0.5, y, 1.0, AMBER);
+    match right {
+        Some(r) => {
+            text::draw_shadowed(&line[..w], r - text::width(&line[..w], 1.0), y, 1.0, AMBER);
+        }
+        None => text::draw_centered(&line[..w], SCREEN_W * 0.5, y, 1.0, AMBER),
+    }
 }
 
 fn draw_results(game: &Game) {
@@ -574,7 +584,7 @@ fn draw_results(game: &Game) {
     }
     text::draw_centered(&combo_line[..w], SCREEN_W * 0.5, 150.0, 1.0, ACCENT);
 
-    draw_best(game, 172.0);
+    draw_best(game, 172.0, None);
     text::draw_centered(b"PRESS X TO RUN AGAIN", SCREEN_W * 0.5, 204.0, 1.0, GREEN);
     text::draw_centered(b"SQUARE TO CHANGE CAR", SCREEN_W * 0.5, 220.0, 1.0, DIM);
 }

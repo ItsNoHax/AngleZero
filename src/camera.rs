@@ -7,10 +7,19 @@
 use crate::math::{atan2, cos, hypot, lerp, min, sin, wrap_pi, Vec3, PI};
 use crate::vehicle::CarState;
 
-/// Radius of the title screen's orbit.
-const ORBIT_RADIUS: f32 = 10.5;
-const ORBIT_SPEED: f32 = 0.16;
-const TITLE_FOV: f32 = 54.0;
+/// The title shot, relative to the car parked in the summit car park: back from it, out to its
+/// right and up, then turned left of the way the car faces and pitched down. From there the first
+/// hairpin sweeps across the left of the frame, the city fills the right, and the car stands in
+/// the middle against the rail.
+pub const TITLE_BACK: f32 = 8.5;
+pub const TITLE_RIGHT: f32 = 1.5;
+pub const TITLE_UP: f32 = 5.0;
+pub const TITLE_TURN: f32 = 18.0 * PI / 180.0;
+pub const TITLE_PITCH: f32 = -14.0 * PI / 180.0;
+/// A slow push-in over the first seconds on the title screen: this much closer, over this long.
+const TITLE_PUSH: f32 = 1.5;
+const TITLE_PUSH_TIME: f32 = 20.0;
+pub const TITLE_FOV: f32 = 54.0;
 const RUN_FOV_BASE: f32 = 60.0;
 
 pub struct Camera {
@@ -21,8 +30,8 @@ pub struct Camera {
     pub fov: f32,
     /// Decaying impact shake.
     pub shake: f32,
-    /// Title-screen orbit phase.
-    pub orbit_angle: f32,
+    /// Seconds on the title screen, which drives its slow push-in.
+    pub title_time: f32,
     /// Swing the chase round to look at the front of the car. This is the pose the camera already
     /// takes by itself when the car is reversing — the velocity heading points backwards, so the
     /// camera ends up ahead of the bonnet looking back down the road — and it is reached the same
@@ -47,7 +56,7 @@ impl Camera {
             yaw: 0.0,
             fov: RUN_FOV_BASE,
             shake: 0.0,
-            orbit_angle: 0.0,
+            title_time: 0.0,
             front_view: false,
             rng: 0x1234_5678,
         }
@@ -77,16 +86,27 @@ impl Camera {
         );
     }
 
-    /// Slow orbit around the parked car on the title screen.
+    /// The title shot over the parked car, easing slowly in.
     pub fn update_title(&mut self, car: &CarState, dt: f32) {
-        self.orbit_angle += dt * ORBIT_SPEED;
-        let a = self.orbit_angle;
+        self.title_time = min(self.title_time + dt, TITLE_PUSH_TIME);
+        let t = self.title_time / TITLE_PUSH_TIME;
+        // Eased out, so the move settles rather than stopping dead.
+        let push = TITLE_PUSH * (1.0 - (1.0 - t) * (1.0 - t));
+        let (fx, fz) = (sin(car.yaw), cos(car.yaw));
+        let (rx, rz) = (-fz, fx);
+        let back = TITLE_BACK - push;
         self.pos = Vec3::new(
-            car.x + sin(a) * ORBIT_RADIUS,
-            car.y + 3.1 + sin(a * 0.7) * 0.5,
-            car.z + cos(a) * ORBIT_RADIUS,
+            car.x - fx * back + rx * TITLE_RIGHT,
+            car.y + TITLE_UP,
+            car.z - fz * back + rz * TITLE_RIGHT,
         );
-        self.look_at = Vec3::new(car.x, car.y + 0.95, car.z);
+        let look = car.yaw + TITLE_TURN;
+        let (cp, sp) = (cos(TITLE_PITCH), sin(TITLE_PITCH));
+        self.look_at = Vec3::new(
+            self.pos.x + sin(look) * cp * 10.0,
+            self.pos.y + sp * 10.0,
+            self.pos.z + cos(look) * cp * 10.0,
+        );
         self.fov = lerp(self.fov, TITLE_FOV, min(1.0, 3.0 * dt));
     }
 

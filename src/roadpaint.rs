@@ -312,8 +312,4 @@ pub fn cones(track: &Track, paint: &Paint, mut each: impl FnMut(f32, f32)) {
         each(s + 2.6, u);
     }
 
-    // Two at the lay-by's entrance.
-    let bay = track.nodes[crate::track::BAY_FROM].s;
-    each(bay - 3.0, crate::track::BAY_SIDE * (shoulder + 0.6));
-    each(bay - 0.5, crate::track::BAY_SIDE * (shoulder + 1.0));
 }

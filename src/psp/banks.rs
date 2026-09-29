@@ -11,7 +11,7 @@ use angle_zero::math::Vec3;
 use angle_zero::mesh::{self, Chunk, Vertex};
 use angle_zero::scenery::{self, BankSpan, BANK_BACK, BANK_FOOT};
 use angle_zero::texgen::{self, Surface};
-use angle_zero::track::{Track, BAY_FROM, BAY_SIDE, BAY_TO};
+use angle_zero::track::{Track, CARPARK_SIDE};
 use psp::sys::{self, GuPrimitive, VertexType};
 
 use super::render::rgb;
@@ -63,8 +63,11 @@ pub fn surface(node: usize, lateral: f32) -> Option<f32> {
         .fold(None, |a: Option<f32>, h| Some(a.map_or(h, |a| a.max(h))))
 }
 
+/// The last node beside the car park, set at `init`. No cut bank stands on its side before it.
+static mut CARPARK_TO: usize = 0;
+
 fn bay(node: usize, side: f32) -> bool {
-    side * BAY_SIDE > 0.0 && node + 12 >= BAY_FROM && node <= BAY_TO + 12
+    side * CARPARK_SIDE > 0.0 && node <= unsafe { CARPARK_TO } + 12
 }
 
 fn grow(lo: &mut Vec3, hi: &mut Vec3, x: f32, y: f32, z: f32) {
@@ -73,6 +76,7 @@ fn grow(lo: &mut Vec3, hi: &mut Vec3, x: f32, y: f32, z: f32) {
 }
 
 pub unsafe fn init(track: &Track) {
+    CARPARK_TO = angle_zero::track::carpark_open_nodes(track).1;
     SPAN_COUNT = scenery::cut_banks(track, &mut *(&raw mut SPANS), bay);
     let face = &mut (*(&raw mut FACE)).0;
     let top = &mut (*(&raw mut TOP)).0;

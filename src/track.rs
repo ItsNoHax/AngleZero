@@ -55,11 +55,12 @@ const STEP: f32 = 12.0;
 /// Sections of [`PLAN`] that fall at a fixed rate instead of by their curvature, as
 /// `(section, metres dropped per step)`.
 ///
-/// The first 324 m fall at 12.5 %, so the course drops off the summit where the car park is, and
-/// the first hairpin lies about 30 m below it. The title camera looks down on that hairpin from the
-/// car park; at the curvature rule's 0.5-0.9 m a step it lay only 14 m down and showed as a line
+/// The first section, which the summit car park stands beside, falls gently at 3.3 % so the
+/// paving is near enough level. The next three, 276 m, fall at 13.75 %: the course drops off the
+/// summit, and the first hairpin lies 28 m below the car park. The title camera looks down on that
+/// hairpin; at the curvature rule's 0.5-0.9 m a step it lay only 14 m down and showed as a line
 /// along the horizon.
-const STEEP: [(usize, f32); 4] = [(0, 1.5), (1, 1.5), (2, 1.5), (3, 1.5)];
+const STEEP: [(usize, f32); 4] = [(0, 0.4), (1, 1.65), (2, 1.65), (3, 1.65)];
 
 /// Metres section `i` falls per turtle step.
 fn section_drop(i: usize, degrees: f32) -> f32 {
@@ -94,98 +95,161 @@ pub const NODE_COUNT: usize = CONTROL_POINT_COUNT * SAMPLES_PER_CONTROL_POINT + 
 /// Beyond this `|curv|`, a node counts as being in a corner (used for prop placement).
 pub const CORNER_CURVATURE: f32 = 0.045;
 
-// --- Emergency pull-off ---------------------------------------------------------
-/// Node the gravel pad is centred on; also where the title screen parks the car.
-pub const BAY_NODE: usize = 30;
-/// Which side of the centreline the bay is on, as a sign applied to `lat`.
-pub const BAY_SIDE: f32 = 1.0;
-/// Node range over which the guard rail on the bay side is omitted.
-pub const BAY_FROM: usize = 16;
-pub const BAY_TO: usize = 46;
+// --- The summit car park ---------------------------------------------------------
+//
+// The course starts at the summit, and beside the start line on the right is a car park looking
+// out over the city. The title screen parks the car in it. Its outline is described in the road's
+// own frame, `along` metres of arclength from node 0 and `lateral` metres out, because it butts
+// against the road ribbon and has to be cut on the same nodes (see `carpark_span`). The road is
+// straight here, so that frame is also square to the world.
+//
+// Seen from above the paving is a wedge: a short end wall at the top running out from the rail, a
+// 45° parapet facing down the valley toward the city, and a short end wall back to the rail at the
+// bottom.
 
-/// How far from the centreline the pull-off's shelf extends before the hillside resumes.
-pub const BAY_SHELF_OUTER: f32 = 24.0;
-/// Where the shelf starts falling away — the inner edge of the hillside beside the road.
-pub const BAY_SHELF_INNER: f32 = 7.2;
-/// Gentle cross-fall across the shelf, so it drains like real tarmac instead of reading as a
-/// flat card laid on the slope.
-pub const BAY_SHELF_FALL: f32 = 0.022;
-/// Centreline nodes over which the shelf blends into the natural hillside at each end, so the
-/// lay-off does not end in a cliff.
-pub const BAY_SHELF_BLEND: usize = 10;
-
-/// Height of the pull-off's shelf relative to the road surface, `lateral` metres from the
-/// centreline.
-///
-/// The hillside drops steeply away from the road — 0.9 m by 11 m out, 4.2 m by 22 m — so a flat
-/// pad laid at road level is buried at its inner edge and hangs in the air at its outer one. A
-/// real emergency stop area is cut into the slope, which is what this describes: level with the
-/// road, falling gently for drainage, out to `BAY_SHELF_OUTER`.
-pub fn bay_shelf_offset(lateral: f32) -> f32 {
-    let l = crate::math::abs(lateral);
-    -0.25 - crate::math::max(0.0, l - BAY_SHELF_INNER) * BAY_SHELF_FALL
-}
-
-/// Half the pull-off's length, in metres of arclength either side of [`BAY_NODE`].
-pub const BAY_HALF_LENGTH: f32 = 19.0;
+/// Which side of the centreline the car park is on, as a sign applied to `lat`.
+pub const CARPARK_SIDE: f32 = 1.0;
 
 /// Where the road ribbon's outermost station sits, and so where the paving has to meet it.
 ///
 /// The road is drawn as an extruded cross-section that ends at this lateral offset, level with
-/// the centreline. The lay-by's paving picks up from exactly here, which is the whole trick: it
+/// the centreline. The car park's paving picks up from exactly here, which is the whole trick: it
 /// is not a pad placed near the road, it is the road's own surface continuing outwards.
 pub const ROAD_SHOULDER: f32 = 6.4;
 
-/// The paving's lateral extent: it picks up exactly where the road ribbon stops, and runs out far
-/// enough to pass beneath the parapet.
-///
-/// This used to start 0.4 m *inside* the shoulder, so the paving ran under the carriageway and
-/// there could be no seam between them. That overlap is what made the title screen flicker. Both
-/// surfaces are piecewise-linear approximations of the same falling centreline, but they were cut
-/// at different intervals — the road ribbon every 2.68 m, the apron every 3.17 m — so across the
-/// pull-off they sat within 18 mm of each other and the paving broke up through the road at a
-/// quarter of the samples. A 16-bit depth buffer at a 0.4 m near plane resolves 8.6 mm at 15 m and
-/// 34 mm at 30 m, so which surface won was decided per pixel and changed as the camera orbited.
-///
-/// A butt joint is only a seam when the two edges are cut in different places. They are not: the
-/// apron is now cut on the same nodes the road ribbon uses, so the joint shares its vertices and
-/// is watertight. See `build_bay_props` and `tests/bay.rs`.
-pub const BAY_APRON_INNER: f32 = ROAD_SHOULDER;
-pub const BAY_APRON_OUTER: f32 = 19.8;
+/// The car park's centre and half-length along the road, before snapping to the ribbon's cuts.
+const CARPARK_CENTRE: f32 = 23.0;
+const CARPARK_HALF: f32 = 21.0;
+/// Length of the top end wall, along the road, and how far out the parapet begins.
+pub const CARPARK_NORTH_TAPER: f32 = 8.0;
+pub const CARPARK_REACH: f32 = 42.0;
+/// Length of the bottom end wall, along the road.
+pub const CARPARK_SOUTH_TAPER: f32 = 4.0;
 
-/// The paving's crossfall — 2%, which is what a real road is built with.
-pub const BAY_APRON_FALL: f32 = 0.02;
+/// Where the paving starts and stops along the road: on the road ribbon's own cuts, so the two
+/// share vertices along their joint and it is watertight.
+///
+/// This is what made the old lay-by stop flickering. Two surfaces cut at different intervals are
+/// two piecewise-linear approximations of the same falling centreline, and where they meet they
+/// sit millimetres apart; a 16-bit depth buffer cannot tell them apart, so which one wins changes
+/// per pixel as the camera moves. A butt joint is only a seam when the edges are cut in different
+/// places. See `tests/carpark.rs`.
+pub fn carpark_span(_track: &Track) -> (f32, f32) {
+    let (first, last) = crate::mesh::ribbon_samples_within(_track, CARPARK_CENTRE, CARPARK_HALF);
+    let spacing = crate::mesh::ribbon_spacing(_track);
+    (first as f32 * spacing, last as f32 * spacing)
+}
+
+/// Where the car park's outer wall stands, as a lateral offset `along` metres down the road: the
+/// rail's line outside the car park, and the end walls and parapet across it.
+pub fn carpark_edge(track: &Track, along: f32) -> f32 {
+    let (s0, s1) = carpark_span(track);
+    let north = s0 + CARPARK_NORTH_TAPER;
+    let south = s1 - CARPARK_SOUTH_TAPER;
+    if along <= s0 || along >= s1 {
+        RAIL_LIMIT
+    } else if along < north {
+        RAIL_LIMIT + (CARPARK_REACH - RAIL_LIMIT) * (along - s0) / CARPARK_NORTH_TAPER
+    } else if along <= south {
+        CARPARK_REACH - (along - north)
+    } else {
+        let at_south = CARPARK_REACH - (south - north);
+        at_south + (RAIL_LIMIT - at_south) * (along - south) / CARPARK_SOUTH_TAPER
+    }
+}
+
+/// The parapet's two ends, as `(along, lateral)`: it runs at 45° from the top one to the bottom.
+pub fn carpark_parapet(track: &Track) -> ((f32, f32), (f32, f32)) {
+    let (s0, s1) = carpark_span(track);
+    let (north, south) = (s0 + CARPARK_NORTH_TAPER, s1 - CARPARK_SOUTH_TAPER);
+    ((north, CARPARK_REACH), (south, CARPARK_REACH - (south - north)))
+}
+
+/// Which way the car park faces, as `(d_along, d_lateral)`: square out of the parapet, down the
+/// valley toward the city.
+pub const CARPARK_FACING: (f32, f32) = (core::f32::consts::FRAC_1_SQRT_2, core::f32::consts::FRAC_1_SQRT_2);
+
+/// Where the title screen parks the car: the middle bay, nose-in a metre short of the parapet,
+/// facing the city. As `(x, y, z, yaw, node)`.
+pub fn carpark_parking(track: &Track) -> (f32, f32, f32, f32, usize) {
+    let ((na, nl), (sa, sl)) = carpark_parapet(track);
+    let (fa, fl) = CARPARK_FACING;
+    // Nose a metre from the rail: the car's centre is its half-length and that metre back.
+    const BACK: f32 = 3.3;
+    let (along, lateral) = ((na + sa) * 0.5 - fa * BACK, (nl + sl) * 0.5 - fl * BACK);
+    let p = carpark_surface(track, along, lateral);
+    let n = carpark_node_at(track, along);
+    let dx = n.dir.x * fa + n.nrm.x * CARPARK_SIDE * fl;
+    let dz = n.dir.z * fa + n.nrm.z * CARPARK_SIDE * fl;
+    (p.x, p.y, p.z, atan2(dx, dz), node_at_arclength(track, along))
+}
 
 /// Height of the paved surface relative to the road, `lateral` metres from the centreline.
 ///
-/// Level with the shoulder rather than stepped down onto the shelf, because the point of the
-/// lay-by is that it reads as the road simply getting wider. Past the shoulder it falls away
-/// gently so water runs off it instead of back across the carriageway. The shelf the terrain
-/// puts here stays a quarter of a metre below it throughout, so the paving always wins the depth
-/// test without needing a fudge factor.
-pub fn bay_apron_offset(lateral: f32) -> f32 {
-    -crate::math::max(0.0, crate::math::abs(lateral) - ROAD_SHOULDER) * BAY_APRON_FALL
+/// Level with the shoulder, because the point is that the car park reads as the road simply
+/// getting wider. Past the shoulder it falls at 2 %, which is what a real road is built with, so
+/// water runs off it instead of back across the carriageway.
+pub fn carpark_fall(lateral: f32) -> f32 {
+    -crate::math::max(0.0, crate::math::abs(lateral) - ROAD_SHOULDER) * 0.02
 }
 
-/// The node the pull-off stands on, `along` metres of arclength from [`BAY_NODE`].
+/// The node the car park stands on at `along` metres down the road.
 ///
-/// The pass drops 2.8 m over the pull-off's length, so nothing built on it may be laid out flat
-/// from a single node — a 38 m slab taken from [`BAY_NODE`] alone is buried 1.2 m in the hillside
-/// at its upper end and hangs 1.5 m in the air at its lower one, which is exactly what the first
-/// version of it did. Every piece takes its height from the node it actually stands above.
-pub fn bay_node_at(track: &Track, along: f32) -> &Node {
-    let s = track.nodes[BAY_NODE].s + along;
-    &track.nodes[node_at_arclength(track, s)]
+/// Every piece takes its height from the node it actually stands above, never from one node for
+/// the whole car park: the road falls 0.4 m across it.
+pub fn carpark_node_at(track: &Track, along: f32) -> &Node {
+    &track.nodes[node_at_arclength(track, crate::math::max(0.0, along))]
 }
 
-/// A point on the paved surface, `along` metres down the pass and `lateral` metres out.
-pub fn bay_surface(track: &Track, along: f32, lateral: f32) -> Vec3 {
-    let n = bay_node_at(track, along);
+/// A point on the paved surface, `along` metres down the road and `lateral` metres out.
+pub fn carpark_surface(track: &Track, along: f32, lateral: f32) -> Vec3 {
+    let n = carpark_node_at(track, along);
+    // Past the node's own arclength the point is carried on along the road's direction, so props
+    // placed between nodes sit where they were asked to rather than snapping to a node.
+    let d = along - n.s;
     Vec3::new(
-        n.p.x + n.nrm.x * lateral * BAY_SIDE,
-        n.p.y + bay_apron_offset(lateral),
-        n.p.z + n.nrm.z * lateral * BAY_SIDE,
+        n.p.x + n.dir.x * d + n.nrm.x * lateral * CARPARK_SIDE,
+        n.p.y + carpark_fall(lateral),
+        n.p.z + n.dir.z * d + n.nrm.z * lateral * CARPARK_SIDE,
     )
+}
+
+/// How far down the hillside past the parapet falls for each metre out from it.
+pub const CARPARK_CLIFF: f32 = 1.2;
+/// Over how many metres along the road the ground eases back into the natural hillside past each
+/// end of the car park.
+pub const CARPARK_GROUND_BLEND: f32 = 16.0;
+
+/// Height of the ground below the node, `lateral` metres out on the car park's side, given the
+/// natural hillside's height `natural` there.
+///
+/// Under the paving the hillside is cut to a shelf a quarter of a metre below it, so the paving
+/// always wins the depth test. Past the parapet it drops away as a cliff, steeper than the natural
+/// hillside, so the camera in the car park looks straight down into the valley. Either side of the
+/// car park the ground blends back into the hillside over [`CARPARK_GROUND_BLEND`] metres.
+pub fn carpark_ground(track: &Track, along: f32, lateral: f32, natural: f32) -> f32 {
+    let (s0, s1) = carpark_span(track);
+    let w = if along < s0 {
+        1.0 - (s0 - along) / CARPARK_GROUND_BLEND
+    } else if along > s1 {
+        1.0 - (along - s1) / CARPARK_GROUND_BLEND
+    } else {
+        1.0
+    };
+    if w <= 0.0 {
+        return natural;
+    }
+    // Inside the car park the edge is where the wall stands; past its ends, carry the end wall's
+    // line on so the blend has an edge to fall away from.
+    let edge = crate::math::max(carpark_edge(track, crate::math::clamp(along, s0 + 0.01, s1 - 0.01)), RAIL_LIMIT);
+    let l = crate::math::abs(lateral);
+    let shelf = carpark_fall(l) - 0.25;
+    let cut = if l <= edge + 1.0 {
+        shelf
+    } else {
+        crate::math::min(natural, shelf - (l - edge - 1.0) * CARPARK_CLIFF)
+    };
+    crate::math::lerp(natural, cut, crate::math::clamp(w, 0.0, 1.0))
 }
 
 /// The node nearest a given distance along the track, by binary search on cumulative arclength.
@@ -202,40 +266,6 @@ pub fn node_at_arclength(track: &Track, s: f32) -> usize {
     lo
 }
 
-/// How far past the shelf's edge the ground eases back into the natural hillside.
-///
-/// Without this the terrain station at 22 m is lifted onto the shelf while the one at 48 m keeps
-/// its natural -17 m, and the ground falls sixteen metres in twenty-six — a cliff along the whole
-/// outer edge of the pull-off.
-pub const BAY_SHELF_FADE: f32 = 40.0;
-
-/// Blend weight of the shelf at a given distance from the centreline.
-pub fn bay_shelf_lateral_blend(lateral: f32) -> f32 {
-    let l = crate::math::abs(lateral);
-    if l <= BAY_SHELF_OUTER {
-        1.0
-    } else if l >= BAY_SHELF_OUTER + BAY_SHELF_FADE {
-        0.0
-    } else {
-        1.0 - (l - BAY_SHELF_OUTER) / BAY_SHELF_FADE
-    }
-}
-
-/// How much the shelf applies at a given centreline node: 1.0 through the pull-off, easing to
-/// 0.0 over `BAY_SHELF_BLEND` nodes at each end.
-pub fn bay_shelf_blend(node: usize) -> f32 {
-    if node < BAY_FROM.saturating_sub(BAY_SHELF_BLEND) || node > BAY_TO + BAY_SHELF_BLEND {
-        return 0.0;
-    }
-    if node < BAY_FROM {
-        return (node - (BAY_FROM - BAY_SHELF_BLEND)) as f32 / BAY_SHELF_BLEND as f32;
-    }
-    if node > BAY_TO {
-        return 1.0 - (node - BAY_TO) as f32 / BAY_SHELF_BLEND as f32;
-    }
-    1.0
-}
-
 /// The node the run ends on, and where the finish line stands.
 ///
 /// A run finishes at 98.5% of the centreline rather than the very last node, so the line has to
@@ -249,44 +279,27 @@ pub const FINISH_NODE: usize = (NODE_COUNT - 1) * 985 / 1000;
 /// construction. It used to be 7.15 against a rail drawn at 7.5 — a 35 cm allowance that stood in
 /// for the car having a width, and that a car half a metre wider than it simply drove through.
 pub const RAIL_LIMIT: f32 = 7.5;
-/// The rail is missing across the bay, so containment opens up to the far edge of the pull-off.
-pub const BAY_LIMIT: f32 = 16.5;
 
-/// How long the lay-by's closed ends are: over this much arclength at each end of the paving, an
-/// end wall runs diagonally from the rail out to the parapet, and containment narrows with it.
+/// The centreline nodes the car park is open over: where the rail on its side is left out.
 ///
-/// The rail used to be missing, and containment open, over the whole node range
-/// [`BAY_FROM`]..[`BAY_TO`], which reaches two and a half metres past the paving at each end. There
-/// was nothing there: the car could drive off the end of the lay-by onto the shelf's grass.
-pub const BAY_TAPER: f32 = 8.0;
-
-/// Where the parapet's outer face is, which the end walls run out to.
-pub const BAY_WALL: f32 = 19.6;
-
-/// How open the bay side of the road is at `index`: `0.0` where the rail runs, `1.0` across the
-/// lay-by proper, and in between along its tapered ends.
-pub fn bay_openness(track: &Track, index: usize) -> f32 {
-    let along = crate::math::abs(track.nodes[index.min(NODE_COUNT - 1)].s - track.nodes[BAY_NODE].s);
-    crate::math::clamp((BAY_HALF_LENGTH - along) / BAY_TAPER, 0.0, 1.0)
+/// Strictly inside the paving's span, so the rail runs right up to where each end wall begins.
+pub fn carpark_open_nodes(track: &Track) -> (usize, usize) {
+    let (s0, s1) = carpark_span(track);
+    let spacing = crate::mesh::ribbon_spacing(track);
+    (node_at_arclength(track, s0 + spacing), node_at_arclength(track, s1 - spacing))
 }
 
-/// Containment on the bay side at `index`: the rail's line, opening out along the end walls to the
-/// lay-by's full width.
-pub fn bay_limit(track: &Track, index: usize) -> f32 {
-    RAIL_LIMIT + (BAY_LIMIT - RAIL_LIMIT) * bay_openness(track, index)
+/// Containment on the car park's side at `index`: the wall's line, less its thickness.
+pub fn carpark_limit(track: &Track, index: usize) -> f32 {
+    let along = track.nodes[index.min(NODE_COUNT - 1)].s;
+    let edge = carpark_edge(track, along);
+    if edge > RAIL_LIMIT {
+        edge - 0.25
+    } else {
+        RAIL_LIMIT
+    }
 }
 
-/// Where the end wall stands at `index`, as a lateral offset: from the rail's line at the paving's
-/// end out to the parapet.
-pub fn bay_wall_lateral(track: &Track, index: usize) -> f32 {
-    RAIL_LIMIT + (BAY_WALL - RAIL_LIMIT) * bay_openness(track, index)
-}
-
-/// The centreline nodes the lay-by is open over: where the rail on the bay side is left out.
-pub fn bay_open_nodes(track: &Track) -> (usize, usize) {
-    let s = track.nodes[BAY_NODE].s;
-    (node_at_arclength(track, s - BAY_HALF_LENGTH) + 1, node_at_arclength(track, s + BAY_HALF_LENGTH) - 1)
-}
 /// Beyond this lateral offset the car is off the tarmac and on to loose surface.
 pub const TARMAC_HALF_WIDTH: f32 = 5.3;
 

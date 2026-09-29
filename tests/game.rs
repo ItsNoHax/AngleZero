@@ -2,7 +2,7 @@
 
 use angle_zero::game::{Buttons, Game, PauseChoice, Phase, Toast};
 use angle_zero::math::{cos, sin};
-use angle_zero::track::{Track, BAY_NODE, NODE_COUNT};
+use angle_zero::track::{carpark_parking, Track, NODE_COUNT};
 use angle_zero::vehicle::FIXED_DT;
 
 fn track() -> Box<Track> {
@@ -68,24 +68,27 @@ fn the_game_opens_on_the_title_screen_with_the_car_parked_in_the_pull_off() {
     assert_eq!(g.phase, Phase::Title);
 
     // Parked off to the bay side of the centreline, near the bay node.
-    let bay = &t.nodes[BAY_NODE];
+    let bay = &t.nodes[carpark_parking(&t).4];
     let dx = g.vehicle.state.x - bay.p.x;
     let dz = g.vehicle.state.z - bay.p.z;
     let lat = dx * bay.nrm.x + dz * bay.nrm.z;
     assert!(
-        lat > 8.0,
-        "car should be parked out in the pull-off, but lat was {lat}"
+        lat > 15.0,
+        "car should be parked out in the car park, but lat was {lat}"
     );
     assert_eq!(g.vehicle.state.vx, 0.0);
 }
 
 #[test]
-fn the_title_camera_orbits_while_nothing_is_pressed() {
+fn the_title_camera_holds_on_the_car_park_while_nothing_is_pressed() {
     let t = track();
     let mut g = game(&t);
-    let start = g.camera.orbit_angle;
+    hold(&mut g, &t, NONE, 0.1);
+    let start = g.camera.pos;
     hold(&mut g, &t, NONE, 2.0);
-    assert!(g.camera.orbit_angle > start + 0.2);
+    let moved = (g.camera.pos.x - start.x).hypot(g.camera.pos.z - start.z);
+    assert!(moved < 1.0, "the title camera moved {moved:.2} m in two seconds");
+    assert!(g.camera.title_time > 1.9);
     assert_eq!(g.phase, Phase::Title);
 }
 
@@ -179,7 +182,7 @@ fn square_sends_the_results_screen_back_to_the_car_selection() {
     assert_eq!(g.phase, Phase::Title);
     // The title screen is where a car gets picked, so the car has to be parked in the pull-off
     // again rather than left wherever the run ended.
-    let bay = &t.nodes[BAY_NODE];
+    let bay = &t.nodes[carpark_parking(&t).4];
     let dx = g.vehicle.state.x - bay.p.x;
     let dz = g.vehicle.state.z - bay.p.z;
     assert!((dx * bay.nrm.x + dz * bay.nrm.z) > 8.0);

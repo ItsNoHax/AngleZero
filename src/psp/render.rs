@@ -16,7 +16,7 @@ use angle_zero::lights;
 use angle_zero::math::{cos, sin, sqrt, Mat4, Vec3, TAU};
 use angle_zero::mesh::{self, ribbon_capacity, Chunk, Ribbon, Station, Vertex};
 use angle_zero::texgen::Surface;
-use angle_zero::track::{Locator, Track, BAY_NODE, BAY_SIDE, CORNER_CURVATURE};
+use angle_zero::track::{Locator, Track, CARPARK_SIDE, CORNER_CURVATURE};
 use angle_zero::vehicle::{CarState, Vehicle};
 use psp::sys::{
     self, GuPrimitive, GuState, MatrixMode, MipmapLevel, ScePspFMatrix4, ScePspFVector3,
@@ -283,10 +283,9 @@ pub fn init(track: &Track) {
         (*(&raw mut YELLOW_L_MESH)).build_masked(track, &YELLOW_LEFT, &yellow);
         (*(&raw mut YELLOW_R_MESH)).build_masked(track, &YELLOW_RIGHT, &yellow);
 
-        // The bay side has no rail across the pull-off, so the player can drive in.
-        // The rail is left out only where the lay-by is paved; its ends are closed by walls.
-        let bay_gap = Some(angle_zero::track::bay_open_nodes(track));
-        if BAY_SIDE > 0.0 {
+        // No rail beside the car park, so the player can drive in; its ends are closed by walls.
+        let bay_gap = Some(angle_zero::track::carpark_open_nodes(track));
+        if CARPARK_SIDE > 0.0 {
             (*(&raw mut RAIL_L_MESH)).build(track, &RAIL_LEFT);
             (*(&raw mut RAIL_R_MESH)).build_gapped(track, &RAIL_RIGHT, bay_gap);
         } else {
@@ -296,6 +295,7 @@ pub fn init(track: &Track) {
 
         super::paint::init(track);
         build_props(track);
+        build_carpark(track);
         build_starfield();
         super::scenery::init(track, SKY_RADIUS);
         super::surfaces::init();
@@ -558,34 +558,25 @@ unsafe fn build_props(track: &Track) {
             }
         }
 
-        if first_node <= BAY_NODE && BAY_NODE <= last_node {
-            let before = w;
-            w += build_bay_props(track, &mut verts[w..]);
-            for v in &verts[before..w] {
-                note(&(*v), &mut lo, &mut hi);
-            }
-
-            // The 26 m pool over the pad, and a glow on the lamp head above it.
-            //
-            // Everything here is placed by arclength through `bay_surface`, the same way the paving
-            // and the props it lights are. Extrapolating from `BAY_NODE` along its `dir` instead —
-            // which is what this did — runs straight while the road curves, and holds one height
-            // while the pass drops 7.4 cm a metre, so the pool sat the best part of a metre off the
-            // ground it was supposed to be lying on.
-            // Two pools and two double-fan lamp glows.
+        let carpark_node = {
+            let (s0, s1) = angle_zero::track::carpark_span(track);
+            angle_zero::track::node_at_arclength(track, (s0 + s1) * 0.5)
+        };
+        if first_node <= carpark_node && carpark_node <= last_node {
+            // The pool under the car park lamp, a glow on its head, and the vending machines' cold
+            // pool against the lamp's warm one. They sit on the paving, not on the ground cut a
+            // quarter of a metre under it, which would bury a ground pool completely.
             if gw + bay_pool_verts(BAY_POOL_RINGS) + bay_pool_verts(2) + GLOW_VERTS * 4 <= glow_budget {
-                use angle_zero::track::bay_surface;
+                use angle_zero::track::{carpark_span, carpark_surface};
                 let g0 = gw;
-                // These sit on the paving, not on the shelf cut underneath it. The two are a
-                // quarter of a metre apart, which is enough to bury a ground pool completely.
-                push_bay_pool(track, glows, &mut gw, 10.0, 10.0, 12.0, 0.06, BAY_POOL_RINGS, LAMP_POOL);
-                // The head of the lamp built in `build_bay_props`, which stands at lateral 7.6.
-                let head = bay_surface(track, 12.0, 9.8);
-                let foot = bay_surface(track, 12.0, 7.6);
+                let (la, ll) = carpark_lamp(track);
+                push_bay_pool(track, glows, &mut gw, la + 3.0, ll + 3.0, 12.0, 0.06, BAY_POOL_RINGS, LAMP_POOL);
+                let head = carpark_surface(track, la + 1.6, ll + 1.6);
+                let foot = carpark_surface(track, la, ll);
                 push_blob_glow(glows, &mut gw, head.x, foot.y + 7.15, head.z, 2.75, LAMP_GLOW);
-                // The vending machines throw a cold pool of their own, against the lamp's warm one.
-                push_bay_pool(track, glows, &mut gw, -7.7, 14.2, 5.0, 0.07, 2, VEND_POOL);
-                let v = bay_surface(track, -7.7, 15.6);
+                let s0 = carpark_span(track).0;
+                push_bay_pool(track, glows, &mut gw, s0 + CARPARK_VEND_ALONG + 1.5, CARPARK_VEND_LATERAL + 0.7, 5.0, 0.07, 2, VEND_POOL);
+                let v = carpark_surface(track, s0 + CARPARK_VEND_ALONG + 0.5, CARPARK_VEND_LATERAL + 0.7);
                 push_blob_glow(glows, &mut gw, v.x, v.y + 1.25, v.z, 2.2, VEND_GLOW);
                 for v in &glows[g0..gw] {
                     note(&(*v), &mut glo, &mut ghi);
@@ -688,143 +679,113 @@ fn build_finish(track: &Track, out: &mut [Vertex]) -> usize {
 ///
 /// A lit vending machine does the rest of the work — it is the one warm light for a hundred
 /// metres, it says somebody comes up here, and it costs two boxes.
-fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
-    use angle_zero::track::{bay_surface, BAY_APRON_INNER, BAY_APRON_OUTER, BAY_HALF_LENGTH};
+fn build_carpark_props(track: &Track, out: &mut [Vertex]) -> usize {
+    use angle_zero::track::{
+        carpark_edge, carpark_parapet, carpark_span, carpark_surface, node_at_arclength, RAIL_LIMIT,
+        ROAD_SHOULDER,
+    };
     let mut w = 0usize;
 
-    // Everything here is placed by arclength and takes its height from the node it stands above.
-    // The pass drops 2.8 m across the lay-by, so anything laid out flat from one node is buried
-    // at the top end and hanging in the air at the bottom — see `tests/bay.rs`.
-    let at = |along: f32, lateral: f32| bay_surface(track, along, lateral);
+    // Everything is placed in the road's own frame and takes its height from the node it stands
+    // above, so the paving follows the road's fall rather than being one slab from one node.
+    let at = |along: f32, lateral: f32| carpark_surface(track, along, lateral);
+    let lift = |p: Vec3, y: f32| Vec3::new(p.x, p.y + y, p.z);
 
-    // Where the paving is cut across the pass.
+    // The paving, cut across the road on the road ribbon's own samples and at each one's node, so
+    // its inner edge is the ribbon's outer edge vertex for vertex and the joint is watertight.
     //
-    // Its inner edge *is* the road ribbon's outer edge, so the two must be cut on the same
-    // centreline nodes — the ribbon samples every `RENDER_STRIDE`-th one. Sharing the vertices is
-    // what makes the butt joint watertight, and it is the only way to meet the road without either
-    // a crack or an overlap. Cutting the two independently, which is what a fixed step count did,
-    // is precisely what the old 0.4 m overlap existed to hide, and that overlap fought.
-    //
-    // The ends snap *inwards* to a node: the shelf is only fully cut through the pull-off proper,
-    // and paving that ran past it would sit on ground the hillside is still climbing back into.
+    // It is also cut laterally into cells no more than 2.5 m across. The title camera stands over
+    // this paving a few metres up, and a long triangle with corners behind the camera is not
+    // clipped by the GE but dropped whole, which shows as wedges of grass that come and go.
     let spacing = mesh::ribbon_spacing(track);
-    let s0 = track.nodes[BAY_NODE].s;
-    let (first, last) = mesh::ribbon_samples_within(track, s0, BAY_HALF_LENGTH);
-    let steps = last - first;
-    let along_at = |i: usize| (first + i) as f32 * spacing - s0;
+    let (s0, s1) = carpark_span(track);
+    let first = (s0 / spacing + 0.5) as usize;
+    let last = (s1 / spacing + 0.5) as usize;
+    let node_s = |k: usize| track.nodes[node_at_arclength(track, k as f32 * spacing)].s;
+    const PAVING: u32 = rgb(0x24, 0x26, 0x2A);
+    for k in first..last {
+        let (a, b) = (node_s(k), node_s(k + 1));
+        let (ea, eb) = (carpark_edge(track, a), carpark_edge(track, b));
+        let widest = fmax(ea, eb) - ROAD_SHOULDER;
+        let cells = ((widest / 2.5) as usize + 1).max(1);
+        let la = |j: usize| ROAD_SHOULDER + (ea - ROAD_SHOULDER) * j as f32 / cells as f32;
+        let lb = |j: usize| ROAD_SHOULDER + (eb - ROAD_SHOULDER) * j as f32 / cells as f32;
+        for j in 0..cells {
+            if w + 6 > out.len() {
+                return w;
+            }
+            w += mesh::build_quad(&mut out[w..], at(a, la(j)), at(b, lb(j)), at(b, lb(j + 1)), at(a, la(j + 1)), PAVING);
+        }
+    }
 
-    // The apron, as a ribbon of quads down the hill rather than one slab across it — and cut
-    // across as well as along. The title camera orbits over this paving a few metres up, so a
-    // quad the full 13 m width of the apron has corners well behind it, and the GE does not clip
-    // such a triangle: it drops the whole thing, and the grass underneath shows through in
-    // wedges that come and go as the camera turns. Two-metre cells keep every triangle small
-    // enough to survive. The cuts are lateral only, so the inner edge keeps exactly the road
-    // ribbon's vertices and the butt joint stays watertight.
-    const APRON_CELLS: usize = 7;
-    let lat_at = |j: usize| {
-        BAY_APRON_INNER + (BAY_APRON_OUTER - BAY_APRON_INNER) * j as f32 / APRON_CELLS as f32
+    // The walls: the top end wall out from the rail, the parapet at 45°, and the bottom end wall
+    // back to the rail. Each is laid in short pieces, so every piece stands on the paving under
+    // it rather than on one node's height.
+    let ((na, nl), (sa, sl)) = carpark_parapet(track);
+    let segment = |w: &mut usize, out: &mut [Vertex], from: (f32, f32), to: (f32, f32), pieces: usize, body: bool| {
+        for k in 0..pieces {
+            let t0 = k as f32 / pieces as f32;
+            let t1 = (k + 1) as f32 / pieces as f32;
+            let p = |t: f32| (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            let (a0, l0) = p(t0);
+            let (a1, l1) = p(t1);
+            let (pa, pb) = (at(a0, l0), at(a1, l1));
+            if *w + 120 > out.len() {
+                return;
+            }
+            if body {
+                // A concrete end wall.
+                *w += mesh::build_wall_segment(&mut out[*w..], pa, pb, 0.2, 0.8, 0.1, rgb(0x55, 0x55, 0x4E), rgb(0x6E, 0x6E, 0x66));
+            } else {
+                // The parapet: a low kerb and a guard rail on posts, so the view runs under the beam
+                // and down the drop rather than stopping at a wall.
+                *w += mesh::build_wall_segment(&mut out[*w..], pa, pb, 0.16, 0.22, 0.04, rgb(0x4A, 0x4B, 0x46), rgb(0x62, 0x63, 0x5E));
+                *w += mesh::build_wall_segment(&mut out[*w..], lift(pa, 0.56), lift(pb, 0.56), 0.04, 0.26, 0.03, rgb(0x78, 0x80, 0x88), rgb(0xB0, 0xB8, 0xC0));
+                *w += mesh::build_box(&mut out[*w..], 0.1, 0.8, 0.1, pa.x, pa.y + 0.4, pa.z, rgb(0x50, 0x56, 0x5C));
+            }
+        }
     };
-    for i in 0..steps {
-        let (a, b) = (along_at(i), along_at(i + 1));
-        for j in 0..APRON_CELLS {
-            let (l0, l1) = (lat_at(j), lat_at(j + 1));
-            w += mesh::build_quad(
-                &mut out[w..],
-                at(a, l0),
-                at(b, l0),
-                at(b, l1),
-                at(a, l1),
-                rgb(0x24, 0x26, 0x2A),
-            );
-        }
-    }
+    let north_len = angle_zero::math::hypot(na - s0, nl - RAIL_LIMIT);
+    let parapet_len = angle_zero::math::hypot(sa - na, sl - nl);
+    let south_len = angle_zero::math::hypot(s1 - sa, sl - RAIL_LIMIT);
+    segment(&mut w, out, (s0, RAIL_LIMIT), (na, nl), (north_len / 3.0) as usize + 1, true);
+    segment(&mut w, out, (na, nl), (sa, sl), (parapet_len / 2.0) as usize + 1, false);
+    segment(&mut w, out, (sa, sl), (s1, RAIL_LIMIT), (south_len / 3.0) as usize + 1, true);
 
-    // The parapet, chained so it follows both the curve of the road and the fall of the pass. On
-    // the same cuts as the paving, so the wall starts and ends where the paving does rather than
-    // overhanging it onto the shelf.
-    const WALL_LATERAL: f32 = angle_zero::track::BAY_WALL;
-    use angle_zero::track::BAY_TAPER;
-    // The parapet's run between the two end walls: each step clipped to it, so the parapet meets
-    // the end walls exactly rather than stopping at the nearest paving cut.
-    let reach = BAY_HALF_LENGTH - BAY_TAPER;
-    let clip = |i: usize| (along_at(i).clamp(-reach, reach), along_at(i + 1).clamp(-reach, reach));
-    let inner = |i: usize| {
-        let (a, b) = clip(i);
-        b - a > 0.05
-    };
-    for i in 0..steps {
-        if !inner(i) {
-            continue;
-        }
-        let (a0, a1) = clip(i);
-        w += mesh::build_wall_segment(
-            &mut out[w..],
-            at(a0, WALL_LATERAL),
-            at(a1, WALL_LATERAL),
-            0.22,
-            0.78,
-            0.12,
-            rgb(0x55, 0x55, 0x4E),
-            rgb(0x6E, 0x6E, 0x66),
-        );
-    }
-
-    // An overlook rail along the top of the parapet: a thin bar on short posts, so the edge of
-    // the lay-by reads against the valley lights behind it.
-    // The two ends: a wall on the diagonal from where the rail stops to the parapet, so the lay-by
-    // is closed and the car meets something where containment narrows (`track::bay_limit`).
-    for end in [-1.0f32, 1.0] {
-        const PIECES: usize = 5;
-        for k in 0..PIECES {
-            let t0 = k as f32 / PIECES as f32;
-            let t1 = (k + 1) as f32 / PIECES as f32;
-            let p = |t: f32| {
-                let along = end * (BAY_HALF_LENGTH - BAY_TAPER * t);
-                let lateral = angle_zero::track::RAIL_LIMIT + (WALL_LATERAL - angle_zero::track::RAIL_LIMIT) * t;
-                at(along, lateral)
-            };
-            let (a, b) = if end < 0.0 { (p(t0), p(t1)) } else { (p(t1), p(t0)) };
-            w += mesh::build_wall_segment(&mut out[w..], a, b, 0.22, 0.78, 0.12, rgb(0x55, 0x55, 0x4E), rgb(0x6E, 0x6E, 0x66));
-        }
-    }
-
-    for i in 0..steps {
-        if !inner(i) {
-            continue;
-        }
-        let (a0, a1) = clip(i);
-        let (a, b) = (at(a0, WALL_LATERAL), at(a1, WALL_LATERAL));
-        let lift = |p: Vec3, y: f32| Vec3::new(p.x, p.y + y, p.z);
-        w += mesh::build_wall_segment(&mut out[w..], lift(a, 1.06), lift(b, 1.06), 0.03, 0.06, 0.02, rgb(0x7A, 0x80, 0x86), rgb(0xA8, 0xAE, 0xB4));
-        if i % 2 == 0 {
-            w += mesh::build_box(&mut out[w..], 0.06, 0.34, 0.06, a.x, a.y + 0.94, a.z, rgb(0x5A, 0x60, 0x66));
-        }
-    }
-
-    // Painted bays on the apron, each line cut in three so no triangle is long enough to reach
-    // behind the orbiting title camera and be dropped whole.
-    for k in 0..6 {
-        let a = -15.0 + k as f32 * 5.6;
+    // Seven bays nose-in to the parapet, each line cut in three so no triangle is long enough to
+    // reach behind the title camera and be dropped whole.
+    let (ua, ul) = ((sa - na) / parapet_len, (sl - nl) / parapet_len); // along the parapet
+    let (va, vl) = (-core::f32::consts::FRAC_1_SQRT_2, -core::f32::consts::FRAC_1_SQRT_2); // inward
+    let (ma, ml) = ((na + sa) * 0.5, (nl + sl) * 0.5);
+    for i in 0..8 {
+        let o = (i as f32 - 3.5) * 2.6;
         for seg in 0..3 {
-            let (l0, l1) = (8.6 + seg as f32 * 1.8, 8.6 + (seg + 1) as f32 * 1.8);
-            let p = |da: f32, l: f32| {
-                let q = at(a + da, l);
-                Vec3::new(q.x, q.y + 0.03, q.z)
+            let (d0, d1) = (0.6 + seg as f32 * 1.75, 0.6 + (seg + 1) as f32 * 1.75);
+            let p = |d: f32, side: f32| {
+                let q = at(ma + ua * (o + side) + va * d, ml + ul * (o + side) + vl * d);
+                lift(q, 0.03)
             };
-            w += mesh::build_quad(&mut out[w..], p(-0.06, l0), p(0.06, l0), p(0.06, l1), p(-0.06, l1), rgb(0x8A, 0x86, 0x7C));
+            if w + 6 > out.len() {
+                return w;
+            }
+            w += mesh::build_quad(&mut out[w..], p(d0, -0.06), p(d0, 0.06), p(d1, 0.06), p(d1, -0.06), rgb(0x8A, 0x86, 0x7C));
         }
     }
 
-    // Two vending machines, red and white, and the crate of empties beside them: the lay-by's own
-    // light, cold against the sodium lamp. Each front is lit, with rows of cans behind the glass.
-    for (along, body, glass) in [
-        (-7.0f32, rgb(0xC0, 0x2E, 0x2A), rgb(0xFF, 0xEC, 0xBE)),
-        (-8.45, rgb(0xC9, 0xD2, 0xDC), rgb(0xDF, 0xEA, 0xFF)),
+    // Two vending machines, red and white, against the top end wall with their lit fronts facing
+    // down into the car park, and the crate of empties beside them.
+    for (lateral, body, glass) in [
+        (CARPARK_VEND_LATERAL, rgb(0xC0, 0x2E, 0x2A), rgb(0xFF, 0xEC, 0xBE)),
+        (CARPARK_VEND_LATERAL + 1.45, rgb(0xC9, 0xD2, 0xDC), rgb(0xDF, 0xEA, 0xFF)),
     ] {
-        let v = at(along, 15.6);
+        let along = s0 + CARPARK_VEND_ALONG;
+        let v = at(along, lateral);
+        if w + 36 * 3 + 6 * 12 > out.len() {
+            return w;
+        }
+        // Road frame is square to the world here: along runs in z and lateral in x.
         w += mesh::build_box(&mut out[w..], 1.3, 2.0, 0.85, v.x, v.y + 1.0, v.z, body);
-        // The lit front panel faces the road, which is the side the camera orbits.
-        let f = at(along, 15.2);
+        let f = at(along + 0.45, lateral);
         w += mesh::build_box(&mut out[w..], 1.05, 1.35, 0.1, f.x, v.y + 1.25, f.z, glass);
         w += mesh::build_box(&mut out[w..], 1.05, 0.3, 0.12, f.x, v.y + 0.42, f.z, rgb(0x2A, 0x2A, 0x2E));
         const CANS: [u32; 5] = [
@@ -836,41 +797,69 @@ fn build_bay_props(track: &Track, out: &mut [Vertex]) -> usize {
         ];
         for row in 0..3 {
             for col in 0..4 {
-                let da = -0.39 + col as f32 * 0.26;
+                let dl = -0.39 + col as f32 * 0.26;
                 let y = v.y + 1.55 - row as f32 * 0.32;
                 let q = |d: f32, h: f32| {
-                    let p = at(along + da + d, 15.13);
+                    let p = at(along + 0.52, lateral + dl + d);
                     Vec3::new(p.x, y + h, p.z)
                 };
-                let c = CANS[(row * 4 + col + (along < -8.0) as usize * 2) % CANS.len()];
+                let c = CANS[(row * 4 + col + (lateral > CARPARK_VEND_LATERAL) as usize * 2) % CANS.len()];
                 w += mesh::build_quad(&mut out[w..], q(-0.08, -0.12), q(0.08, -0.12), q(0.08, 0.12), q(-0.08, 0.12), c);
             }
         }
     }
-    let c = at(-10.0, 15.4);
+    let c = at(s0 + CARPARK_VEND_ALONG, CARPARK_VEND_LATERAL - 1.2);
     w += mesh::build_box(&mut out[w..], 0.6, 0.5, 0.42, c.x, c.y + 0.25, c.z, rgb(0x2C, 0x3A, 0x30));
 
-    // A bench beside them, facing the view.
-    let b = at(-3.6, 16.6);
+    // A bench near the top of the parapet, looking out.
+    let b = at(na + 4.0 + va * 2.5, nl - 4.0 + vl * 2.5);
     w += mesh::build_box(&mut out[w..], 1.6, 0.08, 0.45, b.x, b.y + 0.45, b.z, rgb(0x6A, 0x52, 0x38));
     w += mesh::build_box(&mut out[w..], 1.6, 0.4, 0.06, b.x, b.y + 0.75, b.z, rgb(0x5E, 0x48, 0x30));
     w += mesh::build_box(&mut out[w..], 0.08, 0.45, 0.4, b.x - 0.7, b.y + 0.22, b.z, rgb(0x2A, 0x2D, 0x31));
     w += mesh::build_box(&mut out[w..], 0.08, 0.45, 0.4, b.x + 0.7, b.y + 0.22, b.z, rgb(0x2A, 0x2D, 0x31));
 
-    // A route sign at the far end.
-    let s = at(13.0, 16.4);
-    w += mesh::build_box(&mut out[w..], 0.14, 2.2, 0.14, s.x, s.y + 1.1, s.z, rgb(0x3A, 0x3E, 0x44));
-    w += mesh::build_box(&mut out[w..], 2.0, 0.62, 0.1, s.x, s.y + 2.25, s.z, rgb(0x1C, 0x3A, 0x2C));
-    w += mesh::build_box(&mut out[w..], 1.7, 0.14, 0.12, s.x, s.y + 2.34, s.z, rgb(0xD8, 0xDE, 0xE4));
-
-    // The lamp over the apron, its head reaching out towards the road.
-    let l = at(12.0, 7.6);
+    // The lamp behind the bays, its head reaching out over them.
+    let (la, ll) = carpark_lamp(track);
+    let l = at(la, ll);
     w += mesh::build_box(&mut out[w..], 0.26, 7.4, 0.26, l.x, l.y + 3.7, l.z, LAMP_POLE);
-    let h = at(12.0, 9.8);
-    w += mesh::build_box(&mut out[w..], 2.2, 0.16, 0.16, (l.x + h.x) * 0.5, l.y + 7.3, (l.z + h.z) * 0.5, LAMP_POLE);
-    w += mesh::build_box(&mut out[w..], 0.5, 0.2, 0.9, h.x, l.y + 7.15, h.z, LAMP_HEAD);
+    let h = at(la + 1.6, ll + 1.6);
+    w += mesh::build_box(&mut out[w..], 1.2, 0.16, 1.2, (l.x + h.x) * 0.5, l.y + 7.3, (l.z + h.z) * 0.5, LAMP_POLE);
+    w += mesh::build_box(&mut out[w..], 0.7, 0.2, 0.7, h.x, l.y + 7.15, h.z, LAMP_HEAD);
 
     w
+}
+
+/// Where the vending machines stand, relative to the start of the car park and out from the road.
+const CARPARK_VEND_ALONG: f32 = 4.2;
+const CARPARK_VEND_LATERAL: f32 = 15.0;
+
+/// The car park lamp's foot, as `(along, lateral)`: 8 m back from the middle of the parapet.
+fn carpark_lamp(track: &Track) -> (f32, f32) {
+    let ((na, nl), (sa, sl)) = angle_zero::track::carpark_parapet(track);
+    let k = 8.0 * core::f32::consts::FRAC_1_SQRT_2;
+    ((na + sa) * 0.5 - k - 3.0, (nl + sl) * 0.5 - k + 3.0)
+}
+
+/// The car park's mesh: its paving, walls and dressing. Its own buffer rather than a prop chunk's,
+/// because it is several times the size of any other chunk's props.
+const CARPARK_VERTS: usize = 9000;
+static mut CARPARK_MESH: psp::Align16<[Vertex; CARPARK_VERTS]> = psp::Align16([Vertex::ZERO; CARPARK_VERTS]);
+static mut CARPARK_CHUNK: Chunk = Chunk { start: 0, count: 0, center: Vec3::ZERO, radius: 0.0 };
+
+unsafe fn build_carpark(track: &Track) {
+    let out = &mut (*(&raw mut CARPARK_MESH)).0;
+    let n = build_carpark_props(track, out);
+    let (mut lo, mut hi) = (Vec3::new(f32::MAX, f32::MAX, f32::MAX), Vec3::new(f32::MIN, f32::MIN, f32::MIN));
+    for v in &out[..n] {
+        lo = Vec3::new(fmin(lo.x, v.x), fmin(lo.y, v.y), fmin(lo.z, v.z));
+        hi = Vec3::new(fmax(hi.x, v.x), fmax(hi.y, v.y), fmax(hi.z, v.z));
+    }
+    let center = lo.add(hi).scale(0.5);
+    let mut radius = 0.0f32;
+    for v in &out[..n] {
+        radius = fmax(radius, Vec3::new(v.x, v.y, v.z).sub(center).length());
+    }
+    CARPARK_CHUNK = Chunk { start: 0, count: n as u32, center, radius };
 }
 
 /// Mountain ring. Thirty four-sided cones ringing the track, drawn without fog as a
@@ -1471,6 +1460,18 @@ pub fn draw_world(camera: &Camera) {
                 chunk.count as i32,
                 core::ptr::null(),
                 prop_verts.add(chunk.start as usize) as *const c_void,
+            );
+        }
+        // The summit car park.
+        let carpark = &*(&raw const CARPARK_CHUNK);
+        if carpark.count > 0 && visible(carpark, eye, forward) {
+            tally(5, carpark.count);
+            sys::sceGumDrawArray(
+                GuPrimitive::Triangles,
+                VERTEX_FORMAT,
+                carpark.count as i32,
+                core::ptr::null(),
+                &raw const CARPARK_MESH as *const c_void,
             );
         }
         // Cut banks on the inside of the bends.
@@ -2109,13 +2110,13 @@ unsafe fn push_bay_pool(
     rings: usize,
     color: u32,
 ) {
-    use angle_zero::track::bay_surface;
+    use angle_zero::track::carpark_surface;
     let alpha = color >> 24;
     let rgb = color & 0x00ff_ffff;
     let point = |ring: usize, k: usize| {
         let a = (k % BAY_POOL_SEGMENTS) as f32 / BAY_POOL_SEGMENTS as f32 * TAU;
         let r = radius * ring as f32 / rings as f32;
-        let p = bay_surface(track, along + cos(a) * r, lateral + sin(a) * r);
+        let p = carpark_surface(track, along + cos(a) * r, lateral + sin(a) * r);
         let fade = alpha * (rings - ring) as u32 / rings as u32;
         Vertex::new(p.x, p.y + lift, p.z, rgb | fade << 24)
     };
@@ -2409,7 +2410,26 @@ pub fn draw_light_beams(vehicle: &Vehicle, track: &Track, braking: bool) {
             let under_car =
                 track.nodes[where_on_the_road.nearest(track, pose.at[0], pose.at[2]).index].p.y;
             for def in car.lights() {
-                if let Some(beam) = lights::beam(&def, &pose, &signals, metres) {
+                if let Some(mut beam) = lights::beam(&def, &pose, &signals, metres) {
+                    // A beam lies on the ground it lands on, so it ends where the ground does: at
+                    // the rail, or the car park's parapet. Past it there is only the drop, and a
+                    // patch carried on over that hangs in the air — which on the title screen, with
+                    // the car nose-in at the parapet, was a slab of light floating over the valley.
+                    let (s, c) = (sin(beam.yaw), cos(beam.yaw));
+                    let mut d = beam.near;
+                    while d < beam.far {
+                        let q = where_on_the_road.nearest(track, beam.at[0] + d * s, beam.at[2] + d * c);
+                        let limit = if q.lat * CARPARK_SIDE > 0.0 {
+                            angle_zero::track::carpark_limit(track, q.index)
+                        } else {
+                            angle_zero::track::RAIL_LIMIT
+                        };
+                        if q.lat.abs() > limit + 0.3 {
+                            beam.far = d.max(beam.near + 0.5);
+                            break;
+                        }
+                        d += 1.5;
+                    }
                     STATS.beams = STATS.beams.saturating_add(1);
                     lights::push_beam(out, &mut w, &beam, |x, z| {
                         let road = track.nodes[where_on_the_road.nearest(track, x, z).index].p.y;

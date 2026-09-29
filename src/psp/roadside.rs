@@ -10,7 +10,7 @@ use angle_zero::camera::Camera;
 use angle_zero::math::{cos, sin, sqrt, Vec3, TAU};
 use angle_zero::mesh::{self, Chunk, Vertex};
 use angle_zero::scenery::{self, Sign, SignKind, REFLECT_FAR};
-use angle_zero::track::{node_at_arclength, Track, BAY_FROM, BAY_SIDE, BAY_TO, RAIL_LIMIT};
+use angle_zero::track::{node_at_arclength, Track, CARPARK_SIDE, RAIL_LIMIT};
 use angle_zero::vehicle::Vehicle;
 use psp::sys::{self, GuPrimitive, GuState, MatrixMode, VertexType};
 
@@ -51,12 +51,13 @@ static mut SIGN_MESH: psp::Align16<[Vertex; SIGN_VERTS]> = psp::Align16([Vertex:
 static mut SIGN_CHUNKS: [Chunk; mesh::CHUNK_COUNT] =
     [Chunk { start: 0, count: 0, center: Vec3::ZERO, radius: 0.0 }; mesh::CHUNK_COUNT];
 
-/// Where the rail is left out for the lay-by, set at `init`: the posts and reflectors go with it.
-static mut OPEN: (usize, usize) = (BAY_FROM, BAY_TO);
+/// Where the rail is left out beside the car park, set at `init`: the posts and reflectors go
+/// with it.
+static mut OPEN: (usize, usize) = (usize::MAX, 0);
 
 fn rail_gap(node: usize, side: f32) -> bool {
     let (from, to) = unsafe { OPEN };
-    side * BAY_SIDE > 0.0 && node >= from && node <= to
+    side * CARPARK_SIDE > 0.0 && node >= from && node <= to
 }
 
 /// Bounds of a run of vertices as a culling sphere.
@@ -244,7 +245,7 @@ unsafe fn build_signs(track: &Track) {
 }
 
 pub unsafe fn init(track: &Track) {
-    OPEN = angle_zero::track::bay_open_nodes(track);
+    OPEN = angle_zero::track::carpark_open_nodes(track);
     build_ring();
     build_posts(track);
     build_signs(track);
