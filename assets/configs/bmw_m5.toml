@@ -4,8 +4,9 @@ source = "2025_bmw_m5_sedan.glb"
 
 scale = 100.0
 # 3,000 over the fleet's 24,000 pays for the tread slabs kept near whole (see [materials]); at
-# 24,000 the same weights took it out of the cabin (8.7% -> 22% error) and the rims.
-triangles = 27000
+# 24,000 the same weights took it out of the cabin (8.7% -> 22% error) and the rims. 2,000 more pay
+# for the rims' `chrome` weight below without taking it out of the cabin again.
+triangles = 29000
 lods = [3000, 1200]
 
 
@@ -19,6 +20,12 @@ interior = 2.0
 # The tyre is the 25 tread slabs plus two sidewall rings: weighted up so the slabs stay near
 # their 36 triangles each; the sidewalls, which are smooth, are weighted back down.
 tyre = 2.0
+# The rims. Once the spoke face moved out of `tyre` (see [materials]) each rim's chrome was cut from
+# 1,140 to 733 triangles (15% of its size lost), and rendered alone every rim showed background
+# slivers where the spoke tips meet the lip. 1.6 gives them about 1,190, which closes most of them;
+# `trim` keeps the body's own chrome at the default 1.0, so only the wheels take the weight.
+chrome = 1.6
+trim = 1.0
 
 [reduce.parts]
 # Every badge on the car is one 1,089-triangle part. At its pixel share the rear roundel came out a

@@ -28,6 +28,11 @@ interior = 2.0
 # used to be `chrome = 3`, `tyre = 3` and `wheel = 4 / 3`, which came to the same weights on the
 # rims and tyres but also cut the wheels' `window` centre caps to a third (40 -> 24 triangles).
 trim = 3.0
+# Rims and tyres, over the default 4. The lamps at 12 (below) and the tripled trim took their
+# triangles out of everything else, rims included: each rim's chrome fell from 947 to 880 and the
+# white lip, rendered alone, bulged unevenly over the tyre with a lobe at lower-left on RR. At 4.6
+# the rims get 975 and the tyres 240 (from 218), and the lip is round again as it was originally.
+wheel = 4.6
 # Lamps: the chrome rings round the headlamps and the reflector dishes behind them. At the default
 # the rings fell to 14 triangles and cut across the inner lamps as a star; at 12 the whole 804 of
 # the lamps costs about 570 more triangles and is kept nearly whole (the reflector at 128 of 128,
