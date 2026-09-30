@@ -252,7 +252,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     for w in &atlas.warnings {
         report.warn(w.clone());
     }
-    report.note_texture(atlas.textured, model.images.len(), &atlas.resized);
+    report.note_texture(atlas.textured, model.images.len(), &atlas.resized, atlas.packed.grid);
 
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut dropped_by_name = 0usize;
@@ -306,7 +306,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         // multiplied a tile. See `MaterialRules::palette`: an atlas cannot hold a swatch one texel
         // wide, and every attempt to make it either picked a neighbour or blended two.
         let palette = atlas.palettes.get(&part.material);
-        let tile = atlas.tiles[part.material];
+        let tile = atlas.working.tiles[part.material];
 
         let slot = match buckets.iter().position(|b| b.key() == (wheel, category)) {
             Some(at) => at,
@@ -485,7 +485,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     let mut welded_away = 0;
     for b in &mut buckets {
         for p in &mut b.pieces {
-            welded_away += simplify::weld(&mut p.vertices, &mut p.attrs, &mut p.indices, atlas.span);
+            welded_away += simplify::weld(&mut p.vertices, &mut p.attrs, &mut p.indices, atlas.working.span);
         }
     }
     report.note_welding(welded_away);
@@ -503,7 +503,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Kept always now rather than only for the levels: the refill pass re-simplifies from it too.
     let welded = buckets.clone();
 
-    spend_and_refill(&mut buckets, &welded, budget, atlas.span, Some(&mut report));
+    spend_and_refill(&mut buckets, &welded, budget, atlas.working.span, Some(&mut report));
     if buckets.is_empty() {
         return Err("the triangle budget left nothing to draw".into());
     }
@@ -525,7 +525,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         .collect();
     let white = white_texel(&atlas);
     let flat = white.map(|white| simplify::FlatTexel {
-        pixels: &atlas.pixels,
+        pixels: &atlas.working.pixels,
         size: texture::ATLAS,
         white,
     });
@@ -573,11 +573,11 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                     }
                 }
                 coarse.retain(|b| !b.pieces.is_empty());
-                spend_coarse(&mut coarse, lod_budget.saturating_sub(cost), atlas.span, pixel, flat.as_ref());
+                spend_coarse(&mut coarse, lod_budget.saturating_sub(cost), atlas.working.span, pixel, flat.as_ref());
                 finish_level(&mut wheels);
                 coarse.extend(wheels);
             }
-            _ => spend_coarse(&mut coarse, lod_budget, atlas.span, pixel, flat.as_ref()),
+            _ => spend_coarse(&mut coarse, lod_budget, atlas.working.span, pixel, flat.as_ref()),
         }
         if coarse.is_empty() {
             report.warn(format!(
@@ -858,7 +858,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     Ok(Compiled {
         bytes,
         report,
-        atlas: atlas.pixels,
+        atlas: atlas.packed.pixels,
     })
 }
 
@@ -1629,7 +1629,10 @@ fn write(
     let vertices_at = pad(&mut out);
     for (i, v) in vertices.iter().enumerate() {
         // Texture, then colour, then position: the order the GE reads a vertex in, not a choice.
-        let uv = uvs.get(i).copied().unwrap_or([0.0, 0.0]);
+        // Carried from the per-material layout everything upstream was built in to the packed one
+        // the texture section holds, here and nowhere earlier: nothing after this line looks at a
+        // coordinate to decide anything about the mesh. See `texture::Atlas::build`.
+        let uv = atlas.remap(uvs.get(i).copied().unwrap_or([0.0, 0.0]));
         out.extend_from_slice(&uv[0].to_le_bytes());
         out.extend_from_slice(&uv[1].to_le_bytes());
         out.extend_from_slice(&v.color.to_le_bytes());
@@ -2256,7 +2259,7 @@ fn atlas_texel(atlas: &texture::Atlas, uv: [f32; 2]) -> [f32; 4] {
     let x = ((uv[0] * n as f32) as usize).min(n - 1);
     let y = ((uv[1] * n as f32) as usize).min(n - 1);
     let at = (y * n + x) * 4;
-    let p = &atlas.pixels[at..at + 4];
+    let p = &atlas.working.pixels[at..at + 4];
     [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0]
 }
 
@@ -2265,7 +2268,7 @@ fn atlas_texel(atlas: &texture::Atlas, uv: [f32; 2]) -> [f32; 4] {
 /// a car whose every material is textured has none, and keeps its decimated wheels.
 fn white_texel(atlas: &texture::Atlas) -> Option<[f32; 2]> {
     let n = texture::ATLAS;
-    let white = |x: usize, y: usize| atlas.pixels[(y * n + x) * 4..(y * n + x) * 4 + 4] == [255, 255, 255, 255];
+    let white = |x: usize, y: usize| atlas.working.pixels[(y * n + x) * 4..(y * n + x) * 4 + 4] == [255, 255, 255, 255];
     for y in 2..n - 2 {
         for x in 2..n - 2 {
             if (y - 2..=y + 2).all(|yy| (x - 2..=x + 2).all(|xx| white(xx, yy))) {
@@ -2628,11 +2631,11 @@ mod tests {
         // Rebuilt from the same materials, so the same tiles: `compile` moves geometry about but
         // never touches the material list.
         let atlas = crate::texture::Atlas::build(&model, &config.materials);
-        assert!(atlas.tiles.len() >= 2, "the test car needs several materials");
+        assert!(atlas.packed.tiles.len() >= 2, "the test car needs several materials");
 
         let mut used = std::collections::HashSet::new();
         for v in car.vertices() {
-            let inside = atlas.tiles.iter().position(|t| {
+            let inside = atlas.packed.tiles.iter().position(|t| {
                 v.u >= t.u0 - 1e-6
                     && v.u <= t.u1 + 1e-6
                     && v.v >= t.v0 - 1e-6

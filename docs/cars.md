@@ -363,9 +363,17 @@ each car its silhouette fails to cover. Cars compiled before silhouettes existed
 
 ### Texture atlas
 
-One 256 × 256 texture per car. The grid has one tile per source image plus one shared tile holding
-a texel per flat colour, and is the smallest square that fits. Each tile has a one-texel gutter so
-the car can be sampled bilinearly.
+One 256 × 256 texture per car. The grid has one tile per source image, shared by every material
+that samples it, plus one shared tile holding a texel per flat colour, and is the smallest square
+that fits. Each tile has a one-texel gutter so the car can be sampled bilinearly. The report line
+says how many tiles and how wide the grid is.
+
+- The geometry is built against a second, per-material layout (one tile per textured material,
+  as the packer used to lay it out), and UVs are moved into the shipped layout only as the file is
+  written. The weld and the simplifier read the UVs, and building in the shared layout changed
+  which triangles survive on every car with a shared image, so packing never changes geometry.
+- A material named `flat` or `palette` gives up its use of an image; another material over the
+  same image keeps the tile.
 
 - Untextured materials sample white, so vertex colour alone determines their appearance.
 - UVs outside [0, 1] are clamped.

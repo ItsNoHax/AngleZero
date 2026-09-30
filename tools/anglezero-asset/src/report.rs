@@ -64,6 +64,9 @@ pub struct Report {
     pub textured_materials: usize,
     /// Source images that had to be resized into their tile, as (name, from, to).
     pub resized: Vec<(String, (u32, u32), (u32, u32))>,
+    /// The shipped atlas's grid, as (tiles used, tiles across): one per image plus the flat
+    /// colours' shared tile.
+    pub atlas_grid: (usize, usize),
     /// Every lamp the car carries, and how each one was arrived at.
     pub lights: Vec<(angle_zero::azcar::LightDef, &'static str, &'static str)>,
     /// What the car will drive like, after the config's defaults have been filled in.
@@ -102,6 +105,7 @@ impl Report {
             rejoined: (0, 0),
             textured_materials: 0,
             resized: Vec::new(),
+            atlas_grid: (0, 0),
             lights: Vec::new(),
             handling: angle_zero::vehicle::CarHandling::DEFAULT,
             bounds: Bounds::EMPTY,
@@ -223,7 +227,9 @@ impl Report {
         textured: usize,
         images: usize,
         resized: &[(String, (u32, u32), (u32, u32))],
+        grid: (usize, usize),
     ) {
+        self.atlas_grid = grid;
         self.textured_materials = textured;
         self.source_textures = images;
         self.resized = resized.to_vec();
@@ -472,18 +478,22 @@ impl Report {
         }
         println!();
 
-        // Distinct names, because `resized` has an entry per material and several materials can
-        // share one image — the E39's six textured materials are four images, and counting the
-        // entries had it reporting "6 of 4 source images used".
+        // Distinct names. `resized` has an entry per slot, and a slot is an image now, but two
+        // source images can still carry one name; the E39's six textured materials are four images,
+        // and counting per material had it reporting "6 of 4 source images used".
         let used: std::collections::HashSet<&str> =
             self.resized.iter().map(|(n, _, _)| n.as_str()).collect();
         println!(
-            "Texture: one {}x{} atlas, {} of {} source images used, {} materials textured",
+            "Texture: one {}x{} atlas, {} of {} source images used, {} materials textured, \
+             {} tiles on a {}x{} grid",
             crate::texture::ATLAS,
             crate::texture::ATLAS,
             used.len(),
             self.source_textures,
             self.textured_materials,
+            self.atlas_grid.0,
+            self.atlas_grid.1,
+            self.atlas_grid.1,
         );
         if let Some((name, from, to)) = self.resized.iter().max_by_key(|(_, f, _)| f.0 * f.1) {
             // The tile size comes from the entry rather than being recomputed: the grid is sized by

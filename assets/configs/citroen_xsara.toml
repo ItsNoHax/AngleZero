@@ -18,9 +18,11 @@ match = ["Ani_Wheel", "Ani_Disc", "Ani_Tyre", "SK_Rim"]
 
 [materials]
 # Four cabin materials share one label sheet and point only at its strip of colour swatches along
-# the top (V < 0.035 for 97.5-100% of their vertices). As palettes they are looked up exactly and
-# stop taking four atlas tiles of the same image, which takes the grid from 5x5 to 4x4 and gives
-# the livery 62 texels a side instead of 49.
+# the top (V < 0.035 for 97.5-100% of their vertices). As palettes they are looked up exactly.
+# They were first made palettes to stop them taking four atlas tiles of one image; the packer now
+# gives an image one tile however many materials sample it, so that no longer applies, but without
+# them the cabin swatches are sampled from a 62-texel tile and the cabin came out a grey smear with
+# the interior lost behind the side glass. Keep them.
 palette = ["Cabin1", "Cabin_Suede_A1", "Cabin_Leather_A1", "Cabin_Plastic_A1"]
 # The tailgate's parts are all nodes named `SK_Trunk_101_MI_Glass_00N`, whatever they wear, and
 # "glass" in the node name put the painted panel (`_006`, MI_Exhaust_008), its livery (`_007`) and

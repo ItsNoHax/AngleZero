@@ -1,10 +1,10 @@
-//! One texture per car, built by packing every material into a grid.
+//! One texture per car, built by packing every image the materials sample into a grid.
 //!
 //! The runtime has six materials, not fifty-seven: parts are merged by category, so a draw call
 //! covers the paint and the badges on it at once. That rules out one texture per material, and it
-//! is why this packs instead — every source material gets a tile in a single image, the vertices'
-//! UVs are rewritten into that tile at compile time, and the console binds one texture for the
-//! whole car and never switches.
+//! is why this packs instead — every source image gets a tile in a single image, shared by every
+//! material that samples it, the vertices' UVs are rewritten into that tile at compile time, and
+//! the console binds one texture for the whole car and never switches.
 //!
 //! Materials with no image get a tile too, filled with white. That is what makes the rest simple:
 //! every vertex has a valid UV and the renderer needs no branch for the untextured case, while a
@@ -137,19 +137,12 @@ pub fn unit_shift(uvs: &[[f32; 2]]) -> [f32; 2] {
     shift
 }
 
-pub struct Atlas {
-    /// RGBA8, `ATLAS` × `ATLAS`. Converted to a PSP pixel format by the writer.
+/// One arrangement of the materials' pictures in a 256×256 image.
+pub struct Layout {
+    /// RGBA8, `ATLAS` × `ATLAS`.
     pub pixels: Vec<u8>,
     /// One per source material, indexed the same way.
     pub tiles: Vec<Tile>,
-    /// How many materials brought a real image rather than a flat colour.
-    pub textured: usize,
-    /// Source images that were resized, as (name, from, to), for the report.
-    pub resized: Vec<(String, (u32, u32), (u32, u32))>,
-    /// The full-resolution image of every material the config called a palette, kept rather than
-    /// packed: the compiler samples these per vertex and bakes the result into the vertex colour.
-    /// Indexed by source material.
-    pub palettes: HashMap<usize, Decoded>,
     /// How much of the atlas one tile's content spans, as a fraction — 83 texels of 256 is 0.324.
     ///
     /// The simplifier needs it. UVs are rewritten into tile space before decimation, so a tile
@@ -158,26 +151,72 @@ pub struct Atlas {
     /// it. Dividing by this puts the question back in the source's own UV space, where it belongs
     /// and where the packer cannot reach it. See `simplify::UV_WEIGHT`.
     pub span: f32,
+    /// The tile every flat colour has a texel in, as its top-left pixel and its side, if there are
+    /// any flat colours.
+    shared: Option<(usize, usize, usize)>,
+    /// Source images that were resized, as (name, from, to), once per slot.
+    resized: Vec<(String, (u32, u32), (u32, u32))>,
+    /// Set when the grid came out too fine to be worth packing, and the layout was left blank.
+    skipped: bool,
+    /// Tiles used and tiles across, for the report.
+    pub grid: (usize, usize),
+}
+
+/// What a tile is given to: every material its own, or every image.
+#[derive(Clone, Copy, PartialEq)]
+enum SlotPer {
+    Material,
+    Image,
+}
+
+pub struct Atlas {
+    /// What the car ships with and the console samples: one tile per source image, shared by every
+    /// material that draws it. See `Atlas::build` for why there are two layouts.
+    pub packed: Layout,
+    /// What the geometry is built against: one tile per textured material, as the atlas was before
+    /// images were shared. Every UV the weld, the simplifier and the coarse levels see is in this
+    /// layout, and `remap` carries each one into `packed` as the file is written.
+    pub working: Layout,
+    /// How many materials brought a real image rather than a flat colour.
+    pub textured: usize,
+    /// Source images that were resized for the packed atlas, as (name, from, to), for the report.
+    pub resized: Vec<(String, (u32, u32), (u32, u32))>,
+    /// The full-resolution image of every material the config called a palette, kept rather than
+    /// packed: the compiler samples these per vertex and bakes the result into the vertex colour.
+    /// Indexed by source material.
+    pub palettes: HashMap<usize, Decoded>,
     pub warnings: Vec<String>,
 }
 
 impl Atlas {
-    /// Packs every material in the model into one image.
+    /// Packs every material in the model into one image — twice.
+    ///
+    /// The atlas that ships gives a tile to each source *image*, not to each material, because a
+    /// tile holds nothing but its image: scaled, and ringed with a copy of its own edge. The
+    /// material's colour is not in it (glTF's factor is baked into the vertex with the light term),
+    /// a flat or palette material never had a tile at all, and the gutter is the image's own edge,
+    /// so two materials over one picture were given two identical tiles. The Xsara's five `Cabin_*`
+    /// materials sample one label sheet and took five slots of eighteen, which made the grid 5×5
+    /// and its 1024 px livery 49 texels a side. The E39's six textured materials are four images,
+    /// the 190E's sixty are forty-three. Shared, an image costs one slot however many materials
+    /// draw it, and every other image gets the room back.
+    ///
+    /// The geometry is not built against that layout, though, and that is deliberate. The weld
+    /// keys vertices by their atlas UV, so two tiles are what kept two materials of the same colour
+    /// from welding into each other along a seam; and the weld's rounding and the simplifier's
+    /// quadrics are computed on the atlas coordinates themselves, so moving a tile moves which
+    /// collapses win. Built against the shared layout, the nine cars that have materials in common
+    /// kept a different set of triangles at every level, from 16 fewer on the E39's LOD0 to 123
+    /// fewer on the 190E's LOD1 — a texture change reaching into bodywork that had been judged by
+    /// eye and signed off. So the per-material layout is still built, as `working`, and everything
+    /// up to the writer works in it exactly as before; `remap` moves each finished coordinate to
+    /// the same point of the same picture in `packed`. The geometry is the same to the bit, and
+    /// only the texture and the coordinates into it change.
     ///
     /// Images are decoded here and nowhere else — this is the only stage that needs the pixels,
     /// and on the E36 it is eighteen embedded PNGs against a report that otherwise costs 28 ms.
     pub fn build(model: &SourceModel, rules: &crate::config::MaterialRules) -> Atlas {
-        let mut atlas = Atlas {
-            pixels: vec![0; ATLAS * ATLAS * 4],
-            tiles: vec![Tile::default(); model.materials.len()],
-            textured: 0,
-            resized: Vec::new(),
-            palettes: HashMap::new(),
-            // Replaced below once the grid is known; the value only matters to a car that has a
-            // grid at all, and the early return below leaves every tile degenerate anyway.
-            span: 1.0,
-            warnings: Vec::new(),
-        };
+        let mut warnings = Vec::new();
 
         // Decoding comes before the layout, not during it, because the grid is sized by how many
         // materials actually arrive with a usable image and a texture that will not decode falls
@@ -192,104 +231,44 @@ impl Atlas {
                 Some(img) if !rules.is_flat(&material.name) => {
                     decoded
                         .entry(img)
-                        .or_insert_with(|| decode(model, img, &mut atlas.warnings));
+                        .or_insert_with(|| decode(model, img, &mut warnings));
                 }
                 _ => {}
             }
         }
         // Asked again per material rather than read off `decoded`, because two materials can share
-        // one image and only one of them be called flat — or a palette.
-        let untiled = |material: &crate::model::Material| {
-            rules.is_flat(&material.name) || rules.is_palette(&material.name)
-        };
-        let image_for = |material: &crate::model::Material| -> Option<&Decoded> {
-            if untiled(material) {
-                return None;
-            }
-            material.image.and_then(|img| decoded[&img].as_ref())
-        };
+        // one image and only one of them be called flat — or a palette. That one samples white like
+        // any flat colour, and the image stays in the grid for the other.
+        let images: Vec<Option<(usize, &Decoded)>> = model
+            .materials
+            .iter()
+            .map(|material| {
+                if rules.is_flat(&material.name) || rules.is_palette(&material.name) {
+                    return None;
+                }
+                let img = material.image?;
+                decoded[&img].as_ref().map(|d| (img, d))
+            })
+            .collect();
 
-        let textured = model.materials.iter().filter(|m| image_for(m).is_some()).count();
-        let flat = model.materials.len() - textured;
-        // One slot per image, and one more shared by every flat colour if there are any.
-        let slots = textured + usize::from(flat > 0);
-        let across = tiles_across(slots);
-        let tile = (ATLAS / across).max(1);
-        // What is left of a tile once the gutter has its ring, and the only part any UV addresses.
-        let content = tile.saturating_sub(2 * GUTTER);
-        if tile < 4 {
-            atlas.warnings.push(format!(
-                "{textured} textured materials do not fit an atlas of {ATLAS}px at a usable tile \
-                 size; textures were skipped"
+        let working = lay_out(&images, SlotPer::Material);
+        let packed = lay_out(&images, SlotPer::Image);
+        if packed.skipped {
+            warnings.push(format!(
+                "{} source images do not fit an atlas of {ATLAS}px at a usable tile size; \
+                 textures were skipped",
+                images.iter().flatten().map(|(img, _)| *img).collect::<std::collections::HashSet<_>>().len()
             ));
-            return atlas;
         }
 
-        atlas.span = content as f32 / ATLAS as f32;
-
-        // The flat colours' shared tile sits after the images, and is white throughout so that a
-        // coordinate landing anywhere in it still multiplies to no change.
-        let shared = slot_origin(textured, across, tile);
-        if flat > 0 {
-            fill_white(&mut atlas.pixels, shared.0, shared.1, tile);
-        }
-
-        let mut next_image = 0usize;
-        let mut next_flat = 0usize;
-        for (i, material) in model.materials.iter().enumerate() {
-            atlas.tiles[i] = match image_for(material) {
-                Some(image) => {
-                    let (x0, y0) = slot_origin(next_image, across, tile);
-                    next_image += 1;
-                    atlas.textured += 1;
-                    if image.width as usize != content || image.height as usize != content {
-                        atlas.resized.push((
-                            image.name.clone(),
-                            (image.width, image.height),
-                            (content as u32, content as u32),
-                        ));
-                    }
-                    blit_scaled(&mut atlas.pixels, image, x0 + GUTTER, y0 + GUTTER, content);
-                    replicate_edges(&mut atlas.pixels, x0, y0, tile);
-
-                    // The content's outer edges, not the tile's: UV 0 and 1 are the outside of the
-                    // first and last content texel, so the image is addressable end to end, and
-                    // what a filter reaches for beyond them is the gutter, which is a copy of the
-                    // texel it is already standing on. Nothing sees the neighbouring material at
-                    // any filter setting.
-                    Tile {
-                        u0: (x0 + GUTTER) as f32 / ATLAS as f32,
-                        v0: (y0 + GUTTER) as f32 / ATLAS as f32,
-                        u1: (x0 + GUTTER + content) as f32 / ATLAS as f32,
-                        v1: (y0 + GUTTER + content) as f32 / ATLAS as f32,
-                    }
-                }
-                None => {
-                    // A texel, and a degenerate tile that maps every coordinate onto its centre.
-                    // That is not a loss of anything: the tile is white, so what the material draws
-                    // is the colour already in the vertex, and every point of a full tile of white
-                    // gave the same answer as its centre does. Keeping them distinct rather than
-                    // sharing one texel is what lets the compiler's check that each material
-                    // samples its own tile still mean something.
-                    //
-                    // Wrapping if a car somehow brings more flat materials than the shared tile has
-                    // texels — 900 at the smallest tile this can produce — costs nothing either,
-                    // for the same reason: they are all the same white.
-                    //
-                    // Inside the gutter like everything else. The whole tile is white so the ring
-                    // would be harmless, but a texel on the ring is a texel a filter blends with
-                    // the tile next door, and there is no reason to be the one exception.
-                    let n = next_flat % (content * content);
-                    next_flat += 1;
-                    let centre = |at: usize| (at as f32 + 0.5) / ATLAS as f32;
-                    let (u, v) = (
-                        centre(shared.0 + GUTTER + n % content),
-                        centre(shared.1 + GUTTER + n / content),
-                    );
-                    Tile { u0: u, v0: v, u1: u, v1: v }
-                }
-            };
-        }
+        let mut atlas = Atlas {
+            textured: images.iter().filter(|m| m.is_some()).count(),
+            resized: packed.resized.clone(),
+            packed,
+            working,
+            palettes: HashMap::new(),
+            warnings,
+        };
 
         // The palettes go out whole, for the compiler to sample per vertex. Keyed by material and
         // cloned rather than shared, because several materials can name the same image — on the
@@ -314,20 +293,195 @@ impl Atlas {
         atlas
     }
 
-    /// The atlas as 16-bit 5650, which is what the car is drawn with.
+    /// A coordinate in `working` moved to the same point of the same picture in `packed`.
+    ///
+    /// Every coordinate the pipeline produces lies in some material's working tile — `Tile::map`
+    /// put it there, the weld keeps one of the coordinates it merges, collapse moves a vertex onto
+    /// another — or else in the flat colours' white tile, where `white_texel` and the coarse levels'
+    /// baked triangles point. The first is carried by its position within the tile, the second
+    /// lands in the packed white tile, which is just as white. Anything else would be a bug
+    /// upstream; it is clamped into the nearest tile rather than sent somewhere arbitrary.
+    pub fn remap(&self, uv: [f32; 2]) -> [f32; 2] {
+        const EPS: f32 = 1.0e-6;
+        let (w, p) = (&self.working, &self.packed);
+        let scale = |a0: f32, a1: f32, b0: f32, b1: f32, x: f32| {
+            if a1 - a0 > EPS {
+                (b0 + (b1 - b0) * ((x - a0) / (a1 - a0))).clamp(b0, b1)
+            } else {
+                b0
+            }
+        };
+        let within = |t: &Tile| {
+            uv[0] >= t.u0 - EPS && uv[0] <= t.u1 + EPS && uv[1] >= t.v0 - EPS && uv[1] <= t.v1 + EPS
+        };
+        // A material's own texel or tile first, so a flat colour keeps a texel of its own.
+        if let Some(i) = w.tiles.iter().position(within) {
+            let (a, b) = (w.tiles[i], p.tiles[i]);
+            return [scale(a.u0, a.u1, b.u0, b.u1, uv[0]), scale(a.v0, a.v1, b.v0, b.v1, uv[1])];
+        }
+        if let (Some(a), Some(b)) = (w.shared, p.shared) {
+            let px = [uv[0] * ATLAS as f32, uv[1] * ATLAS as f32];
+            let (ax1, ay1) = ((a.0 + a.2) as f32, (a.1 + a.2) as f32);
+            if px[0] >= a.0 as f32 && px[0] <= ax1 && px[1] >= a.1 as f32 && px[1] <= ay1 {
+                let n = ATLAS as f32;
+                let inner = |o: usize, s: usize| ((o + GUTTER) as f32 / n, (o + s - GUTTER) as f32 / n);
+                let ((au0, au1), (av0, av1)) = (inner(a.0, a.2), inner(a.1, a.2));
+                let ((bu0, bu1), (bv0, bv1)) = (inner(b.0, b.2), inner(b.1, b.2));
+                return [
+                    scale(au0, au1, bu0, bu1, uv[0].clamp(au0, au1)),
+                    scale(av0, av1, bv0, bv1, uv[1].clamp(av0, av1)),
+                ];
+            }
+        }
+        let distance = |t: &Tile| {
+            let du = (t.u0 - uv[0]).max(uv[0] - t.u1).max(0.0);
+            let dv = (t.v0 - uv[1]).max(uv[1] - t.v1).max(0.0);
+            du * du + dv * dv
+        };
+        match (0..w.tiles.len()).min_by(|&a, &b| distance(&w.tiles[a]).total_cmp(&distance(&w.tiles[b]))) {
+            Some(i) => {
+                let (a, b) = (w.tiles[i], p.tiles[i]);
+                let (u, v) = (uv[0].clamp(a.u0, a.u1), uv[1].clamp(a.v0, a.v1));
+                [scale(a.u0, a.u1, b.u0, b.u1, u), scale(a.v0, a.v1, b.v0, b.v1, v)]
+            }
+            None => uv,
+        }
+    }
+
+    /// The packed atlas as 16-bit 5650, which is what the car is drawn with.
     ///
     /// No alpha: what blends on this car is decided per material by the renderer — glass and lamp
     /// glows have their alpha in the vertex colour — and 5650 spends every one of its sixteen bits
     /// on colour rather than five of them on a channel nothing reads.
     pub fn to_5650(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(ATLAS * ATLAS * 2);
-        for px in self.pixels.chunks_exact(4) {
+        for px in self.packed.pixels.chunks_exact(4) {
             let (r, g, b) = (px[0] as u16, px[1] as u16, px[2] as u16);
             let v = (r >> 3) | ((g >> 2) << 5) | ((b >> 3) << 11);
             out.extend_from_slice(&v.to_le_bytes());
         }
         out
     }
+}
+
+/// Lays the materials' images out on a grid, a slot per material or a slot per image.
+///
+/// `images` is per material: the image it samples and its decoded pixels, or `None` for a
+/// material that draws its vertex colour alone. Every tile that holds an image is the same size,
+/// and all the flat colours share one more, a texel each.
+fn lay_out(images: &[Option<(usize, &Decoded)>], per: SlotPer) -> Layout {
+    let mut out = Layout {
+        pixels: vec![0; ATLAS * ATLAS * 4],
+        tiles: vec![Tile::default(); images.len()],
+        // Replaced below once the grid is known; the value only matters to a car that has a grid
+        // at all, and the early return below leaves every tile degenerate anyway.
+        span: 1.0,
+        shared: None,
+        resized: Vec::new(),
+        skipped: false,
+        grid: (0, 0),
+    };
+    // What a slot is keyed by. In the per-material layout the material's own index, so no two
+    // materials ever share; in the packed one the image's, in the order materials first ask for it.
+    let key = |i: usize, img: usize| match per {
+        SlotPer::Material => i,
+        SlotPer::Image => img,
+    };
+    let mut slot_of: HashMap<usize, usize> = HashMap::new();
+    for (i, m) in images.iter().enumerate() {
+        if let Some((img, _)) = m {
+            let next = slot_of.len();
+            slot_of.entry(key(i, *img)).or_insert(next);
+        }
+    }
+    let textured = slot_of.len();
+    let flat = images.iter().filter(|m| m.is_none()).count();
+    // One slot per image, and one more shared by every flat colour if there are any.
+    let slots = textured + usize::from(flat > 0);
+    let across = tiles_across(slots);
+    let tile = (ATLAS / across).max(1);
+    // What is left of a tile once the gutter has its ring, and the only part any UV addresses.
+    let content = tile.saturating_sub(2 * GUTTER);
+    out.grid = (slots, across);
+    if tile < 4 {
+        out.skipped = true;
+        return out;
+    }
+
+    out.span = content as f32 / ATLAS as f32;
+
+    // The flat colours' shared tile sits after the images, and is white throughout so that a
+    // coordinate landing anywhere in it still multiplies to no change.
+    let shared = slot_origin(textured, across, tile);
+    if flat > 0 {
+        fill_white(&mut out.pixels, shared.0, shared.1, tile);
+        out.shared = Some((shared.0, shared.1, tile));
+    }
+
+    // Each slot is blitted once, by whichever material reaches it first, and every later material
+    // keyed to it is handed the same rectangle.
+    let mut placed: HashMap<usize, Tile> = HashMap::new();
+    let mut next_flat = 0usize;
+    for (i, m) in images.iter().enumerate() {
+        out.tiles[i] = match m {
+            Some((img, image)) => {
+                let k = key(i, *img);
+                if let Some(t) = placed.get(&k) {
+                    *t
+                } else {
+                    let (x0, y0) = slot_origin(slot_of[&k], across, tile);
+                    if image.width as usize != content || image.height as usize != content {
+                        out.resized.push((
+                            image.name.clone(),
+                            (image.width, image.height),
+                            (content as u32, content as u32),
+                        ));
+                    }
+                    blit_scaled(&mut out.pixels, image, x0 + GUTTER, y0 + GUTTER, content);
+                    replicate_edges(&mut out.pixels, x0, y0, tile);
+
+                    // The content's outer edges, not the tile's: UV 0 and 1 are the outside of the
+                    // first and last content texel, so the image is addressable end to end, and
+                    // what a filter reaches for beyond them is the gutter, which is a copy of the
+                    // texel it is already standing on. Nothing sees the neighbouring image at any
+                    // filter setting.
+                    let t = Tile {
+                        u0: (x0 + GUTTER) as f32 / ATLAS as f32,
+                        v0: (y0 + GUTTER) as f32 / ATLAS as f32,
+                        u1: (x0 + GUTTER + content) as f32 / ATLAS as f32,
+                        v1: (y0 + GUTTER + content) as f32 / ATLAS as f32,
+                    };
+                    placed.insert(k, t);
+                    t
+                }
+            }
+            None => {
+                // A texel, and a degenerate tile that maps every coordinate onto its centre. That
+                // is not a loss of anything: the tile is white, so what the material draws is the
+                // colour already in the vertex, and every point of a full tile of white gave the
+                // same answer as its centre does. Keeping them distinct rather than sharing one
+                // texel is what lets the compiler's check that each material samples its own tile
+                // still mean something.
+                //
+                // Wrapping if a car somehow brings more flat materials than the shared tile has
+                // texels — 900 at the smallest tile this can produce — costs nothing either, for
+                // the same reason: they are all the same white.
+                //
+                // Inside the gutter like everything else. The whole tile is white so the ring
+                // would be harmless, but a texel on the ring is a texel a filter blends with the
+                // tile next door, and there is no reason to be the one exception.
+                let n = next_flat % (content * content);
+                next_flat += 1;
+                let centre = |at: usize| (at as f32 + 0.5) / ATLAS as f32;
+                let (u, v) = (
+                    centre(shared.0 + GUTTER + n % content),
+                    centre(shared.1 + GUTTER + n / content),
+                );
+                Tile { u0: u, v0: v, u1: u, v1: v }
+            }
+        };
+    }
+    out
 }
 
 #[derive(Clone)]
@@ -538,9 +692,9 @@ mod tests {
         let at = |x: usize, y: usize| {
             let i = (y * ATLAS + x) * 4;
             [
-                atlas.pixels[i] as f32,
-                atlas.pixels[i + 1] as f32,
-                atlas.pixels[i + 2] as f32,
+                atlas.packed.pixels[i] as f32,
+                atlas.packed.pixels[i + 1] as f32,
+                atlas.packed.pixels[i + 2] as f32,
             ]
         };
         let (x, y) = (u * ATLAS as f32 - 0.5, v * ATLAS as f32 - 0.5);
@@ -566,11 +720,11 @@ mod tests {
             flat("b", [0.0, 1.0, 0.0, 1.0]),
             flat("c", [0.0, 0.0, 1.0, 1.0]),
         ]), &no_rules());
-        assert_eq!(atlas.tiles.len(), 3);
-        for (i, a) in atlas.tiles.iter().enumerate() {
+        assert_eq!(atlas.packed.tiles.len(), 3);
+        for (i, a) in atlas.packed.tiles.iter().enumerate() {
             // Not `<`: a flat colour's tile is one texel, so its two corners are the same point.
             assert!(a.u0 <= a.u1 && a.v0 <= a.v1);
-            for b in &atlas.tiles[i + 1..] {
+            for b in &atlas.packed.tiles[i + 1..] {
                 let apart = a.u1 < b.u0 || b.u1 < a.u0 || a.v1 < b.v0 || b.v1 < a.v0;
                 assert!(apart, "tiles overlap: {a:?} and {b:?}");
             }
@@ -591,12 +745,12 @@ mod tests {
 
         let atlas = Atlas::build(&model, &no_rules());
         assert_eq!(atlas.textured, 3);
-        let side = (atlas.tiles[0].u1 - atlas.tiles[0].u0) * ATLAS as f32;
+        let side = (atlas.packed.tiles[0].u1 - atlas.packed.tiles[0].u0) * ATLAS as f32;
         assert!(
             (side - 126.0).abs() < 0.01,
             "a 2x2 grid is a 128px tile, less the gutter at each edge; got {side}"
         );
-        for t in &atlas.tiles[3..] {
+        for t in &atlas.packed.tiles[3..] {
             assert_eq!(t.u0, t.u1, "a flat colour is one texel wide");
             assert_eq!(t.v0, t.v1, "a flat colour is one texel tall");
         }
@@ -613,7 +767,7 @@ mod tests {
         model.images.push(image);
 
         let atlas = Atlas::build(&model, &no_rules());
-        for (i, t) in atlas.tiles.iter().enumerate().skip(1) {
+        for (i, t) in atlas.packed.tiles.iter().enumerate().skip(1) {
             let m = t.map([0.4, 0.7]);
             assert_eq!(bilinear(&atlas, m[0], m[1]), [255.0; 3], "material {i}");
         }
@@ -633,7 +787,7 @@ mod tests {
 
         let atlas = Atlas::build(&model, &no_rules());
         let (want, other) = ([255.0, 0.0, 0.0], [0.0, 0.0, 255.0]);
-        let t = atlas.tiles[0];
+        let t = atlas.packed.tiles[0];
         for uv in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 1.0]] {
             let m = t.map(uv);
             let got = bilinear(&atlas, m[0], m[1]);
@@ -654,7 +808,7 @@ mod tests {
         // One material is a 1×1 grid, so the tile is the whole atlas and its ring is the border.
         let texel = |x: usize, y: usize| {
             let i = (y * ATLAS + x) * 4;
-            &atlas.pixels[i..i + 3]
+            &atlas.packed.pixels[i..i + 3]
         };
         for i in 0..ATLAS {
             assert_eq!(texel(i, 0), texel(i.clamp(1, ATLAS - 2), 1), "top at {i}");
@@ -685,9 +839,88 @@ mod tests {
         let atlas = Atlas::build(&model, &rules);
 
         assert_eq!(atlas.textured, 1, "only the real picture is a texture now");
-        let t = atlas.tiles[1];
+        let t = atlas.packed.tiles[1];
         assert_eq!((t.u0, t.v0), (t.u1, t.v1), "a flat material gets one texel");
         assert_eq!(bilinear(&atlas, t.u0, t.v0), [255.0; 3], "and it is white");
+    }
+
+    /// The point of packing by image: materials over one picture share its tile, and the grid is
+    /// sized by the pictures. Five materials over one sheet beside two other images were eight
+    /// slots and a 3×3 grid; they are four now, a 2×2 at 128.
+    #[test]
+    fn materials_over_one_image_share_its_tile() {
+        let (sheet, sheet_png) = textured("sheet", 0, [255, 0, 0]);
+        let (a, a_png) = textured("a", 1, [0, 255, 0]);
+        let (b, b_png) = textured("b", 2, [0, 0, 255]);
+        let mut materials: Vec<Material> = (0..5)
+            .map(|i| Material { name: format!("cabin{i}"), ..sheet.clone() })
+            .collect();
+        materials.extend([a, b, flat("trim", [0.2; 4])]);
+        let mut model = model_with(materials);
+        model.images.extend([sheet_png, a_png, b_png]);
+
+        let atlas = Atlas::build(&model, &no_rules());
+        assert_eq!(atlas.textured, 7, "still seven materials drawing a picture");
+        assert_eq!(atlas.packed.grid, (4, 2));
+        for t in &atlas.packed.tiles[1..5] {
+            assert_eq!((t.u0, t.v0, t.u1, t.v1), {
+                let s = atlas.packed.tiles[0];
+                (s.u0, s.v0, s.u1, s.v1)
+            });
+        }
+        let side = (atlas.packed.tiles[0].u1 - atlas.packed.tiles[0].u0) * ATLAS as f32;
+        assert!((side - 126.0).abs() < 0.01, "a 2x2 grid less its gutter; got {side}");
+        // And each of them samples the sheet, not a neighbour.
+        for (i, want) in [(0, [255.0, 0.0, 0.0]), (4, [255.0, 0.0, 0.0]), (5, [0.0, 255.0, 0.0])] {
+            let m = atlas.packed.tiles[i].map([0.5, 0.5]);
+            assert_eq!(bilinear(&atlas, m[0], m[1]), want, "material {i}");
+        }
+        // The layout the geometry is built in still gives each its own.
+        assert_eq!(atlas.working.grid, (8, 3));
+    }
+
+    /// Two materials over one image where the config calls one of them flat: the image stays in
+    /// the grid for the other, and the flat one draws white.
+    #[test]
+    fn a_shared_image_stays_for_the_material_that_still_wants_it() {
+        let (paint, png) = textured("paint", 0, [255, 0, 0]);
+        let dull = Material { name: "dull".into(), ..paint.clone() };
+        let mut model = model_with(vec![paint, dull]);
+        model.images.push(png);
+        let rules: crate::config::MaterialRules =
+            toml::from_str("colour = [{ match = [\"dull\"], rgb = [10, 10, 12], flat = true }]")
+                .expect("the rule parses");
+        let atlas = Atlas::build(&model, &rules);
+        assert_eq!(atlas.textured, 1);
+        let m = atlas.packed.tiles[0].map([0.5, 0.5]);
+        assert_eq!(bilinear(&atlas, m[0], m[1]), [255.0, 0.0, 0.0]);
+        let t = atlas.packed.tiles[1];
+        assert_eq!((t.u0, t.v0), (t.u1, t.v1));
+        assert_eq!(bilinear(&atlas, t.u0, t.v0), [255.0; 3]);
+    }
+
+    /// `remap` carries a coordinate from the per-material layout to the same point of the same
+    /// picture in the packed one, and a flat colour's texel to its own packed texel.
+    #[test]
+    fn remap_lands_on_the_same_point_of_the_same_picture() {
+        let (sheet, sheet_png) = textured("sheet", 0, [255, 0, 0]);
+        let (other, other_png) = textured("other", 1, [0, 0, 255]);
+        let twin = Material { name: "twin".into(), ..sheet.clone() };
+        let mut model = model_with(vec![sheet, twin, other, flat("trim", [0.5; 4])]);
+        model.images.extend([sheet_png, other_png]);
+        let atlas = Atlas::build(&model, &no_rules());
+
+        for i in 0..4 {
+            for uv in [[0.0, 0.0], [0.25, 0.75], [1.0, 1.0]] {
+                let from = atlas.working.tiles[i].map(uv);
+                let got = atlas.remap(from);
+                let want = atlas.packed.tiles[i].map(uv);
+                assert!(
+                    (got[0] - want[0]).abs() < 1e-5 && (got[1] - want[1]).abs() < 1e-5,
+                    "material {i} at {uv:?}: {got:?}, wanted {want:?}"
+                );
+            }
+        }
     }
 
     /// A palette is kept whole and out of the grid, because the whole point is that it is sampled
@@ -722,7 +955,7 @@ mod tests {
         let atlas = Atlas::build(&model, &rules);
 
         assert_eq!(atlas.textured, 0, "a palette is not a texture in the atlas");
-        let t = atlas.tiles[0];
+        let t = atlas.packed.tiles[0];
         assert_eq!((t.u0, t.v0), (t.u1, t.v1), "and it takes a texel, not a tile");
         assert_eq!(bilinear(&atlas, t.u0, t.v0), [255.0; 3], "which is white");
 
@@ -760,11 +993,11 @@ mod tests {
     #[test]
     fn a_material_with_no_image_gets_a_tile_that_changes_nothing() {
         let atlas = Atlas::build(&model_with(vec![flat("red", [1.0, 0.0, 0.0, 1.0])]), &no_rules());
-        let t = atlas.tiles[0];
+        let t = atlas.packed.tiles[0];
         let x = ((t.u0 + t.u1) * 0.5 * ATLAS as f32) as usize;
         let y = ((t.v0 + t.v1) * 0.5 * ATLAS as f32) as usize;
         let at = (y * ATLAS + x) * 4;
-        assert_eq!(&atlas.pixels[at..at + 3], &[255, 255, 255]);
+        assert_eq!(&atlas.packed.pixels[at..at + 3], &[255, 255, 255]);
         assert_eq!(atlas.textured, 0);
     }
 
@@ -772,7 +1005,7 @@ mod tests {
     #[test]
     fn uvs_are_clamped_into_their_own_tile() {
         let atlas = Atlas::build(&model_with(vec![flat("a", [1.0; 4]), flat("b", [0.0; 4])]), &no_rules());
-        let t = atlas.tiles[0];
+        let t = atlas.packed.tiles[0];
         for uv in [[0.0, 0.0], [1.0, 1.0], [4.0, -2.0], [-0.5, 9.0]] {
             let m = t.map(uv);
             assert!(m[0] >= t.u0 && m[0] <= t.u1, "{uv:?} mapped to {m:?}");
@@ -818,7 +1051,7 @@ mod tests {
         let atlas = Atlas::build(&model_with(vec![flat("white", [1.0; 4])]), &no_rules());
         let packed = atlas.to_5650();
         assert_eq!(packed.len(), ATLAS * ATLAS * 2);
-        let t = atlas.tiles[0];
+        let t = atlas.packed.tiles[0];
         let x = ((t.u0 + t.u1) * 0.5 * ATLAS as f32) as usize;
         let y = ((t.v0 + t.v1) * 0.5 * ATLAS as f32) as usize;
         let at = (y * ATLAS + x) * 2;
