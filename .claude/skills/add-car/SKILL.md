@@ -86,7 +86,7 @@ means you cannot tell which one did what. `docs/cars.md` under **Configuration**
 scripts/cars.sh build <car>
 ```
 
-Roughly a minute. Read the report rather than skipping to the file size — it says what the budget
+A few seconds. Read the report rather than skipping to the file size — it says what the budget
 bought, what it had to drop, and what it could not simplify at any budget. Warnings here are often
 the whole diagnosis.
 

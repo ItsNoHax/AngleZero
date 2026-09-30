@@ -11,7 +11,7 @@
 #   scripts/cars.sh build             compile every configured car
 #   scripts/cars.sh build bmw_e36 ... compile only these
 #
-# Conversion takes about a minute a car and prints a report worth reading; `list` costs nothing.
+# Conversion takes a few seconds a car and prints a report worth reading; `list` costs nothing.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

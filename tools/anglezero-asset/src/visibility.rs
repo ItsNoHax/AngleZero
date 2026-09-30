@@ -137,6 +137,57 @@ impl View {
     }
 }
 
+/// Every view at these heights, [`AZIMUTHS`] of them round each, in the order the sweeps have
+/// always taken them.
+fn views_at(elevations: &[f32]) -> Vec<View> {
+    elevations
+        .iter()
+        .flat_map(|e| (0..AZIMUTHS).map(move |i| View::new(360.0 * i as f32 / AZIMUTHS as f32, *e)))
+        .collect()
+}
+
+/// Runs `work` over every view on as many threads as the machine has, each thread with a state
+/// of its own from `state`, and hands back every thread's state for the caller to merge.
+///
+/// This is where the compile's time went. The silhouette's sweep is 264 views at 768 pixels a
+/// side over a shell of a few hundred thousand triangles, and with the two sweeps over the source
+/// model it was three quarters of a fourteen-second compile, all on one core. The views never
+/// read one another's buffers, so they divide across threads with nothing shared but the model.
+///
+/// The caller merges with a union or an integer sum — never a floating-point one — so the answer
+/// does not depend on how many threads there were or which views each one got, and a car still
+/// compiles to the same bytes on any machine.
+fn sweep<S: Send>(
+    views: &[View],
+    state: impl Fn() -> S + Sync,
+    work: impl Fn(&mut S, &View) + Sync,
+) -> Vec<S> {
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, views.len().max(1));
+    std::thread::scope(|scope| {
+        let (state, work) = (&state, &work);
+        let handles: Vec<_> = (0..threads)
+            .map(|k| {
+                scope.spawn(move || {
+                    let mut s = state();
+                    // Every `threads`-th view rather than a block of neighbours, so that no thread
+                    // is left with all the views from underneath, where a car is cheapest to draw.
+                    for view in views.iter().skip(k).step_by(threads) {
+                        work(&mut s, view);
+                    }
+                    s
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("a visibility sweep thread panicked"))
+            .collect()
+    })
+}
+
 /// Renders the car from every view and counts what each part owns.
 pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
     let bounds = model.bounds();
@@ -158,15 +209,6 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
     }
     triangle_at.push(total);
 
-    let mut pixels = vec![0u32; model.parts.len()];
-    let mut depth = vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION];
-    let mut owner = vec![u32::MAX; RESOLUTION * RESOLUTION];
-    let mut facing = vec![false; RESOLUTION * RESOLUTION];
-    let mut glass_depth = vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION];
-    let mut glass_owner = vec![u32::MAX; RESOLUTION * RESOLUTION];
-    let mut glass_facing = vec![false; RESOLUTION * RESOLUTION];
-    let mut views = 0;
-
     // Which part a triangle belongs to. `triangle_at` is sorted, so this is a search rather than
     // another array the size of the model.
     let part_of = |triangle: usize| -> usize {
@@ -183,13 +225,34 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
         }
     };
 
-    for elevation in ELEVATIONS {
-        for i in 0..AZIMUTHS {
-            let view = View::new(360.0 * i as f32 / AZIMUTHS as f32, elevation);
-            views += 1;
-
-            depth.fill(f32::NEG_INFINITY);
-            owner.fill(u32::MAX);
+    // Every view is independent of every other, so they are shared out across the machine's
+    // threads, each with buffers of its own, and what they counted is added up afterwards. The
+    // tallies are integers, so the order they are added in cannot change the sum: the car compiles
+    // to the same bytes on one thread or on twenty-four.
+    struct Buffers {
+        depth: Vec<f32>,
+        owner: Vec<u32>,
+        facing: Vec<bool>,
+        glass_depth: Vec<f32>,
+        glass_owner: Vec<u32>,
+        glass_facing: Vec<bool>,
+        pixels: Vec<u32>,
+    }
+    let views = views_at(&ELEVATIONS);
+    let swept = sweep(
+        &views,
+        || Buffers {
+            depth: vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION],
+            owner: vec![u32::MAX; RESOLUTION * RESOLUTION],
+            facing: vec![false; RESOLUTION * RESOLUTION],
+            glass_depth: vec![f32::NEG_INFINITY; RESOLUTION * RESOLUTION],
+            glass_owner: vec![u32::MAX; RESOLUTION * RESOLUTION],
+            glass_facing: vec![false; RESOLUTION * RESOLUTION],
+            pixels: vec![0u32; model.parts.len()],
+        },
+        |b, view| {
+            b.depth.fill(f32::NEG_INFINITY);
+            b.owner.fill(u32::MAX);
 
             // Opaque first, owning the buffer.
             for (index, part) in model.parts.iter().enumerate() {
@@ -199,26 +262,26 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
                 raster(
                     part,
                     triangle_at[index],
-                    &view,
+                    view,
                     centre,
                     radius,
-                    &mut depth,
-                    &mut owner,
-                    &mut facing,
+                    &mut b.depth,
+                    &mut b.owner,
+                    &mut b.facing,
                     true,
                 );
             }
-            for slot in owner.iter() {
+            for slot in b.owner.iter() {
                 if *slot != u32::MAX {
-                    pixels[part_of(*slot as usize)] += 1;
+                    b.pixels[part_of(*slot as usize)] += 1;
                 }
             }
 
             // Then the glass, against a copy of that depth. It can hide other glass, so it writes
             // into the copy — but the copy is thrown away, so it never takes the cabin behind it
             // off the board.
-            glass_depth.copy_from_slice(&depth);
-            glass_owner.fill(u32::MAX);
+            b.glass_depth.copy_from_slice(&b.depth);
+            b.glass_owner.fill(u32::MAX);
             for (index, part) in model.parts.iter().enumerate() {
                 if !transparent.get(index).copied().unwrap_or(false) {
                     continue;
@@ -226,26 +289,33 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
                 raster(
                     part,
                     triangle_at[index],
-                    &view,
+                    view,
                     centre,
                     radius,
-                    &mut glass_depth,
-                    &mut glass_owner,
-                    &mut glass_facing,
+                    &mut b.glass_depth,
+                    &mut b.glass_owner,
+                    &mut b.glass_facing,
                     true,
                 );
             }
-            for (slot, back) in glass_owner.iter().zip(&glass_facing) {
+            for (slot, back) in b.glass_owner.iter().zip(&b.glass_facing) {
                 if *slot != u32::MAX {
-                    pixels[part_of(*slot as usize)] += 1;
+                    b.pixels[part_of(*slot as usize)] += 1;
                     // Glass is drawn two-sided already, so all this can say is that the lens or
                     // window in question is one nobody would see culled — which is true of every
                     // one of them and is why the window category carries the flag outright.
                     let _ = back;
                 }
             }
+        },
+    );
+    let mut pixels = vec![0u32; model.parts.len()];
+    for b in &swept {
+        for (total, p) in pixels.iter_mut().zip(&b.pixels) {
+            *total += p;
         }
     }
+    let views = views.len();
 
     let mut fine = vec![0u32; model.parts.len()];
     let needed = what_culling_would_cost(
@@ -343,31 +413,47 @@ pub fn outward_triangles(positions: &[[f32; 3]], indices: &[u32]) -> Vec<bool> {
     // depth buffer's own units, which are metres. Generous on purpose — keeping a triangle that
     // could have gone costs a few bytes, and losing one that could not costs a hole.
     let slack = 2.0 * 2.0 * radius / res as f32;
-    let mut depth = vec![f32::NEG_INFINITY; N];
-    let mut owner = vec![u32::MAX; N];
-    let mut facing = vec![false; N];
-    for elevation in OUTLINE_ELEVATIONS {
-        for i in 0..AZIMUTHS {
-            let view = View::new(360.0 * i as f32 / AZIMUTHS as f32, elevation);
-            depth.fill(f32::NEG_INFINITY);
-            owner.fill(u32::MAX);
+
+    // Shared out across threads as `measure` is. Each thread keeps its own record of what it has
+    // seen, and a triangle is kept if any view on any thread saw it: whether a view sees a
+    // triangle does not depend on what the views before it saw — skipping one already seen only
+    // saves the work of asking again — so the union comes out the same however the views are
+    // divided up.
+    struct Buffers {
+        depth: Vec<f32>,
+        owner: Vec<u32>,
+        facing: Vec<bool>,
+        seen: Vec<bool>,
+    }
+    let views = views_at(&OUTLINE_ELEVATIONS);
+    let swept = sweep(
+        &views,
+        || Buffers {
+            depth: vec![f32::NEG_INFINITY; N],
+            owner: vec![u32::MAX; N],
+            facing: vec![false; N],
+            seen: vec![false; triangles],
+        },
+        |b, view| {
+            b.depth.fill(f32::NEG_INFINITY);
+            b.owner.fill(u32::MAX);
             raster_with(
                 positions,
                 indices,
                 0,
-                &view,
+                view,
                 centre,
                 radius,
                 OUTLINE_RESOLUTION,
-                &mut depth,
-                &mut owner,
-                &mut facing,
+                &mut b.depth,
+                &mut b.owner,
+                &mut b.facing,
                 true,
                 false,
             );
-            for o in &owner {
+            for o in &b.owner {
                 if *o != u32::MAX {
-                    seen[*o as usize] = true;
+                    b.seen[*o as usize] = true;
                 }
             }
             // A triangle smaller than a pixel can fall between the pixel centres and own nothing
@@ -376,7 +462,7 @@ pub fn outward_triangles(positions: &[[f32; 3]], indices: &[u32]) -> Vec<bool> {
             // is as near as the nearest surface there: it is *on* the outside, whether or not it
             // happened to be sampled.
             for (t, tri) in indices.chunks_exact(3).enumerate() {
-                if seen[t] {
+                if b.seen[t] {
                     continue;
                 }
                 let mut mid = [0.0f32; 3];
@@ -392,10 +478,15 @@ pub fn outward_triangles(positions: &[[f32; 3]], indices: &[u32]) -> Vec<bool> {
                     continue;
                 }
                 let at = y as usize * res + x as usize;
-                if owner[at] == u32::MAX || mid[2] >= depth[at] - slack {
-                    seen[t] = true;
+                if b.owner[at] == u32::MAX || mid[2] >= b.depth[at] - slack {
+                    b.seen[t] = true;
                 }
             }
+        },
+    );
+    for b in &swept {
+        for (s, t) in seen.iter_mut().zip(&b.seen) {
+            *s |= *t;
         }
     }
     seen
@@ -422,36 +513,52 @@ fn what_culling_would_cost(
     total: usize,
     centre: [f32; 3],
     radius: f32,
-    part_of: &impl Fn(usize) -> usize,
+    part_of: &(impl Fn(usize) -> usize + Sync),
     fine: &mut [u32],
 ) -> Vec<bool> {
     const N: usize = CULL_RESOLUTION * CULL_RESOLUTION;
-    let mut needed = vec![false; total];
-    let mut depth = vec![f32::NEG_INFINITY; N];
-    let mut owner = vec![u32::MAX; N];
-    let mut facing = vec![false; N];
-    let mut culled_depth = vec![f32::NEG_INFINITY; N];
-    let mut culled_owner = vec![u32::MAX; N];
-    let mut culled_facing = vec![false; N];
-
-    for elevation in ELEVATIONS {
-        for i in 0..AZIMUTHS {
-            let view = View::new(360.0 * i as f32 / AZIMUTHS as f32, elevation);
-            depth.fill(f32::NEG_INFINITY);
-            owner.fill(u32::MAX);
-            culled_depth.fill(f32::NEG_INFINITY);
-            culled_owner.fill(u32::MAX);
+    // Shared out across threads as `measure` is, with each thread's `needed` and `fine` merged at
+    // the end: the one is a union and the other a sum of integers, so neither can depend on how
+    // the views were divided.
+    struct Buffers {
+        depth: Vec<f32>,
+        owner: Vec<u32>,
+        facing: Vec<bool>,
+        culled_depth: Vec<f32>,
+        culled_owner: Vec<u32>,
+        culled_facing: Vec<bool>,
+        needed: Vec<bool>,
+        fine: Vec<u32>,
+    }
+    let views = views_at(&ELEVATIONS);
+    let swept = sweep(
+        &views,
+        || Buffers {
+            depth: vec![f32::NEG_INFINITY; N],
+            owner: vec![u32::MAX; N],
+            facing: vec![false; N],
+            culled_depth: vec![f32::NEG_INFINITY; N],
+            culled_owner: vec![u32::MAX; N],
+            culled_facing: vec![false; N],
+            needed: vec![false; total],
+            fine: vec![0u32; fine.len()],
+        },
+        |b, view| {
+            b.depth.fill(f32::NEG_INFINITY);
+            b.owner.fill(u32::MAX);
+            b.culled_depth.fill(f32::NEG_INFINITY);
+            b.culled_owner.fill(u32::MAX);
 
             for (index, part) in model.parts.iter().enumerate() {
                 if transparent.get(index).copied().unwrap_or(false) {
                     continue;
                 }
                 for (d, o, f, cull) in [
-                    (&mut depth, &mut owner, &mut facing, false),
+                    (&mut b.depth, &mut b.owner, &mut b.facing, false),
                     (
-                        &mut culled_depth,
-                        &mut culled_owner,
-                        &mut culled_facing,
+                        &mut b.culled_depth,
+                        &mut b.culled_owner,
+                        &mut b.culled_facing,
                         true,
                     ),
                 ] {
@@ -459,7 +566,7 @@ fn what_culling_would_cost(
                         &part.positions,
                         &part.indices,
                         triangle_at[index],
-                        &view,
+                        view,
                         centre,
                         radius,
                         CULL_RESOLUTION,
@@ -473,18 +580,27 @@ fn what_culling_would_cost(
             }
 
             for at in 0..N {
-                let slot = owner[at];
+                let slot = b.owner[at];
                 if slot == u32::MAX {
                     continue;
                 }
-                fine[part_of(slot as usize)] += 1;
-                if !facing[at] {
+                b.fine[part_of(slot as usize)] += 1;
+                if !b.facing[at] {
                     continue;
                 }
-                if culled_owner[at] == u32::MAX || culled_depth[at] < depth[at] {
-                    needed[slot as usize] = true;
+                if b.culled_owner[at] == u32::MAX || b.culled_depth[at] < b.depth[at] {
+                    b.needed[slot as usize] = true;
                 }
             }
+        },
+    );
+    let mut needed = vec![false; total];
+    for b in &swept {
+        for (n, t) in needed.iter_mut().zip(&b.needed) {
+            *n |= *t;
+        }
+        for (f, t) in fine.iter_mut().zip(&b.fine) {
+            *f += t;
         }
     }
     needed

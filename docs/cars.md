@@ -213,6 +213,10 @@ Omitted keys use the game's reference car.
    keyword match on material and node names.
 3. **Visibility sweep.** 72 viewpoints. A coarse 128 px pass measures each part's screen share; a
    512 px pass decides whether a part exists at all and whether culling it opens holes.
+   This sweep and the silhouette's run their views across every core (`visibility::sweep`). The
+   per-thread results are merged only by union or integer sum, so the output is byte-identical
+   whatever the thread count. A car compiles in 2–3 s and the whole fleet in about a minute; on
+   one core it was about 14 s a car, three quarters of it in these sweeps.
 4. **Rejoin split parts.** Within a draw-call bucket, parts with the same material and parent node
    whose shared border is at least 40 % of the smaller one's edge are merged into one part before
    welding. Exporters split a primitive at 65k vertices (RAV4 paint) or write one surface as two
