@@ -343,6 +343,24 @@ cargo run --release -p anglezero-asset --bin azview -- <car.azcar> <out.png> [op
 | `--lamps`, `--lamp <kind>` | Draw lamp glows (all, or `headlight`/`tail`/`brake`/`reverse`) |
 | `--silhouette` | Draw the silhouette instead |
 
+### Golden renders
+
+`scripts/car_goldens.py` renders every car (or the ones named) with `azview` on a fixed grid —
+eight headings × five heights from −35° to 80° — for LOD0, every lower level the file carries, and
+the silhouette. Output goes to `captures/goldens/<car>/`:
+
+| File | Contents |
+|---|---|
+| `lod0.png`, `lod1.png`, … `sil.png` | Contact sheet per variant; headings across, heights down |
+| `detail.png` | Each wheel in place and alone, cabin through the glass, `--only interior`, `--no-cull` and `--no-tex` views |
+| `match_<variant>.png` | Variant over LOD0 per view: red = LOD0 draws and the variant does not, blue = the reverse |
+| `match.txt` | Mean and worst missing fraction per variant |
+
+The whole fleet takes about 80 seconds. `--out DIR --compare REF` renders into `DIR` and lists
+every view that differs from `REF`, writing a `_diff.png` beside each. Render the previous
+commit's `.azcar` files into one directory and the current ones into another to tell a
+regression from an old fault.
+
 ## Troubleshooting
 
 | Symptom | Likely cause | Fix |

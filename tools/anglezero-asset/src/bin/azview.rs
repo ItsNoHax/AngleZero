@@ -207,6 +207,20 @@ fn run(args: &[&str]) -> Result<(), String> {
             if mat.two_sided() || m.two_sided() { "  two-sided" } else { "" },
         );
     }
+    // Where each hub is, so a close-up can be aimed at a wheel with `--look` without guessing.
+    for i in 0..car.wheel_count() {
+        let w = car.wheel(i);
+        eprintln!(
+            "  wheel {i}  {:<18} hub ({:6.2},{:5.2},{:6.2}) r{:.2} w{:.2}{}",
+            name(&car, w.name),
+            w.hub[0],
+            w.hub[1],
+            w.hub[2],
+            w.radius,
+            w.width,
+            if w.steers { "  steers" } else { "" },
+        );
+    }
     let image = draw(&car, &o);
     image::save_buffer(
         &o.output,
