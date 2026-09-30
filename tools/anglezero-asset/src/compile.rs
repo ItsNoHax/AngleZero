@@ -324,13 +324,9 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
                     // Wheels are weighted up on top of their category. They are small on screen
                     // and, with the lights, most of what says which car this is — and there are
                     // four of them sharing one allocation, so an unweighted split gives each a
-                    // quarter of what a single part of the same importance would get.
-                    weight: config.reduce.weight(category)
-                        * if wheel.is_some() {
-                            config.reduce.wheel
-                        } else {
-                            1.0
-                        },
+                    // quarter of what a single part of the same importance would get. Body
+                    // chrome may be weighted apart from the rims; see `Reduction::trim`.
+                    weight: config.reduce.bucket_weight(category, wheel.is_some()),
                 });
                 buckets.len() - 1
             }
@@ -2390,6 +2386,132 @@ fn finish_level(buckets: &mut Vec<Bucket>) {
     buckets.retain(|b| b.indices.len() >= 3);
 }
 
+/// How close a tyre vertex has to be to another part of its own wheel to be held still at LOD0, m.
+///
+/// See `bead_locks`. Measured on the Lada, whose rim lip overlaps the tyre bead by about 8 mm: at
+/// 3 mm and 5 mm the lip came out clean and the tyre's error rose from 1.1% to 1.4-1.5%; at 7 mm
+/// it rose to 5%, and at 10 mm to 44%, because the ring held 864 vertices a corner against a
+/// target of about 1,500 triangles and the tread was collapsed into what was left.
+const BEAD_LOCK: f32 = 0.005;
+
+/// The bead is held only when the tyre's target is at least this many times its locked vertices.
+///
+/// Without it five cars whose rims sit close along the whole bead (RS6, E30, EK9, R34, RAV4)
+/// locked a third to a half of their tyre and lost it: the RAV4's went from 982 triangles at 0.4%
+/// to 483 at 8.6%.
+const BEAD_LOCK_SHARE: usize = 4;
+
+/// For every piece of every bucket, which of its vertices LOD0's decimation must not move: the
+/// tyre's vertices that lie within `BEAD_LOCK` of another part of the same wheel. Empty vectors
+/// for everything else.
+///
+/// Where a tyre meets its rim the model has two surfaces from two parts overlapping by a few
+/// millimetres, and each is decimated on its own. Collapse either edge and the overlap opens: on
+/// the Lada the rim lip (r 0.652 source units) runs only about 8 mm past the tyre bead (0.631),
+/// so a bead vertex pulled 8 mm inwards is a hairline of light between the two draws, and one
+/// pulled outwards is a shard of tyre over the lip. The parts cannot be joined or cut (see
+/// **Never split a mesh** in docs/cars.md), but the bead can be held: a locked vertex is never
+/// moved and an edge between two of them never collapses, so the bead keeps the circle the rim
+/// was modelled against and the rest of the tyre is decimated round it.
+///
+/// It is held only when the locked vertices run at least `BEAD_RING` of the way round the axle and
+/// the tyre's target is at least `BEAD_LOCK_SHARE` times their number (checked where the target is
+/// known, in `spend_budget_with`). On the current fleet that is the Lada, 350Z, AE86 and Golf R32.
+///
+/// Only the tyre is held, not the rim. The bead is a ring of a few hundred vertices on a part that
+/// is mostly tread; the rim's lip is a small share of a part that is mostly spokes and is the
+/// thing the rim's budget is for.
+fn bead_locks(buckets: &[Bucket]) -> Vec<Vec<Vec<bool>>> {
+    let mut out: Vec<Vec<Vec<bool>>> =
+        buckets.iter().map(|b| vec![Vec::new(); b.pieces.len()]).collect();
+    let cell = BEAD_LOCK;
+    let key = |v: &Vertex| {
+        (
+            (v.x / cell).floor() as i32,
+            (v.y / cell).floor() as i32,
+            (v.z / cell).floor() as i32,
+        )
+    };
+    let corners: Vec<u8> = {
+        let mut c: Vec<u8> = buckets.iter().filter_map(|b| b.wheel).collect();
+        c.sort_unstable();
+        c.dedup();
+        c
+    };
+    for corner in corners {
+        // Everything on this corner that is not tyre, hashed by position. All of a wheel's parts
+        // are stored about the same hub, so their coordinates compare directly.
+        let mut grid: HashMap<(i32, i32, i32), Vec<[f32; 3]>> = HashMap::new();
+        for b in buckets.iter().filter(|b| b.wheel == Some(corner) && b.category != Category::Tyre) {
+            for p in &b.pieces {
+                for v in &p.vertices {
+                    grid.entry(key(v)).or_default().push([v.x, v.y, v.z]);
+                }
+            }
+        }
+        if grid.is_empty() {
+            continue;
+        }
+        for (bi, b) in buckets.iter().enumerate() {
+            if b.wheel != Some(corner) || b.category != Category::Tyre {
+                continue;
+            }
+            for (pi, p) in b.pieces.iter().enumerate() {
+                let locks: Vec<bool> = p
+                    .vertices
+                    .iter()
+                    .map(|v| {
+                        let (x, y, z) = key(v);
+                        (-1..=1).any(|dx| {
+                            (-1..=1).any(|dy| {
+                                (-1..=1).any(|dz| {
+                                    grid.get(&(x + dx, y + dy, z + dz)).is_some_and(|near| {
+                                        near.iter().any(|q| {
+                                            let d = [q[0] - v.x, q[1] - v.y, q[2] - v.z];
+                                            d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= cell * cell
+                                        })
+                                    })
+                                })
+                            })
+                        })
+                    })
+                    .collect();
+                let coverage = ring_coverage(&p.vertices, &locks);
+                if std::env::var("AZ_PARTS").is_ok() && locks.iter().any(|&l| l) {
+                    eprintln!("LOCK {} of {} vertices, {:.0}% round  {}", locks.iter().filter(|&&l| l).count(), locks.len(), coverage * 100.0, p.node);
+                }
+                if coverage >= BEAD_RING {
+                    out[bi][pi] = locks;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// How much of the way round the axle a bead has to run before it is held. See `ring_coverage`.
+///
+/// A handful of tyre vertices that happen to lie near a spoke or a valve are not a bead, and
+/// pinning them does not hold a seam, it only reorders the collapses round them. On the E36, ten
+/// such vertices spanning 16% of the circle put new shards of tyre over the lip. Every car whose
+/// locked set ran at least half-way round (Lada 59%, 350Z 66%, AE86 50%, R32's rear) rendered alone
+/// the same or cleaner; every car below it was left alone.
+const BEAD_RING: f32 = 0.5;
+
+/// The fraction of the circle round the wheel's axle that the locked vertices reach, in 64 sectors.
+///
+/// Wheel geometry is stored upright about its hub, so the axle is X and a vertex's angle round it
+/// is its angle in the YZ plane.
+fn ring_coverage(vertices: &[Vertex], locks: &[bool]) -> f32 {
+    const SECTORS: usize = 64;
+    let mut hit = [false; SECTORS];
+    for (v, _) in vertices.iter().zip(locks).filter(|(_, &l)| l) {
+        let a = v.z.atan2(v.y) / std::f32::consts::TAU + 0.5;
+        hit[((a * SECTORS as f32) as usize).min(SECTORS - 1)] = true;
+    }
+    hit.iter().filter(|&&h| h).count() as f32 / SECTORS as f32
+}
+
 /// Decimates each bucket to a target that has already been decided.
 fn spend_budget_with(
     buckets: &mut Vec<Bucket>,
@@ -2397,7 +2519,8 @@ fn spend_budget_with(
     tile_span: f32,
     mut report: Option<&mut Report>,
 ) {
-    for (b, bucket_target) in buckets.iter_mut().zip(targets) {
+    let locks = bead_locks(buckets);
+    for ((b, bucket_target), locks) in buckets.iter_mut().zip(targets).zip(&locks) {
         let piece_targets = share_budget(
             &b.pieces
                 .iter()
@@ -2414,14 +2537,21 @@ fn spend_budget_with(
         // that matters is what happened to the panel it is screwed to.
         let mut error_sum = 0.0f64;
         let mut error_weight = 0.0f64;
-        for (p, target) in b.pieces.iter_mut().zip(&piece_targets) {
+        for ((p, target), locked) in b.pieces.iter_mut().zip(&piece_targets).zip(locks) {
             let was = p.indices.len() / 3;
+            // A held bead is only affordable when it is a small part of what the tyre may keep.
+            // Each locked vertex costs about two triangles to stitch to the rest, so a ring of more
+            // than a quarter of the target leaves the tread to be collapsed into what is left: on
+            // the RAV4 938 locked vertices took the tyre from 982 triangles at 0.4% to 483 at 8.6%.
+            let held = locked.iter().filter(|&&l| l).count();
+            let locked: &[bool] = if held > 0 && held * BEAD_LOCK_SHARE <= *target { locked } else { &[] };
             let error = simplify::reduce(
                 &mut p.vertices,
                 &mut p.attrs,
                 &mut p.indices,
                 *target,
                 tile_span,
+                locked,
             );
             if std::env::var("AZ_PARTS").is_ok() {
                 eprintln!(

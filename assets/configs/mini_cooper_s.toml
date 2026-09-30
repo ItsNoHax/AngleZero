@@ -52,3 +52,20 @@ radius = 0.11
 [[materials.colour]]
 match = ["glass_light"]
 rgb = [215, 218, 224]
+
+# The headlamp bezels. `LightA` is chrome by metalness (0.83), not by colour: the ring samples a
+# dark disc of `image23`, grey 38 of 255, which the renderer it was made for would have shown
+# reflecting the sky. Here it is only its base colour, so each lamp drew with a dark ring round it
+# where an F56 has a chrome one. `flat = true` threw away the lamp's own detail with it (the same
+# image), so the lift is boxed to that disc: u 0-0.27, v 0.37-0.70, which only the two bezels
+# sample. 3 takes it to 114, a silver that still leaves the lens paler than the ring.
+[[materials.lift]]
+match = ["LightA"]
+by = 3.0
+uv = { min = [0.0, 0.37], max = [0.27, 0.70] }
+
+[reduce]
+# Once the ring is pale it is no longer hidden against the black paint, and at the default weight
+# (761 triangles for all the lamps) it came out an octagon. At 4 the lamps get 1,819, the ring is
+# round and the projector behind the lens shows; the body pays 10,784 -> 10,297 at 0.13 -> 0.14%.
+light = 4.0

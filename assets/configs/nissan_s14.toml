@@ -25,11 +25,27 @@ interior = ["M_Interior_Max"]
 [reduce]
 tyre = 2.0
 
+# The body's chrome — the headlamp buckets and projectors, the grille surround and the brake ducts
+# at the bumper corners (`AluminumBlackRough`, one part) — shared 270 triangles, and the duct part
+# collapsed at 43% error into one black wedge drawn across the front, with the grille surround gone
+# and the headlamps a smear of reflector texture. `chrome = 4` held them but made each wheel 2,220
+# triangles and cut the body to 7,842. `trim` weights the body's chrome alone and leaves the rims
+# at `chrome × wheel`; at 4 the call gets ~1,160 and the headlamps show their projectors.
+#
+# Inside the call the headlamps still outbid the ducts, which stay on a cliff: 193 triangles at 45%
+# error, 390 at 2.6%. The part weight below puts them over it (and takes the exhaust tips,
+# `AluminumRough`, from 14 triangles to 230 with them).
+trim = 4.0
+# Held up by 0.05 because the cabin sits on a cliff of its own: the ~250 triangles the trim takes
+# from it at 0.4 drop it from 938 at 12% error to 698 at 19%. At 0.45 it is 1,144 at 5.8%.
+interior = 0.45
+
 # `M_Chassis_Max` is flagged transparent and stays in `window`, and it carries the intercooler and
 # the piping seen through the bumper's intakes. With the cabin moved out of `window` it lost the
 # share it used to get alongside it, the piping decimated away and the intakes showed background.
 [reduce.parts]
 "M_Chassis_Max" = 2.0
+"Opaque_Aluminum" = 5.0
 
 # This model names nothing. Every one of its twenty-two materials is a Maya default —
 # `SILVIAphong2SG1`, `SILVIAphong6SG1` and so on — so the category guesser, which works from names,

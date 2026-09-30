@@ -336,6 +336,20 @@ pub struct Reduction {
     /// most obviously says "cheap 3D".
     #[serde(default = "default_wheel_weight")]
     pub wheel: f32,
+    /// Weight for the chrome that is *not* on a wheel — trim, grilles, intake backings, badges —
+    /// in place of `chrome`. Unset, body chrome takes `chrome` like everything else in the category.
+    ///
+    /// `chrome` weights the whole category, and a wheel's rim is chrome too, with `wheel` stacked
+    /// on top of it. So a car whose body trim is starved had no way to give the trim more without
+    /// inflating the rims by the same factor: the S14's intake ducts and trim came out at about 270
+    /// triangles and losing their shape, and `chrome = 4` to hold them made each wheel 2,220
+    /// triangles and cut the body to 7,842. The E30 worked round the same thing with `chrome = 3`,
+    /// `tyre = 3` and `wheel = 4 / 3`, three weights set against each other so that two of them
+    /// cancel on the wheels. This says the one thing that was meant instead.
+    ///
+    /// Rim chrome keeps `chrome × wheel`, so `trim` changes nothing on a wheel.
+    #[serde(default)]
+    pub trim: Option<f32>,
     /// Parts the visibility pass never saw are dropped outright. Turn this off to compile a car
     /// whole, which is the way to check what the pass is throwing away.
     #[serde(default = "yes")]
@@ -392,6 +406,7 @@ impl Default for Reduction {
             light: default_light_weight(),
             chrome: 1.0,
             wheel: default_wheel_weight(),
+            trim: None,
             drop_hidden: true,
             parts: std::collections::HashMap::new(),
             drop: Vec::new(),
@@ -412,6 +427,17 @@ impl Reduction {
             }
         }
         w
+    }
+
+    /// What a draw call is worth: its category's weight, with `wheel` on top for a wheel's own
+    /// parts, and `trim` in place of `chrome` for the chrome that is not on a wheel.
+    pub fn bucket_weight(&self, category: angle_zero::azcar::Category, on_wheel: bool) -> f32 {
+        use angle_zero::azcar::Category::Chrome;
+        match (category, on_wheel, self.trim) {
+            (Chrome, false, Some(trim)) => trim.max(0.0),
+            (_, true, _) => self.weight(category) * self.wheel,
+            _ => self.weight(category),
+        }
     }
 
     pub fn weight(&self, category: angle_zero::azcar::Category) -> f32 {
@@ -520,6 +546,64 @@ pub struct MaterialRules {
     /// cannot be disturbed by anything the atlas does later.
     #[serde(default)]
     pub palette: Vec<String>,
+    /// Brightness lifts for a material's image. See `LiftRule`.
+    #[serde(default)]
+    pub lift: Vec<LiftRule>,
+}
+
+/// Texels of a material's image to brighten, for a surface whose look was never in its colour.
+///
+/// The renderer draws base colour and nothing else. A physically based model is free to make its
+/// chrome out of a dark base colour and a high metalness, and in the renderer it was authored for
+/// the metal reflects the sky and reads bright; here it is only its base colour, and a dark one.
+/// The Mini's headlamp bezels are the case: `LightA` has metalness 0.83 and the ring samples a
+/// dark disc of `image23`, grey 38 of 255, so each lamp drew with a dark ring round it where an
+/// F56 has a chrome one. The vertex colour cannot fix that, because it is already 1.0 and can only
+/// darken; and `flat = true` throws the image away, which turned the lamp's own detail, which is
+/// in the same image, into white stickers.
+///
+/// So this multiplies the image's texels themselves, as stored (sRGB, so `by = 4` takes 38 to
+/// 152), clamped at white, and only inside `uv` when it is given: a box in the source image's own
+/// coordinates (0–1, V down as glTF has it), read off the image. Black stays black under a
+/// multiplier, which is what keeps a lifted disc's background from rising with it.
+///
+/// A lift is a change to the *image*, which in the atlas is one tile shared by every material that
+/// samples it. A material over the same image that the rule does not name is lifted too, and the
+/// converter says so.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiftRule {
+    /// Material-name fragments, matched case-insensitively like the category rules.
+    #[serde(rename = "match")]
+    pub match_: Vec<String>,
+    /// What each texel's channels are multiplied by.
+    pub by: f32,
+    /// Lift only the texels inside this box of the image, in UV.
+    #[serde(default)]
+    pub uv: Option<UvBox>,
+}
+
+/// A box in a source image's texture coordinates.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UvBox {
+    pub min: [f32; 2],
+    pub max: [f32; 2],
+}
+
+impl UvBox {
+    pub fn contains(&self, uv: [f32; 2]) -> bool {
+        (0..2).all(|i| uv[i] >= self.min[i] && uv[i] <= self.max[i])
+    }
+}
+
+impl LiftRule {
+    pub fn matches(&self, name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        self.match_
+            .iter()
+            .any(|f| !f.is_empty() && name.contains(&f.to_ascii_lowercase()))
+    }
 }
 
 /// A colour to use in place of the one a material declares.
@@ -909,5 +993,20 @@ mod tests {
     fn an_unknown_key_is_an_error_rather_than_ignored() {
         let err = parse("name = \"T\"\ntriangels = 9000").unwrap_err();
         assert!(err.contains("triangels"), "{err}");
+    }
+
+    /// `trim` weights the body's chrome only; a wheel's chrome keeps `chrome × wheel`, and a car
+    /// without the key weights both as before.
+    #[test]
+    fn trim_weights_body_chrome_and_not_the_rims() {
+        use angle_zero::azcar::Category::{Body, Chrome};
+        let plain = parse("name = \"T\"\n[reduce]\nchrome = 2.0").unwrap().reduce;
+        assert_eq!(plain.bucket_weight(Chrome, false), 2.0);
+        assert_eq!(plain.bucket_weight(Chrome, true), 2.0 * plain.wheel);
+
+        let trimmed = parse("name = \"T\"\n[reduce]\nchrome = 2.0\ntrim = 5.0").unwrap().reduce;
+        assert_eq!(trimmed.bucket_weight(Chrome, false), 5.0);
+        assert_eq!(trimmed.bucket_weight(Chrome, true), 2.0 * trimmed.wheel);
+        assert_eq!(trimmed.bucket_weight(Body, false), 1.0);
     }
 }

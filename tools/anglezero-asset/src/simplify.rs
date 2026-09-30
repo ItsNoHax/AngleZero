@@ -222,6 +222,7 @@ pub fn reduce(
     indices: &mut Vec<u32>,
     target_triangles: usize,
     tile_span: f32,
+    locked: &[bool],
 ) -> f32 {
     if indices.len() / 3 <= target_triangles || vertices.is_empty() {
         compact(vertices, attrs, indices);
@@ -255,7 +256,8 @@ pub fn reduce(
     let uvs: Vec<f32> = attrs.iter().flat_map(|a| a.uv).collect();
     let weight = UV_WEIGHT / tile_span.max(1.0e-6);
     let weights = [weight, weight];
-    let locks = vec![false; vertices.len()];
+    // Vertices the caller needs left where they are; see `compile::bead_locks`. Empty for none.
+    let locks = if locked.len() == vertices.len() { locked.to_vec() } else { vec![false; vertices.len()] };
     let simplify = |target: usize, error_limit: f32, options, out: &mut f32| {
         meshopt::simplify_with_attributes_and_locks(
             indices,
@@ -1200,7 +1202,7 @@ mod tests {
         let before = indices.len() / 3;
         assert_eq!(before, 2048);
 
-        let error = reduce(&mut vertices, &mut light, &mut indices, 200, 0.125);
+        let error = reduce(&mut vertices, &mut light, &mut indices, 200, 0.125, &[]);
         let after = indices.len() / 3;
         assert!(after < before / 2, "reduced {before} to {after}");
         assert!(error.is_finite() && error >= 0.0);
@@ -1219,7 +1221,7 @@ mod tests {
         let mut vertices = vec![v(0.0, 0.0, 0.0, 1), v(1.0, 0.0, 0.0, 1), v(0.0, 0.0, 1.0, 1)];
         let mut light = attrs(3);
         let mut indices = vec![0, 1, 2];
-        let error = reduce(&mut vertices, &mut light, &mut indices, 5000, 0.125);
+        let error = reduce(&mut vertices, &mut light, &mut indices, 5000, 0.125, &[]);
         assert_eq!(indices.len(), 3);
         assert_eq!(vertices.len(), 3);
         assert_eq!(error, 0.0);

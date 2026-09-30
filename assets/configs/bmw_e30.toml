@@ -24,13 +24,10 @@ interior = 2.0
 # so they sort as brightwork and share the small `chrome` draw call: the 3,108-triangle slat lattice
 # got 121 and the kidney surrounds 20, which is what drew the black triangles across the grille.
 # A `[reduce.parts]` weight cannot help, because it only reshuffles triangles inside a draw call.
-# Tripling `chrome` gives that call 880. `tyre` tripled and `wheel` cut to a third (4 / 3) keep
-# the rims and tyres at the weight they had (tyres 234 -> 219). Only the wheels' centre caps, which
-# are `window`, lose weight (40 -> 24 triangles, not visibly); tripling `window` to hold them
-# cost the far LOD more body than it was worth.
-chrome = 3.0
-tyre = 3.0
-wheel = 1.3333
+# `trim` triples the body's chrome call alone and leaves the rims and tyres at their defaults. This
+# used to be `chrome = 3`, `tyre = 3` and `wheel = 4 / 3`, which came to the same weights on the
+# rims and tyres but also cut the wheels' `window` centre caps to a third (40 -> 24 triangles).
+trim = 3.0
 # Lamps: the chrome rings round the headlamps and the reflector dishes behind them. At the default
 # the rings fell to 14 triangles and cut across the inner lamps as a star; at 12 the whole 804 of
 # the lamps costs about 570 more triangles and is kept nearly whole (the reflector at 128 of 128,
@@ -39,6 +36,11 @@ light = 12.0
 
 [reduce.parts]
 "Light_Max_005" = 12.0
+# The front bumper's lower paint panel is what frames the black slot under the number plate, and
+# it sits on a knife edge: at 171 triangles the slot is open, at 170 its top edge folds down over
+# it. Moving to `trim` (above) shifted the body by 35 triangles and took one of them. 1.1 gives it
+# 187 and the slot stays open.
+"BumperChassisF6_Mesh_M_Chassis_Max_BMW:M_CarPaint" = 1.1
 
 # The seats, dashboard and steering wheel wear `BMWM_Interior_Max1`, which carries an alpha channel,
 # so by default they went to `window` and were decimated as glass. This used to take the cabin out

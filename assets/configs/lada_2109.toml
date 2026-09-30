@@ -76,9 +76,10 @@ two_sided = ["ADVAN_Neova_TIRE"]
 # rim rounder still but took 1,800 off the body. `[reduce.parts] "RIMS"` does not do this: it only
 # reshares inside the ~580, and the brake disc and cap collapsed.
 #
-# What is left at the lip is the source, not the budget: the outboard rim lip overlaps the tyre bead
-# by only ~8 mm (lip r 0.652 vs bead 0.631 source units), so decimating either edge opens hairline
-# light lines and lets tyre shards over the lip. Inboard the rim flange stops 3.7 cm short of the
+# What was left at the lip was the source, not the budget: the outboard rim lip overlaps the tyre
+# bead by only ~8 mm (lip r 0.652 vs bead 0.631 source units), so decimating either edge opened
+# hairline light lines and let tyre shards over the lip. The compiler now holds the bead still where
+# it lies within 5 mm of the rim (docs/cars.md, **Tyre bead**), which closes most of that. Inboard the rim flange stops 3.7 cm short of the
 # bead axially (a = -0.29 vs -0.39), a real annular hole seen through the spokes on a white render.
 chrome = 2.0
 

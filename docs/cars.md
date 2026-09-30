@@ -124,6 +124,7 @@ Weights multiply a category's share of the triangle budget.
 |---|---|---|
 | `body`, `window`, `tyre`, `chrome` | 1.0 | Category weights |
 | `interior`, `light`, `wheel` | tuned defaults | Category weights; `wheel` stacks on top of the part's category |
+| `trim` | unset | Weight for chrome that is not on a wheel, in place of `chrome`. Rims keep `chrome × wheel` |
 | `drop_hidden` | true | Drop parts the visibility sweep never sees |
 | `drop` | `[]` | Node-name fragments to remove entirely |
 | `two_sided` | `[]` | Node-name fragments to draw two-sided whole, when the sweep leaves a needed back face culled |
@@ -144,6 +145,7 @@ case-insensitive; matches multiply):
 | `body`, `window`, `tyre`, `interior`, `light`, `chrome` | Material-name fragments forcing a category |
 | `palette` | Materials whose texture is a swatch palette; sampled at compile time into vertex colours |
 | `[[materials.colour]]` | Override a material's colour (see below) |
+| `[[materials.lift]]` | Brighten a material's image, optionally inside a UV box (see below) |
 
 ```toml
 [[materials.colour]]
@@ -151,6 +153,19 @@ match = ["material"]              # material-name fragments
 rgb = [185, 188, 196]             # sRGB 0–255
 flat = true                       # optional: discard the texture
 inside = { min = [-0.06, 0.57, 2.12], max = [0.06, 0.70, 2.30] }   # optional: car-space box
+```
+
+`[[materials.lift]]` multiplies the texels of a material's image, as stored (sRGB), clamped at
+white: `by = 3` takes 38 to 114. For chrome a model makes from a dark base colour and a high
+metalness, which the renderer, drawing base colour only, shows dark. `uv` limits it to a box of the
+source image (0–1, V down), read off the image, so lamp detail in the same image is not lifted. The
+image's tile is shared, so any other material over the same image is lifted too; the report says so.
+
+```toml
+[[materials.lift]]
+match = ["LightA"]
+by = 3.0
+uv = { min = [0.0, 0.37], max = [0.27, 0.70] }   # optional
 ```
 
 `inside` uses compiled car space (metres, Y up, Z forward, wheels on the ground), the same as
@@ -224,7 +239,8 @@ Omitted keys use the game's reference car.
    The joined part's pixels are summed, its `[reduce.parts]` weight is the pixel-weighted mean,
    and it is two-sided if any half was. The report prints a `Rejoined:` line when this happens.
 5. **Allocate** the budget by measured pixels × category weight × part weight.
-6. **Decimate** each part to its share with meshoptimizer's attribute-aware simplifier.
+6. **Decimate** each part to its share with meshoptimizer's attribute-aware simplifier. At LOD0 a
+   tyre's bead may be held still where it meets the rim (see **Tyre bead**).
 7. **Build LODs, silhouette, texture atlas and lamp records**, then write the file.
 
 ### Budget allocation
@@ -248,6 +264,23 @@ limit erased badges and small trim entirely.
 meshoptimizer's `Prune` removes whole disconnected components and can empty a part made of many
 small shells. When it does, the part is simplified again without pruning. Vertex clustering
 (`simplify_sloppy`) is a last resort only at LOD0; see **Levels of detail** for the coarse levels.
+
+### Tyre bead
+
+A tyre and its rim are separate parts whose surfaces overlap by a few millimetres at the lip, and
+each is decimated on its own, so collapsing either edge opens hairline light lines or puts tyre
+shards over the lip (the Lada's lip overlaps its bead by about 8 mm). At LOD0, tyre vertices within
+5 mm (`BEAD_LOCK`) of another part of the same wheel are locked, so they are neither moved nor
+collapsed. Nothing is split. The lock applies only when:
+
+- the locked vertices reach at least half-way round the axle (`BEAD_RING`). A few vertices near a
+  spoke are not a bead, and locking them only reorders the collapses (on the E36 that put new
+  shards over the lip);
+- the tyre's target is at least 4× the locked count (`BEAD_LOCK_SHARE`). A rim that sits close to
+  the whole bead locks a third of the tyre and starves the tread (RAV4: 982 → 483 triangles).
+
+On the current fleet this holds the Lada, 350Z, AE86 and Golf R32. `AZ_PARTS=1` prints `LOCK`
+lines with the count and coverage for every tyre part that has vertices near its rim.
 
 ### Back-face culling
 
@@ -433,6 +466,8 @@ regression from an old fault.
 | Grille or mesh is a flat slab | Lattice lost the allocation | `[reduce.parts]` weight |
 | Wheel is a disc, no spokes | Brake hardware behind the spokes took the share | Weight the rim up and hardware down, or `drop` it |
 | Alloy cuts through tyre | Tyre starved (often by a high `chrome` weight) | Lower `chrome`, raise `tyre`/`wheel` |
+| Body trim, grille or ducts collapse, but raising `chrome` bloats the rims | `chrome` weights rims too | `[reduce] trim` for the body's chrome; then `[reduce.parts]` inside the call |
+| Chrome trim or lamp bezel draws dark | Model makes chrome with metalness; renderer draws base colour only | `[[materials.lift]]` with a `uv` box on the dark region |
 | Category warning persists at high triangle counts | Source geometry problem, not budget | Accept or fix the model |
 | Wrong colour on one material | Model is wrong | `[[materials.colour]]` |
 | Colour flips when atlas changes | Texture is a matcap | `[[materials.colour]]` with `flat = true` |

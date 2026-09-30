@@ -236,6 +236,7 @@ impl Atlas {
                 _ => {}
             }
         }
+        lift(model, rules, &mut decoded, &mut warnings);
         // Asked again per material rather than read off `decoded`, because two materials can share
         // one image and only one of them be called flat — or a palette. That one samples white like
         // any flat colour, and the image stays in the grid for the other.
@@ -509,6 +510,64 @@ impl Decoded {
             self.pixels[at + 1] as f32 / 255.0,
             self.pixels[at + 2] as f32 / 255.0,
         ]
+    }
+}
+
+/// Brightens the images the config's `[[materials.lift]]` rules name. See `LiftRule`.
+///
+/// On the decoded image, before either layout is built, so the tile, the palette copy and the
+/// coarse levels' baked colours all see the same lifted texels. Each image is lifted once per rule
+/// however many of the materials over it the rule names; a lift is a statement about the picture,
+/// and two materials sharing it would otherwise square it.
+fn lift(
+    model: &SourceModel,
+    rules: &crate::config::MaterialRules,
+    decoded: &mut HashMap<usize, Option<Decoded>>,
+    warnings: &mut Vec<String>,
+) {
+    for rule in &rules.lift {
+        let mut images: Vec<usize> = Vec::new();
+        for material in &model.materials {
+            if let Some(img) = material.image.filter(|_| rule.matches(&material.name)) {
+                if !images.contains(&img) {
+                    images.push(img);
+                }
+            }
+        }
+        if images.is_empty() {
+            warnings.push(format!(
+                "lift rule {:?} names no textured material, so it lifts nothing",
+                rule.match_
+            ));
+        }
+        for img in images {
+            // A material over the same image that the rule does not name is lifted with it, since
+            // they share one tile. Said rather than refused: it may be what was wanted.
+            for other in &model.materials {
+                if other.image == Some(img) && !rule.matches(&other.name) {
+                    warnings.push(format!(
+                        "lift rule {:?} also lifts `{}`, which samples the same image",
+                        rule.match_, other.name
+                    ));
+                }
+            }
+            let Some(Some(image)) = decoded.get_mut(&img) else { continue };
+            let (w, h) = (image.width as usize, image.height as usize);
+            for y in 0..h {
+                for x in 0..w {
+                    // The texel's centre, so a box drawn on the image's edges takes the texels
+                    // whose centres it covers and no others.
+                    let uv = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
+                    if rule.uv.as_ref().is_some_and(|b| !b.contains(uv)) {
+                        continue;
+                    }
+                    let at = (y * w + x) * 4;
+                    for c in &mut image.pixels[at..at + 3] {
+                        *c = (*c as f32 * rule.by.max(0.0)).round().min(255.0) as u8;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1059,5 +1118,31 @@ mod tests {
         assert_eq!(v & 0x1F, 0x1F, "red full in the low five bits");
         assert_eq!((v >> 5) & 0x3F, 0x3F, "green full in the middle six");
         assert_eq!(v >> 11, 0x1F, "blue full in the top five");
+    }
+
+    /// A lift multiplies the image's texels inside its box and leaves the rest of the image, and
+    /// every material the rule does not name, alone.
+    #[test]
+    fn a_lift_brightens_only_inside_its_box() {
+        let (bezel, bezel_png) = textured("LightA", 0, [40, 40, 40]);
+        let (paint, paint_png) = textured("paint", 1, [40, 40, 40]);
+        let mut model = model_with(vec![bezel, paint]);
+        model.images.push(bezel_png);
+        model.images.push(paint_png);
+
+        let lifted: crate::config::MaterialRules =
+            toml::from_str("lift = [{ match = [\"lighta\"], by = 3.0 }]").expect("the rule parses");
+        let atlas = Atlas::build(&model, &lifted);
+        let centre = |t: Tile| bilinear(&atlas, (t.u0 + t.u1) / 2.0, (t.v0 + t.v1) / 2.0);
+        assert_eq!(centre(atlas.packed.tiles[0]), [120.0; 3], "the named image is lifted");
+        assert_eq!(centre(atlas.packed.tiles[1]), [40.0; 3], "the other is not");
+
+        let boxed: crate::config::MaterialRules = toml::from_str(
+            "lift = [{ match = [\"lighta\"], by = 3.0, uv = { min = [0.0, 0.0], max = [0.1, 0.1] } }]",
+        )
+        .expect("the rule parses");
+        let atlas = Atlas::build(&model, &boxed);
+        let centre = |t: Tile| bilinear(&atlas, (t.u0 + t.u1) / 2.0, (t.v0 + t.v1) / 2.0);
+        assert_eq!(centre(atlas.packed.tiles[0]), [40.0; 3], "outside the box it is untouched");
     }
 }
