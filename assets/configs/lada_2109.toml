@@ -59,7 +59,28 @@ tyre = 4.5
 # This is what forced `tyre` up. Weighting the cabin alone fixed it (14% down to 3.9%) and paid for
 # it out of the tyres, pushing them over the cliff above — so the pair has to be set together, not
 # one and then the other.
-interior = 2.0
+#
+# 2.25 rather than 2.0 since `chrome = 2.0` below: that took the cabin from 1,244 to 1,122
+# triangles, and the dark panel behind the rear hatch glass broke up so the background showed
+# through the roll cage. 2.25 puts it back at 1,275.
+interior = 2.25
+
+# Background slivers along the tyre shoulders were culling, not budget: `--no-cull` closed them with
+# the triangle count unchanged. The sweep marked too few of the tyre's back faces to cross the 15%
+# share, so the tread shoulder and sidewall edge were drawn one-sided and showed the road through.
+two_sided = ["ADVAN_Neova_TIRE"]
+
+# The rim lip read as a polygon because each wheel's chrome draw (rim, 148,000 triangles of lug nuts,
+# valve stems, cap, brakes) got ~580 triangles at 5% error. At 2.0 it gets ~1,060 at 2.4% and the lip
+# is round; body pays 10,160 -> 9,180 at 0.40% -> 0.44%, tyres 1,700 -> 1,530 at 1.1%. 3.0 made the
+# rim rounder still but took 1,800 off the body. `[reduce.parts] "RIMS"` does not do this: it only
+# reshares inside the ~580, and the brake disc and cap collapsed.
+#
+# What is left at the lip is the source, not the budget: the outboard rim lip overlaps the tyre bead
+# by only ~8 mm (lip r 0.652 vs bead 0.631 source units), so decimating either edge opens hairline
+# light lines and lets tyre shards over the lip. Inboard the rim flange stops 3.7 cm short of the
+# bead axially (a = -0.29 vs -0.39), a real annular hole seen through the spokes on a white render.
+chrome = 2.0
 
 
 [materials]

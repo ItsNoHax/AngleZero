@@ -21,6 +21,10 @@ interior = 2.0
 tyre = 2.0
 
 [reduce.parts]
+# Every badge on the car is one 1,089-triangle part. At its pixel share the rear roundel came out a
+# black faceted blob (the texture's blue and white quarters and lettering gone); weighted up it
+# keeps them; the part is small, so the cost is small.
+"Badge_Geo" = 8.0
 # Sidewalls, outer and inner (FL, FR, RL, RR).
 "polySurface117_b" = 0.4
 "polySurface118_b" = 0.4
@@ -46,6 +50,11 @@ tyre = 2.0
 # the bonnet's 0.7 mm inner skin fought the outer one in 16-bit depth (dark patches).
 [materials]
 interior = ["InteriorA_Material"]
+# The tail lamp lenses and bumper reflectors are `red_glass`, rgba(0.5, 0, 0, 0.25). As glass it
+# blended a faint red film over the silver (greyscale) reflectors, which read pale pink; the source
+# relies on transmission to tint them red. As a lamp the lens is opaque at its own hue, as on the
+# Mini and the Golf R. (The cabin is near black because the source is: its textures average sRGB 17.)
+light = ["red_glass"]
 
 # The whole wheel is one material, so these are node names (FL, FR, RL, RR). The heaviest part
 # of each wheel is the spoke face (4,034 / 3,718 triangles), which the default made the tyre; the

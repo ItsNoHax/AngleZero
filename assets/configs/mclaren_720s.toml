@@ -19,3 +19,7 @@ chrome = ["Rim109A"]
 # wheel, its inner edge turns to chords and the background shows through a ring at the rim.
 [reduce]
 tyre = 2.0
+# The wheel-arch liners are the inside of the Kit2 paint shell, seen from behind; culled, the
+# background showed in a sliver between the rear tyre and the arch. Two-siding Base, Carbon1,
+# Coloured, Carbon1M or Engine did not fill it (each rendered); Paint did.
+two_sided = ["_Kit2_Paint_Geo"]

@@ -20,6 +20,22 @@ drop = ["Callip"]
 # and the steering wheel to a sliver. Doubled, it is 5,592 kept whole, with the round wheel and the
 # textured seats, and the tyres give up 32 triangles each for it without visibly changing.
 interior = 2.0
+# The grille, kidneys and mirrors are black plastic, but their nodes are called `..._ChromeSmooth_..`,
+# so they sort as brightwork and share the small `chrome` draw call: the 3,108-triangle slat lattice
+# got 121 and the kidney surrounds 20, which is what drew the black triangles across the grille.
+# A `[reduce.parts]` weight cannot help, because it only reshuffles triangles inside a draw call.
+# Tripling `chrome` gives that call 880. `tyre` tripled and `wheel` cut to a third (4 / 3) keep
+# the rims and tyres at the weight they had (tyres 234 -> 219). Only the wheels' centre caps, which
+# are `window`, lose weight (40 -> 24 triangles, not visibly); tripling `window` to hold them
+# cost the far LOD more body than it was worth.
+chrome = 3.0
+tyre = 3.0
+wheel = 1.3333
+# Lamps: the chrome rings round the headlamps and the reflector dishes behind them. At the default
+# the rings fell to 14 triangles and cut across the inner lamps as a star; at 12 the whole 804 of
+# the lamps costs about 570 more triangles and is kept nearly whole (the reflector at 128 of 128,
+# which the colour rule below needs, since it paints the dish's centre vertex).
+light = 12.0
 
 [reduce.parts]
 "Light_Max_005" = 12.0
@@ -30,3 +46,14 @@ interior = 2.0
 # silhouette is now built from every part, whatever it is called.
 [materials]
 interior = ["BMWM_Interior_Max1"]
+
+# The inner (high-beam) headlamps. `BMWM_Light_Max1` paints them a flat grey in the image, because
+# the model makes them a mirror dish with its normal and metal maps, and the console has neither, so
+# they drew as flat grey discs next to the textured outer lamps. The dish's one centre vertex, at
+# x = ±0.40, is painted dark and the colour fades to the rim, which reads as the reflector and bulb.
+# The box is thin in y and z so that it holds that vertex and nothing else of the material: the rim
+# is 2 cm further forward, and the outer lamps sit outside |x| = 0.42.
+[[materials.colour]]
+match = ["BMWM_Light_Max1"]
+rgb = [40, 40, 46]
+inside = { min = [-0.42, 0.519, 1.85], max = [0.42, 0.535, 1.935] }
