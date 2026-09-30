@@ -423,10 +423,10 @@ pub fn reduce_coarse(
     pixel: f32,
     flat: Option<&FlatTexel>,
     untextured: bool,
-) -> bool {
+) -> Coarse {
     if indices.len() / 3 <= target_triangles || vertices.is_empty() {
         compact(vertices, attrs, indices);
-        return false;
+        return Coarse::Collapsed;
     }
     let positions: Vec<f32> = vertices.iter().flat_map(|v| [v.x, v.y, v.z]).collect();
     let bytes = unsafe {
@@ -436,7 +436,7 @@ pub fn reduce_coarse(
         )
     };
     let Ok(adapter) = meshopt::VertexDataAdapter::new(bytes, 12, 0) else {
-        return false;
+        return Coarse::Collapsed;
     };
     // The same texture weighting as `reduce`, for the same reason.
     let uvs: Vec<f32> = attrs.iter().flat_map(|a| a.uv).collect();
@@ -457,6 +457,7 @@ pub fn reduce_coarse(
             None,
         )
     };
+    let original = indices.clone();
     let mut reduced = simplify(indices, pixel, meshopt::SimplifyOptions::Prune);
     // See `reduce`: pruning can take everything, and collapse alone always leaves a surface.
     if reduced.is_empty() {
@@ -466,6 +467,7 @@ pub fn reduce_coarse(
         *indices = reduced;
     }
     let mut clustered = false;
+    let mut outcome = Coarse::Collapsed;
     if indices.len() / 3 > target_triangles * 5 / 4 {
         // How far the part's own triangles stretch the texture, before clustering changes them.
         // The median, so a few slivers in the source do not set the bar.
@@ -524,9 +526,65 @@ pub fn reduce_coarse(
         if best.is_empty() {
             best = smallest;
         }
-        if !best.is_empty() && best.len() < indices.len() {
-            *indices = best;
-            clustered = true;
+
+        // Clustering is not the only way down, and it is not always the least bad one. Collapse
+        // is asked again with looser limits (`JUDGE_LIMITS`), and each answer — that, clustering's,
+        // and leaving the part out altogether — is judged by how different its outline is from the
+        // part's own at this level's distance (`coverage_difference`); the closest is kept.
+        //
+        // What that mends is a part with holes in it that clustering fills. The Charger's grille
+        // surround is a chrome frame round a black grille, 1,014 triangles asked for 25: clustered,
+        // it came back as a white slab across the whole opening at LOD1, and collapse at a looser
+        // limit did the same, because the frame's front faces are coplanar and collapsing across
+        // the opening costs a plane quadric nothing. Left out, the grille behind it shows as it
+        // does at LOD0 less a one-pixel rim, and that is what the judge picks. Where clustering is
+        // the closest — the usual case on a paint shell — nothing changes.
+        let mut looser: Vec<u32> = Vec::new();
+        for k in JUDGE_LIMITS {
+            let mut again = simplify(&original, pixel * k, meshopt::SimplifyOptions::Prune);
+            if again.is_empty() {
+                again = simplify(&original, pixel * k, meshopt::SimplifyOptions::None);
+            }
+            if !again.is_empty() && again.len() / 3 <= target_triangles {
+                looser = again;
+                break;
+            }
+        }
+        let cell = pixel * JUDGE_CELL;
+        let judge = |candidate: &[u32]| {
+            if candidate.is_empty() {
+                usize::MAX
+            } else {
+                coverage_difference(vertices, &original, candidate, cell)
+            }
+        };
+        let dropped_off = coverage_difference(vertices, &original, &[], cell);
+        let mut candidates = [
+            (Coarse::Collapsed, judge(&looser), looser),
+            (Coarse::Clustered, judge(&best), best),
+        ];
+        if std::env::var("AZ_PARTS").is_ok() {
+            let show = |c: &(Coarse, usize, Vec<u32>)| {
+                if c.2.is_empty() { "-".to_string() } else { format!("{} ({} tris)", c.1, c.2.len() / 3) }
+            };
+            eprintln!(
+                "JUDGE collapse {} cluster {} drop {} (cells differing; 1px collapse {} tris)",
+                show(&candidates[0]),
+                show(&candidates[1]),
+                dropped_off,
+                indices.len() / 3,
+            );
+        }
+        // Ties go to the earlier, which keeps the most of the part's own structure.
+        let pick = (0..candidates.len()).min_by_key(|&i| (candidates[i].1, i)).unwrap();
+        let kept_off = candidates[pick].1;
+        if dropped_off < kept_off {
+            indices.clear();
+            outcome = Coarse::Dropped;
+        } else if kept_off != usize::MAX {
+            outcome = candidates[pick].0;
+            *indices = std::mem::take(&mut candidates[pick].2);
+            clustered = outcome == Coarse::Clustered;
         }
 
         if clustered {
@@ -592,7 +650,126 @@ pub fn reduce_coarse(
     }
     *indices = meshopt::optimize_vertex_cache(indices, vertices.len());
     compact(vertices, attrs, indices);
-    clustered
+    outcome
+}
+
+/// What `reduce_coarse` did to a part.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coarse {
+    /// Edge collapse: the part keeps its topology, and is drawn as it was.
+    Collapsed,
+    /// Vertex clustering, which flips triangles, so the caller draws it two-sided.
+    Clustered,
+    /// Every answer differed more from the part than leaving it out does.
+    Dropped,
+}
+
+/// Looser collapse limits, in pixels at the level's distance, tried when collapse at one pixel
+/// stalls short of a part's target. The first that reaches the target is the one judged.
+const JUDGE_LIMITS: [f32; 4] = [2.0, 4.0, 8.0, 16.0];
+/// The cell a coarse answer is judged in, as a fraction of a pixel at the level's distance.
+const JUDGE_CELL: f32 = 0.5;
+/// Directions a part is projected along to be judged: the three axes, the two horizontal
+/// diagonals, and four from above at 35°. Coverage has no depth, so a direction and its opposite
+/// see the same thing and only one of each pair is needed.
+const JUDGE_VIEWS: [[f32; 3]; 9] = [
+    [1.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.7071, 0.0, 0.7071],
+    [0.7071, 0.0, -0.7071],
+    [0.5792, 0.5736, 0.5792],
+    [0.5792, 0.5736, -0.5792],
+    [-0.5792, 0.5736, 0.5792],
+    [-0.5792, 0.5736, -0.5792],
+];
+
+/// How many cells, over every direction in `JUDGE_VIEWS`, one triangle list covers and the other
+/// does not: the part's own outline against a candidate's, at a resolution tied to the pixel.
+///
+/// Coverage only, no depth and no colour, because the question is the one the eye asks of a part
+/// at a distance — is it there where it was, and is it anywhere it was not — and both of the ways
+/// a coarse answer goes wrong are coverage: a hole or a lost blade is cells the part stopped
+/// covering, a shard or a filled-in frame is cells it started to.
+fn coverage_difference(vertices: &[Vertex], a: &[u32], b: &[u32], cell: f32) -> usize {
+    let mut total = 0usize;
+    for d in JUDGE_VIEWS {
+        // Any two axes square to the direction will do; they only have to be the same for both.
+        let helper = if d[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+        let u = normalise(cross(helper, d));
+        let v = cross(d, u);
+        let project = |i: u32| {
+            let p = &vertices[i as usize];
+            let p = [p.x, p.y, p.z];
+            [dot(p, u) / cell, dot(p, v) / cell]
+        };
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for &i in a.iter().chain(b) {
+            let q = project(i);
+            for k in 0..2 {
+                lo[k] = lo[k].min(q[k]);
+                hi[k] = hi[k].max(q[k]);
+            }
+        }
+        if lo[0] > hi[0] {
+            continue;
+        }
+        // A grid so fine it would cost more than it tells is coarsened instead; no part of a car
+        // comes near it at a real level's pixel, only a tiny test car does.
+        let scale = ((hi[0] - lo[0]).max(hi[1] - lo[1]) / 512.0).max(1.0);
+        let w = ((hi[0] - lo[0]) / scale) as usize + 2;
+        let h = ((hi[1] - lo[1]) / scale) as usize + 2;
+        let fill = |tris: &[u32]| {
+            let mut grid = vec![false; w * h];
+            for t in tris.chunks_exact(3) {
+                let q: Vec<[f32; 2]> = t
+                    .iter()
+                    .map(|&i| {
+                        let q = project(i);
+                        [(q[0] - lo[0]) / scale, (q[1] - lo[1]) / scale]
+                    })
+                    .collect();
+                let area = (q[1][0] - q[0][0]) * (q[2][1] - q[0][1]) - (q[2][0] - q[0][0]) * (q[1][1] - q[0][1]);
+                if area.abs() < 1.0e-9 {
+                    continue;
+                }
+                let x0 = q.iter().map(|p| p[0]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+                let x1 = (q.iter().map(|p| p[0]).fold(f32::MIN, f32::max).ceil() as usize).min(w - 1);
+                let y0 = q.iter().map(|p| p[1]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+                let y1 = (q.iter().map(|p| p[1]).fold(f32::MIN, f32::max).ceil() as usize).min(h - 1);
+                for y in y0..=y1 {
+                    for x in x0..=x1 {
+                        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                        let inside = (0..3).all(|k| {
+                            let (s, e) = (q[k], q[(k + 1) % 3]);
+                            let side = (e[0] - s[0]) * (py - s[1]) - (e[1] - s[1]) * (px - s[0]);
+                            side * area >= 0.0
+                        });
+                        if inside {
+                            grid[y * w + x] = true;
+                        }
+                    }
+                }
+            }
+            grid
+        };
+        let (ga, gb) = (fill(a), fill(b));
+        total += ga.iter().zip(&gb).filter(|(x, y)| x != y).count();
+    }
+    total
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn normalise(a: [f32; 3]) -> [f32; 3] {
+    let l = dot(a, a).sqrt().max(1.0e-9);
+    [a[0] / l, a[1] / l, a[2] / l]
 }
 
 /// The atlas, and a coordinate in it that samples pure white, for baking a texture into vertex
@@ -1291,5 +1468,29 @@ mod tests {
             .map(|p| p[0].abs())
             .fold(0.0f32, f32::max);
         assert!(wing_x > 0.79, "the wing's tips were drawn in to {wing_x}");
+    }
+
+    #[test]
+    fn a_frame_filled_in_is_judged_further_off_than_the_frame_left_out() {
+        // A 1 m square frame, 10 cm wide, in the XY plane: the Charger's grille surround in
+        // miniature. Filling it in covers the 0.8 m opening it never covered; leaving it out loses
+        // only the 0.36 m² of frame.
+        let p = [
+            (-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5),
+            (-0.4, -0.4), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4),
+        ];
+        let vertices: Vec<Vertex> = p.iter().map(|&(x, y)| v(x, y, 0.0, 0xFFFF_FFFF)).collect();
+        let mut frame = Vec::new();
+        for k in 0..4u32 {
+            let (o0, o1, i0, i1) = (k, (k + 1) % 4, k + 4, (k + 1) % 4 + 4);
+            frame.extend_from_slice(&[o0, o1, i1, o0, i1, i0]);
+        }
+        let filled = [0, 1, 2, 0, 2, 3];
+        let cell = 0.02;
+        assert_eq!(coverage_difference(&vertices, &frame, &frame, cell), 0);
+        let filled_off = coverage_difference(&vertices, &frame, &filled, cell);
+        let dropped_off = coverage_difference(&vertices, &frame, &[], cell);
+        assert!(dropped_off > 0);
+        assert!(filled_off > dropped_off, "filled {filled_off}, dropped {dropped_off}");
     }
 }

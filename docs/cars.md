@@ -303,9 +303,11 @@ cracks along the seam.
 Each level is decimated from the welded original, not from the level above, and is held to its
 budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's allocator:
 
-- **Draw calls** share the budget by their LOD0 weight (pixels × config weights) to the power
-  0.8, and a wheel's kept rim may claim at most 1/40 of the level. Config weights are tuned for
-  LOD0; unflattened, the E36's `chrome = 12` gave its rims more of LOD1 than its body.
+- **Draw calls** share the budget by pixels × category weight, to the power 0.8, and a wheel's
+  kept rim may claim at most 1/40 of the level. The category weight is the default times the
+  square root of the config's ratio to it (`COARSE_WEIGHT_POWER`): config weights are tuned for
+  LOD0, and taken whole the E36's `chrome = 12` gave its rims more of LOD1 than its body, and
+  `interior = 2.0` gave the NSX's and RX-7's cabins a fifth of LOD2.
 - **Parts** within a draw call share it by measured pixels to the power 0.6, which keeps the order
   and narrows the gap, so floors, grille backings and bumper centres (undercounted by a sweep that
   mostly sees tops and sides) keep enough to stay closed. When the per-part floor (2 triangles)
@@ -321,6 +323,20 @@ budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's al
   usually does (a border loop can shrink but not close). Its triangles that bridge atlas islands get
   the texture's local colour baked into their vertices and sample a white texel, instead of
   stretching the atlas. A clustered part is drawn two-sided.
+- **Stalled parts are judged.** When collapse stalls, three answers are compared: collapse at a
+  looser limit (2–16 pixels), clustering, and leaving the part out. Each is projected along nine
+  directions onto a half-pixel grid at the level's distance, and the one whose outline differs
+  from the part's own in the fewest cells is kept (`simplify::coverage_difference`). This is what
+  stops a frame being filled in: the Charger's grille surround clustered into a white slab across
+  the opening, and is now left out so the grille behind it shows. A part left out hands its share
+  back to its draw call, which is shared again.
+- **Coarse parts are relit from their own faces.** A welded vertex's light averages every face
+  that met there, so the corner vertices a coarse level keeps carry the grey of a panel edge and
+  spread it across the panel; white bonnets and flanks drew grey. Collapsed parts take the light of
+  their area-weighted face normals; clustered parts, whose faces flip, keep the brighter of old and
+  new.
+- **The level is held to its budget.** If what the parts return adds up to more than the level, it
+  is built again asking for less by the overshoot.
 - **Tyres are generated**, not decimated: a drum at the rolling radius and width, 16 sides at
   LOD1 and 10 at LOD2. At LOD1 the model's own rim (every wheel part that stops short of the tread)
   is kept and decimated, and only the tyre is built round it; at LOD2 the whole wheel is built,
@@ -329,7 +345,7 @@ budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's al
   level too small to spend a third of itself on the drums, or an atlas with no white tile, keeps
   the decimated wheels.
 
-`AZ_PARTS=1` prints every coarse part's target and result, and marks the ones that were clustered.
+`AZ_PARTS=1` prints every coarse part's target and result, marks the ones that were clustered or judged out, and prints a `JUDGE` line with each stalled part's candidates.
 
 ### Wheels and camber
 

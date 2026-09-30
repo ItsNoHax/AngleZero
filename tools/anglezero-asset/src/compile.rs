@@ -1946,17 +1946,48 @@ fn spend_coarse(
     pixel: f32,
     flat: Option<&simplify::FlatTexel>,
 ) {
+    // A level is held to its budget, and a target is not a promise: collapse is accepted a
+    // quarter over its target, and a part clustering cannot bring down keeps its smallest answer.
+    // Those almost always net out against the parts that come in under, and when they do not the
+    // level is built again with the overshoot taken off what it asks for. The M5's LOD2 came out
+    // at 1,201 of 1,200 before this.
+    let welded = buckets.clone();
+    let mut ask = budget;
+    for _ in 0..8 {
+        *buckets = welded.clone();
+        spend_coarse_once(buckets, ask, tile_span, pixel, flat);
+        let got: usize = buckets.iter().map(|b| b.indices.len() / 3).sum();
+        if got <= budget || ask == 0 {
+            return;
+        }
+        ask = ask.saturating_sub(got - budget);
+    }
+}
+
+fn spend_coarse_once(
+    buckets: &mut Vec<Bucket>,
+    budget: usize,
+    tile_span: f32,
+    pixel: f32,
+    flat: Option<&simplify::FlatTexel>,
+) {
     // A kept rim is capped at a fortieth of the level (75 triangles at LOD1) — enough for five
     // spokes, and a ceiling the config's weights cannot lift. They were set for LOD0, where the
     // E36's `chrome = 12` buys its mesh wheels; at LOD1 the same weight gave its four rims 832 of
     // 3,000 triangles against 820 for the whole body, and the nose shredded. Capping the claim
     // rather than the result hands what the rims cannot take back to everything else.
     let rim_cap = (budget / 40).max(MIN_BUCKET_TRIANGLES);
+    let defaults = crate::config::Reduction::default();
     let targets = share_budget(
         &buckets
             .iter()
             .map(|b| {
-                let (w, have) = b.weights();
+                let have = b.weights().1;
+                // The config's category weight is taken at its square root against the default,
+                // not whole: see `COARSE_WEIGHT_POWER`.
+                let default = defaults.bucket_weight(b.category, b.wheel.is_some()) as f64;
+                let weight = default * (b.weight as f64 / default.max(1.0e-6)).powf(COARSE_WEIGHT_POWER);
+                let w = b.pixels as f64 * weight;
                 (w.powf(COARSE_BUCKET_POWER), if b.wheel.is_some() { have.min(rim_cap) } else { have })
             })
             .collect::<Vec<_>>(),
@@ -1964,49 +1995,79 @@ fn spend_coarse(
         MIN_BUCKET_TRIANGLES,
     );
     for (b, target) in buckets.iter_mut().zip(&targets) {
-        let piece_targets = share_or_drop(
-            &b.pieces
-                .iter()
-                .map(|p| ((p.pixels as f64 * p.weight as f64).powf(COARSE_PART_POWER), p.indices.len() / 3))
-                .collect::<Vec<_>>(),
-            *target,
-            COARSE_PART_FLOOR,
-        );
-        for (p, &t) in b.pieces.iter_mut().zip(&piece_targets) {
-            let was = p.indices.len() / 3;
-            let mut clustered = false;
-            if t == 0 {
-                p.indices.clear();
-            } else {
-                clustered = simplify::reduce_coarse(
-                    &mut p.vertices,
-                    &mut p.attrs,
-                    &mut p.indices,
-                    t,
-                    tile_span,
-                    pixel,
-                    flat,
-                    // A cabin is seen through tinted glass: its colour matters there, its texture
-                    // does not.
-                    b.category == Category::Interior,
-                );
-                if clustered {
-                    p.two_sided = true;
-                }
-                if t <= STUCK_TARGET && p.indices.len() / 3 > t * 4 {
+        // A part judged out (see `simplify::Coarse::Dropped`) hands its share back, and the draw
+        // call is shared again among what is left, from the welded parts. Without it the Abarth's
+        // LOD2 came out at 984 triangles of 1,200, the 190E's at 930. At most two share-outs
+        // after the first: a part judged out on the second is rare, and on the third it is left
+        // out without its share being handed on.
+        let welded_pieces = b.pieces.clone();
+        let mut judged_out = vec![false; welded_pieces.len()];
+        for round in 0..3 {
+            b.pieces = welded_pieces.clone();
+            let piece_targets = share_or_drop(
+                &b.pieces
+                    .iter()
+                    .zip(&judged_out)
+                    .map(|(p, &out)| {
+                        if out {
+                            (0.0, 0)
+                        } else {
+                            ((p.pixels as f64 * p.weight as f64).powf(COARSE_PART_POWER), p.indices.len() / 3)
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+                *target,
+                COARSE_PART_FLOOR,
+            );
+            let mut more = false;
+            for (k, (p, &t)) in b.pieces.iter_mut().zip(&piece_targets).enumerate() {
+                let was = p.indices.len() / 3;
+                let mut outcome = simplify::Coarse::Collapsed;
+                if t == 0 {
                     p.indices.clear();
+                } else {
+                    outcome = simplify::reduce_coarse(
+                        &mut p.vertices,
+                        &mut p.attrs,
+                        &mut p.indices,
+                        t,
+                        tile_span,
+                        pixel,
+                        flat,
+                        // A cabin is seen through tinted glass: its colour matters there, its
+                        // texture does not.
+                        b.category == Category::Interior,
+                    );
+                    if outcome == simplify::Coarse::Clustered {
+                        p.two_sided = true;
+                    }
+                    if outcome == simplify::Coarse::Dropped {
+                        judged_out[k] = true;
+                        more = true;
+                    }
+                    if t <= STUCK_TARGET && p.indices.len() / 3 > t * 4 {
+                        p.indices.clear();
+                    }
+                    relight(p, b.category, outcome == simplify::Coarse::Clustered);
+                }
+                if std::env::var("AZ_PARTS").is_ok() {
+                    eprintln!(
+                        "COARSE {:>7} -> {:>6} (target {:>6}) {:>8} px {}{}",
+                        was,
+                        p.indices.len() / 3,
+                        t,
+                        p.pixels,
+                        match outcome {
+                            simplify::Coarse::Collapsed => "",
+                            simplify::Coarse::Clustered => "clustered ",
+                            simplify::Coarse::Dropped => "judged out ",
+                        },
+                        p.node
+                    );
                 }
             }
-            if std::env::var("AZ_PARTS").is_ok() {
-                eprintln!(
-                    "COARSE {:>7} -> {:>6} (target {:>6}) {:>8} px {}{}",
-                    was,
-                    p.indices.len() / 3,
-                    t,
-                    p.pixels,
-                    if clustered { "clustered " } else { "" },
-                    p.node
-                );
+            if !more || round == 2 {
+                break;
             }
         }
         b.pieces.retain(|p| p.indices.len() >= 3);
@@ -2024,6 +2085,47 @@ fn spend_coarse(
         }
     }
     finish_level(buckets);
+}
+
+/// Lights a coarse part from its own faces rather than from the light its vertices were welded
+/// with.
+///
+/// A vertex's light is the mean over every source vertex welded into it, and where a panel turns a
+/// corner — a bonnet's leading edge rolling under, a roof meeting its gutter — that is a mean of an
+/// upward face and a sideways or downward one. At LOD0 such vertices sit in a strip a few
+/// millimetres wide. A coarse level keeps exactly those vertices, because the corners are where
+/// the shape is, and spans a whole panel between them, so the grey of the corner was drawn across
+/// it: white cars came out grey at LOD1 and LOD2 (the E30's and Abarth's bonnets, the AE86's flank,
+/// the E30's roof at LOD2 near black). Relit from the area-weighted normal of the part's own
+/// triangles, the panel is lit as the panel it now is.
+///
+/// Clustering flips triangles, so a clustered part's faces are all turned upward and it keeps the
+/// brighter of its old light and the new: its normals are too rough to darken anything with, and
+/// the fault being mended is only ever a panel too dark. The underside of a clustered part
+/// brightens with it, which no game camera sees.
+fn relight(p: &mut Piece, category: Category, clustered: bool) {
+    let mut sum = vec![[0.0f32; 3]; p.vertices.len()];
+    for t in p.indices.chunks_exact(3) {
+        let (a, b, c) = (&p.vertices[t[0] as usize], &p.vertices[t[1] as usize], &p.vertices[t[2] as usize]);
+        let e1 = [b.x - a.x, b.y - a.y, b.z - a.z];
+        let e2 = [c.x - a.x, c.y - a.y, c.z - a.z];
+        let mut n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        if clustered && n[1] < 0.0 {
+            n = [-n[0], -n[1], -n[2]];
+        }
+        for &i in t {
+            for k in 0..3 {
+                sum[i as usize][k] += n[k];
+            }
+        }
+    }
+    for (a, n) in p.attrs.iter_mut().zip(&sum) {
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if l > 0.0 {
+            let lit = light_at([n[0] / l, n[1] / l, n[2] / l], category);
+            a.light = if clustered { a.light.max(lit) } else { lit };
+        }
+    }
 }
 
 /// Lowers a coarse level's cabin ceiling by a pixel, leaving everything else of it where it was.
@@ -2075,6 +2177,19 @@ const COARSE_PART_FLOOR: usize = 2;
 /// both levels; 0.8 on draw calls is what gave the AE86 back its floor (a draw call of its own,
 /// seen only from below) for no loss elsewhere worth the name.
 const COARSE_PART_POWER: f64 = 0.6;
+/// How much of a config's category weight a coarse level honours: the default weight times the
+/// config's ratio to it, to this power.
+///
+/// The weights in the configs were set to fix LOD0 faults, and they are large: `light = 25` on the
+/// Golf R, `chrome = 60` on the 190E, `interior = 2.0` (five times the default) on ten cars to buy
+/// a cabin that reads through the glass at 5 m. Taken whole, even flattened by
+/// `COARSE_BUCKET_POWER`, the NSX's and RX-7's cabins took a fifth of LOD2 and their roofs and
+/// rear decks went to holes, and the E36's lamps had more of LOD2 than its paint shell. Ignoring
+/// them (the default weights alone) mended those and opened the S14's front intake, whose black
+/// backing is the `trim` its config weights at 4. The square root keeps which way the config
+/// leans and takes most of the size out of it: measured fleet-wide against 0 and 1, it left the
+/// least uncovered at LOD2 (2.02% mean, against 2.05% and 2.14%) and kept the S14's intake shut.
+const COARSE_WEIGHT_POWER: f64 = 0.5;
 const COARSE_BUCKET_POWER: f64 = 0.8;
 
 /// Sides of a generated wheel: sixteen at LOD1, where a wheel is about ten pixels across, and ten
