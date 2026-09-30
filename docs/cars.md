@@ -99,7 +99,7 @@ drop = ["Base_Geo_lodA_Base_Geo_lodA"]   # display plinth
 | `scale` | 1.0 | Uniform scale to metres |
 | `triangles` | 10,000 | LOD0 budget. All current cars use 24,000 (one uses 32,000) |
 | `lods` | `[]` | Coarser budgets, nearest first. Current cars use `[3000, 1200]` |
-| `silhouette` | 1,000 | Silhouette grid resolution. Raise for long or tall cars |
+| `silhouette` | 1,000 | Silhouette triangle budget, not counting its wheels. Raise for a car with a big aero kit |
 
 ### `[spawn]`
 
@@ -126,6 +126,7 @@ Weights multiply a category's share of the triangle budget.
 | `interior`, `light`, `wheel` | tuned defaults | Category weights; `wheel` stacks on top of the part's category |
 | `drop_hidden` | true | Drop parts the visibility sweep never sees |
 | `drop` | `[]` | Node-name fragments to remove entirely |
+| `two_sided` | `[]` | Node-name fragments to draw two-sided whole, when the sweep leaves a needed back face culled |
 
 `[reduce.parts]` weights individual parts by node-name fragment (matched against node and parent,
 case-insensitive; matches multiply):
@@ -212,9 +213,15 @@ Omitted keys use the game's reference car.
    keyword match on material and node names.
 3. **Visibility sweep.** 72 viewpoints. A coarse 128 px pass measures each part's screen share; a
    512 px pass decides whether a part exists at all and whether culling it opens holes.
-4. **Allocate** the budget by measured pixels × category weight × part weight.
-5. **Decimate** each part to its share with meshoptimizer's attribute-aware simplifier.
-6. **Build LODs, silhouette, texture atlas and lamp records**, then write the file.
+4. **Rejoin split parts.** Within a draw-call bucket, parts with the same material and parent node
+   whose shared border is at least 40 % of the smaller one's edge are merged into one part before
+   welding. Exporters split a primitive at 65k vertices (RAV4 paint) or write one surface as two
+   primitives (Lada tread); decimated apart, the shared border opens into see-through slivers.
+   The joined part's pixels are summed, its `[reduce.parts]` weight is the pixel-weighted mean,
+   and it is two-sided if any half was. The report prints a `Rejoined:` line when this happens.
+5. **Allocate** the budget by measured pixels × category weight × part weight.
+6. **Decimate** each part to its share with meshoptimizer's attribute-aware simplifier.
+7. **Build LODs, silhouette, texture atlas and lamp records**, then write the file.
 
 ### Budget allocation
 
@@ -236,7 +243,7 @@ limit erased badges and small trim entirely.
 
 meshoptimizer's `Prune` removes whole disconnected components and can empty a part made of many
 small shells. When it does, the part is simplified again without pruning. Vertex clustering
-(`simplify_sloppy`) is a last resort only.
+(`simplify_sloppy`) is a last resort only at LOD0; see **Levels of detail** for the coarse levels.
 
 ### Back-face culling
 
@@ -256,7 +263,36 @@ cracks along the seam.
 | LOD1 | 18 m | 3,000 |
 | LOD2 | 45 m | 1,200 |
 
-Each level is decimated from the welded original, not from the level above.
+Each level is decimated from the welded original, not from the level above, and is held to its
+budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's allocator:
+
+- **Draw calls** share the budget by their LOD0 weight (pixels × config weights) to the power
+  0.8, and a wheel's kept rim may claim at most 1/40 of the level. Config weights are tuned for
+  LOD0; unflattened, the E36's `chrome = 12` gave its rims more of LOD1 than its body.
+- **Parts** within a draw call share it by measured pixels to the power 0.6, which keeps the order
+  and narrows the gap, so floors, grille backings and bumper centres (undercounted by a sweep that
+  mostly sees tops and sides) keep enough to stay closed. When the per-part floor (2 triangles)
+  adds up to more than the draw call has, the least-seen parts are left out rather than every part
+  being pinned at the floor. LOD0's allocator pinned them all, which is why the M5 wrote 4,106 and
+  2,976 triangles against 3,000 and 1,200 with its paint shell at four triangles.
+- **The cabin's ceiling is lowered by a pixel**, so a headliner moved by decimation does not come
+  up through the roof (the Delta's LOD2 roof drew black).
+- **Collapse error is capped at one pixel** at the level's distance (7.6 cm at 18 m, 19 cm at
+  45 m, from the 60° field of view over 272 lines). An open limit let pruning remove door skins and
+  bonnets whole.
+- **Clustering** (`simplify_sloppy`) is the fallback when collapse stalls, which on large parts it
+  usually does (a border loop can shrink but not close). Its triangles that bridge atlas islands get
+  the texture's local colour baked into their vertices and sample a white texel, instead of
+  stretching the atlas. A clustered part is drawn two-sided.
+- **Tyres are generated**, not decimated: a drum at the rolling radius and width, 16 sides at
+  LOD1 and 10 at LOD2. At LOD1 the model's own rim (every wheel part that stops short of the tread)
+  is kept and decimated, and only the tyre is built round it; at LOD2 the whole wheel is built,
+  with a rim face. The colours are measured by rasterising LOD0's wheel face on, unlit and
+  textured, and averaging the cells tread-reaching parts win (tyre) and the rest win (rim). A
+  level too small to spend a third of itself on the drums, or an atlas with no white tile, keeps
+  the decimated wheels.
+
+`AZ_PARTS=1` prints every coarse part's target and result, and marks the ones that were clustered.
 
 ### Wheels and camber
 
@@ -299,15 +335,27 @@ hardware figures may differ.
 A flat stand-in drawn while the car loads. It is stored immediately after the 112-byte header so
 the first chunk contains it.
 
-- Built from `body` and `window` parts only, excluding parts the sweep never saw.
-- The shell is welded on position (5 mm) and simplified as one mesh by vertex clustering, which
-  preserves outline rather than surface.
+- Built from every part except the wheels', whatever its category, excluding parts the sweep
+  never saw. Wings, splitters and skirts are often `chrome`, and a cabin can be `window` or
+  `interior` depending on the config, so a category list lost aero kits and made the silhouette
+  depend on how the cabin was categorised.
+- Welded on position (5 mm) into one mesh.
+- **Hidden surfaces are removed** before and after simplifying: the shell is rendered flat and
+  unculled from 264 directions all round (768 px), and a triangle that is never the nearest
+  surface is dropped. Seats behind glass, inner skins and floor pans cost nothing.
+- **Simplified by half-edge collapse under plane quadrics** (`simplify::collapse`), with no
+  topology kept, so a collapse may run one part into another. Open edges and folds sharper than
+  about 78° are held by extra planes, which keeps thin parts — wing blades, fins, splitter
+  lips — at their full extent. Vertex clustering, used before, snapped the shell to a uniform
+  grid of about 25 cm at this budget and lost everything thinner than a cell.
 - Wheels are generated 12-sided cylinders at the measured radius.
-- `silhouette` sets the clustering grid, so longer cars need a higher value.
-- Thin standoff features (e.g. the R34's wing) are lost at any budget.
+- `silhouette` is the triangle budget for the shell. The default suits the fleet. The NSX, M5 and
+  Abarth carry 1,400 from when the budget set the clustering grid; only the NSX, for its aero kit,
+  still measurably gains from it (1.1% mean missing at 1,000, 0.2% at 1,400).
 
-Typically 8–13 KB per car. `scripts/silhouette_check.py` measures how much of each car its
-silhouette fails to cover. Cars compiled before silhouettes existed load without one.
+Typically 13–17 KB per car at the default budget, about 20 KB at 1,400; the console draws it
+from the first 32 KB chunk, header included. `scripts/silhouette_check.py` measures how much of
+each car its silhouette fails to cover. Cars compiled before silhouettes existed load without one.
 
 ### Texture atlas
 

@@ -288,6 +288,119 @@ pub fn measure(model: &SourceModel, transparent: &[bool]) -> Visibility {
     }
 }
 
+/// Resolution of the silhouette's own sweep, per side.
+///
+/// A silhouette is a few thousand triangles, so this can afford to be finer than either sweep over
+/// the source model: a 4.5 m car across 768 pixels is 7.5 mm a pixel, which is about the width of
+/// the thinnest sliver a clustering grid leaves between two surfaces it has snapped together.
+///
+/// The tests build shapes a metre across out of a handful of quads, which a debug build would
+/// otherwise spend half a minute rendering at this size for no better answer.
+const OUTLINE_RESOLUTION: usize = if cfg!(test) { 128 } else { 768 };
+
+/// Heights the silhouette is looked at from, in degrees, at every one of [`AZIMUTHS`] headings.
+///
+/// All the way round, underneath included, and not just the heights the game's cameras use. The
+/// question here is not what the player sees but which triangles *can never* be seen, and a
+/// triangle that is only uncovered from low down — the underside of a splitter, a sill's lower
+/// face — is still part of the shape, and removing it would open a hole in any view that looks up.
+const OUTLINE_ELEVATIONS: [f32; 11] = [-89.0, -70.0, -50.0, -30.0, -12.0, 0.0, 12.0, 30.0, 50.0, 70.0, 89.0];
+
+/// Which triangles of a flat, unculled mesh are ever the nearest surface, from anywhere.
+///
+/// This is what lets a silhouette be built from every part of a car without the parts inside it
+/// costing anything. A silhouette is drawn in one flat colour with culling off, so a triangle that
+/// is behind another from every direction changes no pixel of it — not an edge, not a shade,
+/// nothing — and can be thrown away. The seats behind the glass, the inside of a bumper skin, the
+/// floor of the boot: all of them are covered from every side by the shell they sit in, and all of
+/// them go.
+///
+/// Both windings are drawn, as the silhouette is. The views are orthographic, which from a car's
+/// own distance of a few metres differs from the title camera by a few degrees of parallax; the
+/// sphere of views is dense enough that anything a perspective camera could see past is seen from
+/// a neighbouring heading.
+pub fn outward_triangles(positions: &[[f32; 3]], indices: &[u32]) -> Vec<bool> {
+    let triangles = indices.len() / 3;
+    let mut seen = vec![false; triangles];
+    if triangles == 0 {
+        return seen;
+    }
+    let mut bounds = Bounds::EMPTY;
+    for p in positions {
+        bounds.add(*p);
+    }
+    let centre = [
+        (bounds.min[0] + bounds.max[0]) * 0.5,
+        (bounds.min[1] + bounds.max[1]) * 0.5,
+        (bounds.min[2] + bounds.max[2]) * 0.5,
+    ];
+    let radius = radius_of(&bounds).max(1e-3);
+
+    const N: usize = OUTLINE_RESOLUTION * OUTLINE_RESOLUTION;
+    let res = OUTLINE_RESOLUTION;
+    let half = res as f32 * 0.5;
+    // How far behind the nearest surface a middle may be and still be on it: two pixels, in the
+    // depth buffer's own units, which are metres. Generous on purpose — keeping a triangle that
+    // could have gone costs a few bytes, and losing one that could not costs a hole.
+    let slack = 2.0 * 2.0 * radius / res as f32;
+    let mut depth = vec![f32::NEG_INFINITY; N];
+    let mut owner = vec![u32::MAX; N];
+    let mut facing = vec![false; N];
+    for elevation in OUTLINE_ELEVATIONS {
+        for i in 0..AZIMUTHS {
+            let view = View::new(360.0 * i as f32 / AZIMUTHS as f32, elevation);
+            depth.fill(f32::NEG_INFINITY);
+            owner.fill(u32::MAX);
+            raster_with(
+                positions,
+                indices,
+                0,
+                &view,
+                centre,
+                radius,
+                OUTLINE_RESOLUTION,
+                &mut depth,
+                &mut owner,
+                &mut facing,
+                true,
+                false,
+            );
+            for o in &owner {
+                if *o != u32::MAX {
+                    seen[*o as usize] = true;
+                }
+            }
+            // A triangle smaller than a pixel can fall between the pixel centres and own nothing
+            // while lying right on the outside of the car, and a dense source mesh is mostly
+            // triangles like that. So a triangle also counts as seen when the point at its middle
+            // is as near as the nearest surface there: it is *on* the outside, whether or not it
+            // happened to be sampled.
+            for (t, tri) in indices.chunks_exact(3).enumerate() {
+                if seen[t] {
+                    continue;
+                }
+                let mut mid = [0.0f32; 3];
+                for i in tri {
+                    let q = view.project(positions[*i as usize], centre, radius);
+                    for k in 0..3 {
+                        mid[k] += q[k] / 3.0;
+                    }
+                }
+                let x = ((mid[0] + 1.0) * half) as isize;
+                let y = ((mid[1] + 1.0) * half) as isize;
+                if x < 0 || y < 0 || x >= res as isize || y >= res as isize {
+                    continue;
+                }
+                let at = y as usize * res + x as usize;
+                if owner[at] == u32::MAX || mid[2] >= depth[at] - slack {
+                    seen[t] = true;
+                }
+            }
+        }
+    }
+    seen
+}
+
 /// Which triangles the hardware's back-face culling would take away, leaving a hole behind.
 ///
 /// Each view is drawn twice into a buffer of its own: once with everything, as the sweep above
@@ -343,7 +456,8 @@ fn what_culling_would_cost(
                     ),
                 ] {
                     raster_with(
-                        part,
+                        &part.positions,
+                        &part.indices,
                         triangle_at[index],
                         &view,
                         centre,
@@ -392,7 +506,8 @@ fn raster(
     write_depth: bool,
 ) {
     raster_with(
-        part,
+        &part.positions,
+        &part.indices,
         first_triangle,
         view,
         centre,
@@ -408,7 +523,8 @@ fn raster(
 
 #[allow(clippy::too_many_arguments)]
 fn raster_with(
-    part: &Part,
+    positions: &[[f32; 3]],
+    indices: &[u32],
     first_triangle: usize,
     view: &View,
     centre: [f32; 3],
@@ -423,13 +539,12 @@ fn raster_with(
     let half = resolution as f32 * 0.5;
     let to_pixel = |p: [f32; 3]| [(p[0] + 1.0) * half, (p[1] + 1.0) * half, p[2]];
 
-    let projected: Vec<[f32; 3]> = part
-        .positions
+    let projected: Vec<[f32; 3]> = positions
         .iter()
         .map(|p| to_pixel(view.project(*p, centre, radius)))
         .collect();
 
-    for (triangle, t) in part.indices.chunks_exact(3).enumerate() {
+    for (triangle, t) in indices.chunks_exact(3).enumerate() {
         let a = projected[t[0] as usize];
         let b = projected[t[1] as usize];
         let c = projected[t[2] as usize];

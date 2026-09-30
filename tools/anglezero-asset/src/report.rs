@@ -57,6 +57,9 @@ pub struct Report {
     pub levels: Vec<usize>,
     /// Triangles left out because the config named them, and how many patterns were given.
     pub dropped_by_name: (usize, usize),
+    /// Source parts put back together because an exporter had split one surface into them, and how
+    /// many surfaces they made.
+    pub rejoined: (usize, usize),
     /// How many source materials brought a real image into the atlas.
     pub textured_materials: usize,
     /// Source images that had to be resized into their tile, as (name, from, to).
@@ -96,6 +99,7 @@ impl Report {
             wheel_radius: 0.0,
             levels: Vec::new(),
             dropped_by_name: (0, 0),
+            rejoined: (0, 0),
             textured_materials: 0,
             resized: Vec::new(),
             lights: Vec::new(),
@@ -226,6 +230,10 @@ impl Report {
     }
 
     /// Triangles left out because the config named them, and how many patterns did it.
+    pub fn note_rejoined(&mut self, parts: usize, surfaces: usize) {
+        self.rejoined = (parts, surfaces);
+    }
+
     pub fn note_dropped_by_name(&mut self, triangles: usize, patterns: usize) {
         self.dropped_by_name = (triangles, patterns);
     }
@@ -405,6 +413,15 @@ impl Report {
                 "Left out by name: {} triangles, matching {} pattern(s) in [reduce] drop",
                 commas(self.dropped_by_name.0),
                 self.dropped_by_name.1
+            );
+            println!();
+        }
+
+        if self.rejoined.0 > 0 {
+            println!(
+                "Rejoined: {} source parts into {} surfaces, where one object's material had been \
+                 split and the pieces share a border",
+                self.rejoined.0, self.rejoined.1
             );
             println!();
         }

@@ -57,12 +57,12 @@ pub struct CarConfig {
     /// Triangle budget for the silhouette — the flat stand-in the console draws while the rest of
     /// this car is still being read off the memory stick. `None` takes the default.
     ///
-    /// Its own budget rather than a share of `triangles`, and drawn from the shell, the glass and
-    /// the tyres alone, because the only thing asked of it is an outline. Worth raising for a car
-    /// whose shape is in details a few hundred triangles cannot hold; worth lowering for a car
-    /// that is mostly a box. Bear in mind that the silhouette has to arrive in the load's first
-    /// 32 KB chunk to be worth anything, and it shares that chunk with the header and the mesh
-    /// records.
+    /// Its own budget rather than a share of `triangles`, not counting the generated wheels, and
+    /// spent only on what can be seen from outside, because the only thing asked of it is an
+    /// outline. Worth raising for a car whose shape is in details a thousand triangles cannot
+    /// hold — a big aero kit — and worth lowering for a car that is mostly a box. Bear in mind
+    /// that the silhouette has to arrive in the load's first 32 KB chunk to be worth anything, and
+    /// it shares that chunk with the header and the mesh records.
     #[serde(default)]
     pub silhouette: Option<usize>,
 
@@ -366,6 +366,16 @@ pub struct Reduction {
     /// wheel is on screen is what they should look like anyway.
     #[serde(default)]
     pub drop: Vec<String>,
+
+    /// Node-name fragments for parts to draw two-sided whatever the sweep measured.
+    ///
+    /// A part goes two-sided on its own when more than `TWO_SIDED_SHARE` of it was seen only from
+    /// behind. A part that is mostly something else fails that test even when the piece that
+    /// matters is entirely back faces: an arch liner modelled as the edge of a floor pan is a few
+    /// hundred triangles in a few thousand, so the whole part stays culled and the arch shows sky.
+    /// Naming it here keeps the part whole — no mesh is ever split — and pays fill on all of it.
+    #[serde(default)]
+    pub two_sided: Vec<String>,
 }
 
 fn default_wheel_weight() -> f32 {
@@ -385,6 +395,7 @@ impl Default for Reduction {
             drop_hidden: true,
             parts: std::collections::HashMap::new(),
             drop: Vec::new(),
+            two_sided: Vec::new(),
         }
     }
 }

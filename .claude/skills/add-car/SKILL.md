@@ -144,10 +144,28 @@ scripts/silhouette_check.py --overlay bmw_m5   # and see *where* it is wrong
 It renders each car and its silhouette from the same camera and reports how much of the car the
 silhouette fails to cover, having first eroded the car's outline by a few pixels so that ordinary
 decimation shrinkage does not drown the real faults. Under 2% is fine. Above it, the overlay paints
-missing geometry red, and red is the whole diagnosis: a red panel is a categorisation fault (the
-part is in a category silhouettes are not built from), a red ring at a wheel is a wheel-pattern
-fault, and a red strip along the sills means the budget is too coarse for the car's length — raise
-`silhouette` in its config.
+missing geometry red. A red ring at a wheel is a wheel-pattern fault. The silhouette is built from
+every non-wheel part whatever its category, so a red panel means the part never faces outward or
+was dropped. A car whose shape is in a big aero kit may want a higher `silhouette` budget.
+
+`silhouette_check.py` looks from one side. `scripts/car_goldens.py <car>` looks from 40 angles, at
+every LOD and the silhouette, and adds close-ups of each wheel alone, the cabin, and no-cull and
+no-tex views (`docs/cars.md` → Golden renders). Run it before and after a change, and use
+`--compare` against the before set.
+
+Faults this fleet has had more than once, worth checking first:
+
+- **A floor dropped as a "plinth".** `drop = ["Base_Geo_lodA_Base_Geo_lodA"]` was the floor pan and
+  inner arches on seven cars. A real plinth extends past the car's footprint and below the wheels.
+- **Opaque materials flagged BLEND in the source** go to `window` and are starved or swept away as
+  hidden. Cabins, engine bays and whole bodies have been lost this way. Fix with
+  `[materials] interior = [...]` plus `[reduce] interior = 2.0`.
+- **Rims deeper than the wheel node's child.** The wheel matcher checks node and parent names
+  only, so rims further down stay in the car-wide `chrome` and do not spin. Also, the heaviest part
+  of a wheel is taken as the tyre, which is wrong when the rim is heavier. Force both with
+  `[materials] tyre` / `chrome`.
+- **Liners and seams culled away.** A back face needed inside a mostly front-facing part stays
+  culled. `[reduce] two_sided = ["<part>"]` forces the whole part two-sided.
 
 Two rules that were learned the expensive way and are worth obeying without re-deriving:
 

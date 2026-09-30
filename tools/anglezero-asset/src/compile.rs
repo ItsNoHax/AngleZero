@@ -58,6 +58,13 @@ const LENS_LIT: f32 = 0.88;
 /// own brightest channel. Below this there is no hue to preserve and scaling only whitens it.
 const LENS_HUE: f32 = 0.2;
 
+/// A wheel's rolling radius: what the config says, or the larger of the measured radius and the
+/// hub's height. Why the larger is explained where `WheelDef::radius` is filled in; it is a function
+/// so the coarse levels' generated wheels are the same size as the wheel the car rolls on.
+fn rolling_radius(config: &CarConfig, w: &wheels::Wheel, scale: f32, hub: [f32; 3]) -> f32 {
+    config.wheels.radius.unwrap_or_else(|| (w.radius * scale).max(hub[1]))
+}
+
 /// How far away each level takes over, in metres.
 ///
 /// The chase camera sits about 11 m behind the player's car, so LOD0 has to cover everything
@@ -65,6 +72,12 @@ const LENS_HUE: f32 = 0.2;
 /// screen for a halved triangle count not to show. These are starting points — the benchmark
 /// modes are how they get checked against something.
 const LOD_DISTANCES: [f32; 3] = [0.0, 18.0, 45.0];
+
+/// How much of the car one pixel covers at a distance, in metres: the console's 60° vertical field
+/// of view (`camera::RUN_FOV_BASE`) over its 272 lines. 7.6 cm at LOD1's 18 m, 19 cm at LOD2's 45 m.
+fn pixel_at(distance: f32) -> f32 {
+    2.0 * distance * (30.0f32).to_radians().tan() / 272.0
+}
 
 pub struct Compiled {
     pub bytes: Vec<u8>,
@@ -92,6 +105,10 @@ struct Piece {
     /// off. A whole part at a time — see where it is decided for why it is never a part of one.
     two_sided: bool,
     node: String,
+    /// With the material, what says two parts may be one surface an exporter split. See
+    /// `rejoin_split_parts`.
+    parent: String,
+    material: usize,
 }
 
 /// One output draw call: a category, optionally belonging to a wheel.
@@ -239,7 +256,6 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     let mut buckets: Vec<Bucket> = Vec::new();
     let mut dropped_by_name = 0usize;
-    let mut two_sided_triangles = 0usize;
     for (i, part) in model.parts.iter().enumerate() {
         if config.reduce.drop_hidden && seen.pixels[i] == 0 {
             continue;
@@ -386,15 +402,17 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             .two_sided_triangles(i, part.triangles())
             .filter(|b| *b)
             .count();
-        let two_sided = back_only as f32 > part.triangles() as f32 * TWO_SIDED_SHARE;
+        let two_sided = back_only as f32 > part.triangles() as f32 * TWO_SIDED_SHARE
+            || config.reduce.two_sided.iter().any(|f| {
+                !f.is_empty()
+                    && (part.node.to_ascii_lowercase().contains(&f.to_ascii_lowercase())
+                        || part.parent.to_ascii_lowercase().contains(&f.to_ascii_lowercase()))
+            });
 
         let weight = config.reduce.part_weight(&part.node, &part.parent);
         let bucket = &mut buckets[slot];
         bucket.pixels += seen.pixels[i] as u64;
         bucket.source_triangles += part.triangles();
-        if two_sided {
-            two_sided_triangles += part.triangles();
-        }
         bucket.pieces.push(Piece {
             vertices,
             attrs,
@@ -403,8 +421,23 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             weight,
             two_sided,
             node: part.node.clone(),
+            parent: part.parent.clone(),
+            material: part.material,
         });
     }
+
+    // Before welding, so that the border an exporter cut is welded shut like any other edge.
+    let rejoined = rejoin_split_parts(&mut buckets);
+    if rejoined.0 > 0 {
+        report.note_rejoined(rejoined.0, rejoined.1);
+    }
+    // Counted after rejoining, which can make a surface two-sided that was only partly so.
+    let two_sided_triangles: usize = buckets
+        .iter()
+        .flat_map(|b| &b.pieces)
+        .filter(|p| p.two_sided)
+        .map(|p| p.indices.len() / 3)
+        .sum();
 
     // The four corners get the same budget, whatever the sweep happened to see of each.
     //
@@ -447,7 +480,8 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // Weld first, then spend the budget. Welding changes what a triangle costs, so a budget shared
     // out before it would be shared out against the wrong numbers. Per part, because that is the
     // unit a source model splits its seams within — nothing is gained by welding a bumper to the
-    // wing it merely touches, and the boundary between them is better left alone.
+    // wing it merely touches, and the boundary between them is better left alone. A part here is
+    // what `rejoin_split_parts` left, so a surface an exporter cut in two is welded as one.
     let mut welded_away = 0;
     for b in &mut buckets {
         for p in &mut b.pieces {
@@ -476,10 +510,75 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
 
     // The extra levels, coarsest last. One that collapses to nothing is dropped rather than
     // written as a level with no draw calls in it.
+    //
+    // Their wheels are built rather than decimated (see `generated_wheels`), out of each corner's
+    // size and the colours LOD0 draws its tyre and rim in — measured once, off LOD0's finished
+    // buckets, because that is the wheel a coarse level is standing in for.
+    let wheel_looks: Vec<WheelLook> = found
+        .wheels
+        .iter()
+        .zip(&hubs)
+        .map(|(w, hub)| {
+            let radius = rolling_radius(config, w, placement.scale, *hub);
+            WheelLook::measure(&welded, &atlas, w.corner, radius, w.width * placement.scale, hub[0])
+        })
+        .collect();
+    let white = white_texel(&atlas);
+    let flat = white.map(|white| simplify::FlatTexel {
+        pixels: &atlas.pixels,
+        size: texture::ATLAS,
+        white,
+    });
+    if white.is_none() && !wheel_looks.is_empty() && !config.lods.is_empty() {
+        report.warn(
+            "the atlas has no white tile to draw generated wheels with, so the lower levels \
+             decimate the model's own"
+                .into(),
+        );
+    }
     let mut levels: Vec<Vec<Bucket>> = Vec::new();
-    for &lod_budget in &config.lods {
+    for (level, &lod_budget) in config.lods.iter().enumerate() {
         let mut coarse = welded.clone();
-        spend_budget(&mut coarse, lod_budget, atlas.span, None);
+        let distance = LOD_DISTANCES[(level + 1).min(LOD_DISTANCES.len() - 1)];
+        let pixel = pixel_at(distance);
+        // Fewer sides when the budget is too small to spend a third of it on wheels, and the
+        // model's own wheels when even the fewest would be. No car here comes near that; a test
+        // car with a 40-triangle level does.
+        let far = distance >= FAR_WHEEL_FROM;
+        let mut segments = if far { FAR_WHEEL_SEGMENTS } else { NEAR_WHEEL_SEGMENTS };
+        let wheel_cost = |segments: usize| 5 * segments * wheel_looks.len();
+        while segments > MIN_WHEEL_SEGMENTS && wheel_cost(segments) * 3 > lod_budget {
+            segments -= 2;
+        }
+        let affordable = wheel_cost(segments) * 3 <= lod_budget;
+        match white {
+            Some(white) if !wheel_looks.is_empty() && affordable => {
+                // The wheels' cost comes off the top, so what they no longer spend goes to the
+                // bodywork rather than back to the wheels.
+                // At LOD1 a wheel's own rim is kept and decimated with everything else, and only
+                // its tyre is built: at ten pixels across the spokes are what says which wheel it
+                // is, and a spokeless drum read as a hubcap. The tyre is the part that cannot be
+                // decimated — a tube of tread blocks — and is replaced. At LOD2 the whole wheel is.
+                let keep_rims = !far;
+                let mut wheels = generated_wheels(&wheel_looks, white, segments, keep_rims);
+                let cost: usize = wheels.iter().flat_map(|b| &b.pieces).map(|p| p.indices.len() / 3).sum();
+                for b in coarse.iter_mut() {
+                    let Some(look) = b.wheel.and_then(|c| wheel_looks.iter().find(|w| w.corner == c)) else {
+                        continue;
+                    };
+                    if keep_rims && look.separate_rim {
+                        b.pieces.retain(|p| !reaches_tread(p, look.radius));
+                    } else {
+                        b.pieces.clear();
+                    }
+                }
+                coarse.retain(|b| !b.pieces.is_empty());
+                spend_coarse(&mut coarse, lod_budget.saturating_sub(cost), atlas.span, pixel, flat.as_ref());
+                finish_level(&mut wheels);
+                coarse.extend(wheels);
+            }
+            _ => spend_coarse(&mut coarse, lod_budget, atlas.span, pixel, flat.as_ref()),
+        }
         if coarse.is_empty() {
             report.warn(format!(
                 "LOD at {lod_budget} triangles collapsed to nothing and was dropped"
@@ -635,10 +734,7 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
             //
             // Taking the larger of the two keeps the caliper guard — a caliper cannot raise the
             // hub — while refusing to believe a wheel is smaller than the car standing on it.
-            radius: config
-                .wheels
-                .radius
-                .unwrap_or_else(|| (w.radius * placement.scale).max(hub[1])),
+            radius: rolling_radius(config, w, placement.scale, *hub),
             // Measured off the source tyre and stored so the renderer can put it back. The wheel's
             // vertices are written upright below, with the tilt taken out of them, because a wheel
             // is spun by rotating about its axle and an axle baked in at an angle turns that spin
@@ -677,22 +773,28 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
     // * **The budget went to parts with no outline in them.** LOD2 shares its triangles across
     //   every category by how many pixels each is worth over the visibility sweep, and the E36's
     //   interior is 4,841 triangles of seats and door cards that are *inside the shell*. Every one
-    //   it kept was a triangle the bodywork did not get. So the categories that cannot contribute
-    //   to an outline are dropped before the budget is shared, and what is left is the shell, the
-    //   glass that fills the greenhouse, and the tyres.
+    //   it kept was a triangle the bodywork did not get.
     // * **Decimation shrinks a car into itself.** Collapsing edges pulls a convex surface inward,
     //   which is invisible at 45 m and is the entire subject at 5 m: the arches and sills went
     //   first, and the wheels ended up standing outside a body that had retreated from them.
-    //   Spending a budget of its own on a quarter as many parts leaves the shell enough triangles
-    //   to keep its own width.
+    //   Spending a budget of its own on the outside of the car alone leaves the shell enough
+    //   triangles to keep its own width.
     //
-    // Dropping whole categories is not the same thing as cutting a mesh up to decimate the pieces,
-    // which cracks bodywork and is never done here: the body bucket goes in whole and comes out
-    // whole.
-    let sil_buckets: Vec<&Bucket> = welded
-        .iter()
-        .filter(|b| SILHOUETTE_CATEGORIES.contains(&b.category))
-        .collect();
+    // Every part goes in except the wheels', which are generated (see `silhouette_wheels`). It used
+    // to be `body` and `window` only, on the reasoning that nothing else can be seen past a filled
+    // outline, and that was wrong in both directions. Wings, splitters, diffusers and side skirts
+    // are carbon or black plastic, and categorise as `chrome`: the NSX's whole aero kit, wing
+    // included, was missing from its silhouette. And a cabin whose material carries an alpha
+    // channel is `window` by default and `interior` once a config says what it is, so fixing a
+    // car's seats took its cabin out of its silhouette — the E30 went from 0.3% missing to 15.8%.
+    // What a part is called no longer matters: `simplify::reduce_shell` removes everything that is
+    // covered from every direction before it spends anything, so the seats behind the glass cost
+    // nothing and the glass in front of them is kept.
+    //
+    // Dropping whole parts is not the same thing as cutting a mesh up to decimate the pieces,
+    // which cracks bodywork and is never done here: the parts go in whole and are simplified as
+    // one surface.
+    let sil_buckets: Vec<&Bucket> = welded.iter().filter(|b| b.wheel.is_none()).collect();
     let mut silhouette = build_silhouette(&sil_buckets, origin_of);
     simplify::reduce_shell(
         &mut silhouette.0,
@@ -969,9 +1071,11 @@ fn representative_colour(buckets: &[Bucket], category: Category) -> u32 {
             *counts.entry(v.color).or_default() += 1;
         }
     }
+    // Ties go to the lower colour. A HashMap iterates in a different order every run, and a tie
+    // decided by that order made the same car compile to different bytes from one build to the next.
     counts
         .into_iter()
-        .max_by_key(|(_, n)| *n)
+        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
         .map(|(c, _)| c)
         .unwrap_or(0xFFFF_FFFF)
 }
@@ -1064,6 +1168,200 @@ fn share_budget(claims: &[(f64, usize)], budget: usize, floor: usize) -> Vec<usi
     share
 }
 
+/// How many border vertices two parts must have in common before they are taken to be one surface
+/// an exporter split, rather than two parts that happen to touch at a corner.
+///
+/// Every pair this has ever been asked about is far above it or at zero: the RAV4's two halves of
+/// its paint share 19,263, the Lada's tread patches 2,584 and 7,565, the smallest real case (the
+/// Lada's front wing, split in two) 38. It exists so that a stray coincident vertex or two cannot
+/// join parts, not to draw a line anywhere interesting.
+const REJOIN_SHARED_BORDER: usize = 8;
+
+/// …and how much of the smaller part's border that has to be, for the two to be one surface rather
+/// than two objects an exporter happened to write as one primitive.
+///
+/// The M5 is why this exists. Its cabin is one material in one object, split at 95,265 and 15,556
+/// triangles, and the halves meet along 364 border vertices — 15% of the smaller one's edge. So
+/// they are mostly separate furniture that touches, and joined they were worse than apart: the
+/// larger piece's error went from 9% to 19.5%, pruning at that error removed the near rear door card
+/// whole, and the sky showed through the rear side window. Every pair where joining was what fixed
+/// the car shares far more — the RAV4's paint 86%, the Lada's tread 80% and 99%, the AE86's paint
+/// 94% — and nothing measured falls between 34% and 51%, which is where the line is drawn.
+const REJOIN_SHARE: f32 = 0.4;
+
+/// Puts back together the parts an exporter split out of one surface, so each is welded and
+/// decimated as the single mesh it was modelled as.
+///
+/// This is the other side of the rule that a mesh is never divided to decimate it, and it exists
+/// because source files break that rule on the compiler's behalf. A glTF primitive is indexed with
+/// 16 bits by most exporters, so the RAV4's paint arrived as `Object_32` — stopped at 65,532
+/// vertices — and `Object_33` carrying on from exactly where it left off, the two interleaved
+/// across every panel of the car. The Lada's tyre node holds two primitives of the same name, the
+/// shoulder blocks and the band between them, that fit together along a border thousands of
+/// vertices long. Handed to the decimator as two parts, each half is reduced with nothing relating
+/// it to the other, the shared border drifts apart from both sides, and what reaches the screen is
+/// bodywork covered in see-through slivers and white flecks exactly along the lines the exporter
+/// cut. No weight fixes it: both halves stop at the free error with their borders already apart.
+///
+/// Three things have to agree before two parts are one surface, and each one is there because of
+/// what joining the wrong two would cost:
+///
+/// * **The same bucket.** Already the unit a draw call is made of, so joining across one is not
+///   possible in the first place — and it means a wheel's parts only ever join their own wheel's.
+/// * **The same material and the same parent node.** The parent is the object a person would name
+///   (see `Part::parent`), so this is "one object, one material", which is what an exporter splits
+///   and nothing else is. Without it, a bumper and the wing its edge sits on join because they are
+///   both paint, and then one part's budget is being spent by the decimator's error metric over
+///   both instead of by the visibility sweep over each — the separation the per-part budget exists
+///   for. Across the whole fleet the three conditions together join 26 parts into 12 surfaces on
+///   five cars, every one of them a split primitive; a shared border alone matched about 3,400
+///   pairs, almost all of them panels that touch.
+/// * **A shared border, and a large one.** Positions on the edge of both, to the weld grid, making
+///   up a good part of the smaller one's edge (`REJOIN_SHARE`). It is what makes the join safe to
+///   do: two parts that meet along a border come out of welding as one connected surface, which
+///   the decimator then treats as interior, and there is no border left to open.
+///
+/// What a joined piece carries is decided once, for the whole of it, because the whole of it is
+/// one mesh from here on:
+///
+/// * pixels are **summed**, which is what the sweep would have measured of the surface unsplit;
+/// * the config's `[reduce.parts]` weight is the **pixel-weighted mean** of the parts', which is
+///   the only value that leaves the bucket's share-out arithmetic (pixels × weight, summed) exactly
+///   as it was — a pattern that named one half still moves the budget by as much as it did;
+/// * it is **two-sided if any part was**, for the reason whole parts are two-sided at all: the
+///   alternative is a hole where the sweep saw one. `[reduce] drop` needs no rule here because it
+///   is applied to each part by its own name before anything reaches a bucket.
+///
+/// Returns how many parts went in and how many surfaces came out, for the report.
+fn rejoin_split_parts(buckets: &mut [Bucket]) -> (usize, usize) {
+    let (mut parts_in, mut surfaces_out) = (0, 0);
+    for b in buckets.iter_mut() {
+        // Only parts with a partner of the same object and material are worth the border walk,
+        // which on a 100,000-triangle body shell is not free.
+        let mut groups: HashMap<(usize, &str), Vec<usize>> = HashMap::new();
+        for (i, p) in b.pieces.iter().enumerate() {
+            groups.entry((p.material, p.parent.as_str())).or_default().push(i);
+        }
+        let mut owner: Vec<usize> = (0..b.pieces.len()).collect();
+        fn root(owner: &mut [usize], mut i: usize) -> usize {
+            while owner[i] != i {
+                owner[i] = owner[owner[i]];
+                i = owner[i];
+            }
+            i
+        }
+        let mut any = false;
+        for members in groups.values().filter(|m| m.len() > 1) {
+            let mut on_border: HashMap<[i32; 3], Vec<usize>> = HashMap::new();
+            let mut border_len: HashMap<usize, usize> = HashMap::new();
+            for &i in members {
+                let border = border_positions(&b.pieces[i]);
+                border_len.insert(i, border.len());
+                for k in border {
+                    on_border.entry(k).or_default().push(i);
+                }
+            }
+            let mut shared: HashMap<(usize, usize), usize> = HashMap::new();
+            for list in on_border.values() {
+                for x in 0..list.len() {
+                    for y in x + 1..list.len() {
+                        *shared.entry((list[x], list[y])).or_default() += 1;
+                    }
+                }
+            }
+            for ((x, y), n) in shared {
+                let smaller = border_len[&x].min(border_len[&y]).max(1);
+                if n >= REJOIN_SHARED_BORDER && n as f32 >= smaller as f32 * REJOIN_SHARE {
+                    let (rx, ry) = (root(&mut owner, x), root(&mut owner, y));
+                    if rx != ry {
+                        owner[rx.max(ry)] = rx.min(ry);
+                        any = true;
+                    }
+                }
+            }
+        }
+        if !any {
+            continue;
+        }
+
+        // Joined in source order, into the lowest-numbered part of each set, so a bucket with
+        // nothing to rejoin is untouched and one with something keeps every other part where it
+        // was.
+        let pieces = std::mem::take(&mut b.pieces);
+        let mut at: HashMap<usize, usize> = HashMap::new();
+        let mut members: Vec<usize> = Vec::new();
+        // Pixels × weight, summed, for the weighted mean.
+        let mut worth: Vec<f64> = Vec::new();
+        for (i, p) in pieces.into_iter().enumerate() {
+            let r = root(&mut owner, i);
+            match at.get(&r) {
+                None => {
+                    at.insert(r, b.pieces.len());
+                    members.push(1);
+                    worth.push(p.pixels as f64 * p.weight as f64);
+                    b.pieces.push(p);
+                }
+                Some(&slot) => {
+                    members[slot] += 1;
+                    worth[slot] += p.pixels as f64 * p.weight as f64;
+                    let into = &mut b.pieces[slot];
+                    let base = into.vertices.len() as u32;
+                    into.vertices.extend_from_slice(&p.vertices);
+                    into.attrs.extend_from_slice(&p.attrs);
+                    into.indices.extend(p.indices.iter().map(|i| i + base));
+                    into.pixels += p.pixels;
+                    into.two_sided |= p.two_sided;
+                    // A weight is only meaningful against pixels, so with none to go on the
+                    // larger of the two is kept rather than an average of nothing.
+                    into.weight = into.weight.max(p.weight);
+                }
+            }
+        }
+        for (slot, p) in b.pieces.iter_mut().enumerate() {
+            if members[slot] > 1 {
+                parts_in += members[slot];
+                surfaces_out += 1;
+                if p.pixels > 0 {
+                    p.weight = (worth[slot] / p.pixels as f64) as f32;
+                }
+            }
+        }
+    }
+    (parts_in, surfaces_out)
+}
+
+/// The positions, to the weld grid, of every vertex on an edge of this part — an edge only one of
+/// its triangles uses.
+///
+/// On position alone, not on the welder's full key: a split primitive's two halves duplicate the
+/// vertices along the cut, and whether their colours and texture coordinates also agree is for the
+/// welder to find out afterwards. What this has to answer is only whether the two parts meet.
+fn border_positions(p: &Piece) -> Vec<[i32; 3]> {
+    let key: Vec<[i32; 3]> = p
+        .vertices
+        .iter()
+        .map(|v| [simplify::quantise(v.x), simplify::quantise(v.y), simplify::quantise(v.z)])
+        .collect();
+    let mut edges: HashMap<([i32; 3], [i32; 3]), u32> = HashMap::new();
+    for t in p.indices.chunks_exact(3) {
+        let c = [key[t[0] as usize], key[t[1] as usize], key[t[2] as usize]];
+        if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
+            continue;
+        }
+        for (a, z) in [(c[0], c[1]), (c[1], c[2]), (c[2], c[0])] {
+            *edges.entry(if a < z { (a, z) } else { (z, a) }).or_default() += 1;
+        }
+    }
+    let mut out: Vec<[i32; 3]> = edges
+        .into_iter()
+        .filter(|(_, n)| *n == 1)
+        .flat_map(|((a, z), _)| [a, z])
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Fewest triangles any one draw call is reduced to.
 ///
 /// A tyre at 24 triangles is a hexagonal prism and reads as a wheel; at 8 it is a wedge. This is
@@ -1125,20 +1423,6 @@ impl Strings {
     }
 }
 
-/// What a silhouette is made of, and by omission what it is not.
-///
-/// `Body` is the shell and is nearly the whole answer on its own — roof, boot, bumpers, sills and
-/// arches are all in it. `Window` is here because the glasshouse is glass: without it the cabin is
-/// a hole between the pillars and the sky shows through the middle of the car.
-///
-/// What is left out is everything that lives inside the shell — the interior, the lamps, the trim
-/// and the wheel hardware. None of them can be seen from outside a filled outline, and on the E36
-/// they were taking most of the budget.
-///
-/// The tyres are left out too, and not because a car needs no wheels: they are *built* rather than
-/// decimated. See `silhouette_wheels`.
-const SILHOUETTE_CATEGORIES: [Category; 2] = [Category::Body, Category::Window];
-
 /// How many sides a generated wheel has.
 ///
 /// Twelve is round at the size a title screen draws a car, and costs 48 triangles a wheel: 24 for
@@ -1146,23 +1430,22 @@ const SILHOUETTE_CATEGORIES: [Category; 2] = [Category::Body, Category::Window];
 /// quarters on, and an open tube shows the scenery through the middle of its own wheel.
 const WHEEL_SEGMENTS: usize = 12;
 
-/// How many triangles a silhouette gets, unless a car's config asks for something else.
+/// How many triangles a silhouette gets, unless a car's config asks for something else, not
+/// counting its wheels.
 ///
-/// A thousand. It was six hundred, which was chosen when the fleet was seven cars that all happened
-/// to suit it, and which turned out to be a *grid* limit rather than a triangle limit: clustering
-/// snaps vertices to a lattice sized by the target, and at six hundred that lattice was coarse
-/// enough to round the bottom off a long car. It showed as a strip of missing sill along the whole
-/// length and a missing front air dam — the silhouette sitting a little higher off the road than
-/// the car, which is exactly the sort of fault that is invisible in isolation and obvious when the
-/// shadow is replaced by the car it stood in for.
-///
-/// The M5 is the case that set the number: 5.9% of it was missing at 600 and 0.3% at 1,400. A
-/// thousand puts every car in the fleet under about 1%, which is a rim a pixel or two wide and
-/// nothing anybody can see.
+/// A thousand. It was six hundred, when the silhouette was clustered onto a grid sized by this
+/// number, and at six hundred that grid was coarse enough to round the bottom off a long car: a
+/// strip of missing sill along the whole length and a missing front air dam, which is exactly the
+/// sort of fault that is invisible in isolation and obvious when the shadow is replaced by the car
+/// it stood in for. Edge collapse spends where the outline is rather than evenly, so the number no
+/// longer has to be raised for a long car or a tall one; at a thousand the fleet averages about
+/// 0.2% of the car missing over the golden views, which is a rim a pixel wide.
 ///
 /// The number is a size as much as a shape: the console reads a car in 32 KB chunks and draws the
 /// silhouette out of the first one, so a silhouette that does not fit in a chunk is a silhouette
-/// that arrives a frame late. A thousand triangles is about 10 KB, comfortably inside it.
+/// that arrives a frame late. A thousand triangles and the wheels come to 13–17 KB, since a
+/// collapsed shell keeps more vertices per triangle than a clustered one did; 1,400 is about 20 KB,
+/// and the chunk still has room.
 const SILHOUETTE_TRIANGLES: usize = 1000;
 
 /// Flattens buckets into one positions-only array in car space, at full detail.
@@ -1476,13 +1759,6 @@ fn put_f32(out: &mut [u8], at: usize, v: f32) {
     out[at..at + 4].copy_from_slice(&v.to_le_bytes());
 }
 
-/// Shares a budget out across welded buckets and decimates each bucket to its share.
-///
-/// Taken out of `compile` so it can be run more than once over the same welded geometry: an LOD is
-/// this again with a smaller number.
-///
-/// The report is only filled in for the level written as LOD0. The others would double every line
-/// in it, and it is the car the player is looking at whose error is worth warning about.
 /// Spends a budget, and then spends what the first attempt handed back.
 ///
 /// One pass leaves a lot on the table. The allocator shares the budget out by measured importance,
@@ -1610,25 +1886,505 @@ fn spend_and_refill(
     spend_budget_with(buckets, &second, tile_span, report);
 }
 
-/// Shares a budget out across welded buckets and decimates each bucket to its share.
+/// Like `share_budget`, but a part that cannot have the floor is dropped rather than raised to it.
 ///
-/// Taken out of `compile` so it can be run more than once over the same welded geometry: an LOD is
-/// this again with a smaller number, and the refill pass is this again with corrected targets.
+/// `share_budget` pins anything that would get less than the floor *at* the floor, which is right
+/// when the floors add up to a small part of the budget and wrong when they add up to more than all
+/// of it. Every pin then takes budget from the parts still open, which pushes more of them under the
+/// floor, and the pass ends with every part at the floor — the M5's 210 body parts at LOD2 each got
+/// four triangles, its one-piece paint shell included. So here the least valuable part is left out
+/// instead, and the rest shared again, until every part that is kept can have the floor.
+fn share_or_drop(claims: &[(f64, usize)], budget: usize, floor: usize) -> Vec<usize> {
+    let mut open: Vec<usize> = (0..claims.len()).collect();
+    // Most valuable first, so the least valuable is the one at the end to pop.
+    open.sort_by(|a, b| claims[*b].0.total_cmp(&claims[*a].0).then(a.cmp(b)));
+    loop {
+        let kept: Vec<(f64, usize)> = open.iter().map(|&i| claims[i]).collect();
+        let shares = share_budget(&kept, budget, 0);
+        let short = open
+            .iter()
+            .zip(&shares)
+            .any(|(&i, &s)| s < floor.min(claims[i].1));
+        if !short || open.len() <= 1 {
+            let mut out = vec![0; claims.len()];
+            for (&i, &s) in open.iter().zip(&shares) {
+                out[i] = s.max(floor.min(claims[i].1));
+            }
+            return out;
+        }
+        open.pop();
+    }
+}
+
+/// Spends a coarse level's budget, and is why the budgets are now kept.
 ///
-/// The report is only filled in for the level written as LOD0. The others would double every line
-/// in it, and it is the car the player is looking at whose error is worth warning about.
-fn spend_budget(
+/// LOD1 and LOD2 used to be `spend_budget` again with a smaller number, and three things in it that
+/// are harmless at 24,000 triangles broke at 3,000 and 1,200:
+///
+/// * **The per-part floor overcommitted** (see `share_or_drop`). A bucket of a hundred or two parts
+///   at four triangles each is more than the bucket has, so every part was pinned at four, and the
+///   level came out at two or three times its budget with nothing in it big enough to be a panel.
+///   That is why the M5 wrote 4,106 and 2,976 triangles against 3,000 and 1,200: its wheel hardware
+///   alone was 85 to 124 parts a corner at four triangles each, against a share of 33.
+/// * **Collapse was allowed any error**, and with pruning an open error is licence to remove large
+///   components whole — door skins, bonnets, the roof. See `simplify::reduce_coarse`.
+/// * **Clustering smeared the atlas.** A part held at four triangles that collapse cannot take
+///   there goes to vertex clustering, which the M5's 62,000-triangle paint shell did, and what came
+///   back was shards with the texture dragged across them. Also `simplify::reduce_coarse`.
+///
+/// What is kept from LOD0 is the share-out between the draw calls, config weights and all, since
+/// those say what each category is worth on this car — flattened, and with kept rims capped, see
+/// `COARSE_BUCKET_POWER` and `rim_cap`; the parts inside each bucket are shared by what the sweep
+/// saw of them, flattened too (`COARSE_PART_POWER`), with the least-seen left out when there is
+/// not enough to go round.
+/// A part that still had to be clustered is drawn two-sided, because clustering flips triangles and
+/// culling turns a flipped triangle into a hole; and one allocated next to nothing that will not
+/// come down is dropped, as at LOD0 (`STUCK_TARGET`).
+fn spend_coarse(
     buckets: &mut Vec<Bucket>,
     budget: usize,
     tile_span: f32,
-    report: Option<&mut Report>,
+    pixel: f32,
+    flat: Option<&simplify::FlatTexel>,
 ) {
+    // A kept rim is capped at a fortieth of the level (75 triangles at LOD1) — enough for five
+    // spokes, and a ceiling the config's weights cannot lift. They were set for LOD0, where the
+    // E36's `chrome = 12` buys its mesh wheels; at LOD1 the same weight gave its four rims 832 of
+    // 3,000 triangles against 820 for the whole body, and the nose shredded. Capping the claim
+    // rather than the result hands what the rims cannot take back to everything else.
+    let rim_cap = (budget / 40).max(MIN_BUCKET_TRIANGLES);
     let targets = share_budget(
-        &buckets.iter().map(|b| b.weights()).collect::<Vec<_>>(),
+        &buckets
+            .iter()
+            .map(|b| {
+                let (w, have) = b.weights();
+                (w.powf(COARSE_BUCKET_POWER), if b.wheel.is_some() { have.min(rim_cap) } else { have })
+            })
+            .collect::<Vec<_>>(),
         budget,
         MIN_BUCKET_TRIANGLES,
     );
-    spend_budget_with(buckets, &targets, tile_span, report);
+    for (b, target) in buckets.iter_mut().zip(&targets) {
+        let piece_targets = share_or_drop(
+            &b.pieces
+                .iter()
+                .map(|p| ((p.pixels as f64 * p.weight as f64).powf(COARSE_PART_POWER), p.indices.len() / 3))
+                .collect::<Vec<_>>(),
+            *target,
+            COARSE_PART_FLOOR,
+        );
+        for (p, &t) in b.pieces.iter_mut().zip(&piece_targets) {
+            let was = p.indices.len() / 3;
+            let mut clustered = false;
+            if t == 0 {
+                p.indices.clear();
+            } else {
+                clustered = simplify::reduce_coarse(
+                    &mut p.vertices,
+                    &mut p.attrs,
+                    &mut p.indices,
+                    t,
+                    tile_span,
+                    pixel,
+                    flat,
+                    // A cabin is seen through tinted glass: its colour matters there, its texture
+                    // does not.
+                    b.category == Category::Interior,
+                );
+                if clustered {
+                    p.two_sided = true;
+                }
+                if t <= STUCK_TARGET && p.indices.len() / 3 > t * 4 {
+                    p.indices.clear();
+                }
+            }
+            if std::env::var("AZ_PARTS").is_ok() {
+                eprintln!(
+                    "COARSE {:>7} -> {:>6} (target {:>6}) {:>8} px {}{}",
+                    was,
+                    p.indices.len() / 3,
+                    t,
+                    p.pixels,
+                    if clustered { "clustered " } else { "" },
+                    p.node
+                );
+            }
+        }
+        b.pieces.retain(|p| p.indices.len() >= 3);
+        if b.category == Category::Interior && b.wheel.is_none() {
+            lower_cabin_ceiling(b, pixel);
+        }
+        if std::env::var("AZ_PARTS").is_ok() {
+            eprintln!(
+                "COARSE BUCKET {:?} {:?}: target {} got {}",
+                b.category,
+                b.wheel,
+                target,
+                b.pieces.iter().map(|p| p.indices.len() / 3).sum::<usize>()
+            );
+        }
+    }
+    finish_level(buckets);
+}
+
+/// Lowers a coarse level's cabin ceiling by a pixel, leaving everything else of it where it was.
+///
+/// The headliner sits a few centimetres under the roof, and a coarse level moves every surface by
+/// up to a pixel (the collapse limit), or further where clustering has had it. So the headliner
+/// came up through the roof: the Lancia Delta's LOD2 roof drew black where the tub won the depth
+/// test over it, its LOD1 roof was holed the same way, and so was the E36's. Only the upper half
+/// moves, and only down, by up to a pixel at the very top: pulling the whole cabin in towards its
+/// middle was tried and opened the E30's doors, whose skins are `interior` in its config.
+fn lower_cabin_ceiling(b: &mut Bucket, pixel: f32) {
+    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+    for p in &b.pieces {
+        for v in &p.vertices {
+            lo = lo.min(v.y);
+            hi = hi.max(v.y);
+        }
+    }
+    let middle = (lo + hi) * 0.5;
+    let half = (hi - lo) * 0.5;
+    if half <= pixel * 2.0 {
+        return;
+    }
+    for p in &mut b.pieces {
+        for v in &mut p.vertices {
+            if v.y > middle {
+                v.y -= pixel * (v.y - middle) / half;
+            }
+        }
+    }
+}
+
+/// Fewest triangles a part keeps at a coarse level before it is left out instead. Half LOD0's
+/// `MIN_PIECE_TRIANGLES`: at LOD2 a two-triangle quad is a number plate, a tail lamp, a grille
+/// backing, and four each cost the E30 its lamps and plate and the Lada its grille, because four
+/// was more than the least-seen of them could be given and `share_or_drop` left them out.
+const COARSE_PART_FLOOR: usize = 2;
+/// How flat the coarse share-outs are: parts share their draw call's budget by pixels to this
+/// power, and draw calls the level's by their weight to `COARSE_BUCKET_POWER`.
+///
+/// Straight proportion is right for LOD0, where every part can have enough. At 1,200 triangles it
+/// hands the paint shell nearly everything and leaves the parts that close the car — the floor
+/// pan, the grille backing, the bumper centre, the headliner behind the glass — a couple of
+/// triangles each, which clustering turns into holes: the E39's LOD1 floor went and showed its tan
+/// cabin, its LOD2 bumper centre went, the 190E's bumpers took black slashes. Measured pixels are
+/// counted from a sweep that mostly sees the top and sides, so the parts that close the car are
+/// always the ones it undervalues. A power below one keeps the order and narrows the gap. Tried
+/// fleet-wide: 1.0, 0.85, 0.75, 0.6 and 0.5 on parts, where 0.6 left the least uncovered at
+/// both levels; 0.8 on draw calls is what gave the AE86 back its floor (a draw call of its own,
+/// seen only from below) for no loss elsewhere worth the name.
+const COARSE_PART_POWER: f64 = 0.6;
+const COARSE_BUCKET_POWER: f64 = 0.8;
+
+/// Sides of a generated wheel: sixteen at LOD1, where a wheel is about ten pixels across, and ten
+/// from `FAR_WHEEL_FROM` on, where it is four. Eighty and fifty triangles a wheel.
+const NEAR_WHEEL_SEGMENTS: usize = 16;
+const FAR_WHEEL_SEGMENTS: usize = 10;
+const MIN_WHEEL_SEGMENTS: usize = 6;
+const FAR_WHEEL_FROM: f32 = 40.0;
+/// A part of a wheel reaching this far out, as a fraction of the rolling radius, is tyre: tread,
+/// sidewall, or a one-piece wheel that includes them. Anything short of it is the rim and what is
+/// behind it. Measured off the geometry, not the category, because configs file the parts of a
+/// wheel wherever LOD0 needed them: the M5's spoke face is `tyre`, the E30's tyre is in with its
+/// rim, the Civic EJ's wheel is one part.
+const TYRE_REACH: f32 = 0.92;
+/// Cells across the view a wheel is measured through, face on. See `WheelLook::measure`.
+const WHEEL_VIEW: usize = 96;
+
+/// What one corner's wheel looks like from outside, measured off LOD0's welded parts.
+struct WheelLook {
+    corner: u8,
+    radius: f32,
+    width: f32,
+    /// +1 when the outside of the wheel faces +X, -1 when it faces -X.
+    outside: f32,
+    /// Unlit colours, as a vertex carries them before `finish_level` folds the light in.
+    tyre: u32,
+    rim: u32,
+    /// How far out the rim reaches, as a fraction of the radius: where the drawn tyre ends.
+    rim_fraction: f32,
+    /// Whether the wheel has a rim separate from its tyre, which LOD1 keeps and decimates.
+    separate_rim: bool,
+}
+
+/// Whether a wheel part reaches the tread. See `TYRE_REACH`.
+fn reaches_tread(p: &Piece, radius: f32) -> bool {
+    p.vertices
+        .iter()
+        .any(|v| (v.y * v.y + v.z * v.z).sqrt() >= radius * TYRE_REACH)
+}
+
+impl WheelLook {
+    /// Measures a corner by looking at it: the wheel's parts are rasterised face on, from outside,
+    /// into a small grid with a depth test, each cell taking the vertex colour times the texel
+    /// under it, unlit. The tyre's colour is the mean of the cells a tread-reaching part won, the
+    /// rim's of the cells anything else won, and the rim ends where those stop.
+    ///
+    /// It replaces a mean over every outward-facing triangle, which got the colours wrong across
+    /// the fleet in three different ways. It counted what the eye cannot see — the brake disc
+    /// behind the spokes and the barrel inside the lip weigh the same as the spoke face, which
+    /// turned the 350Z's gold rims and the E39's silver ones brown. It trusted categories — on the
+    /// E30 and E36 the tyre bucket holds the rim, so the tyre came out grey, and on the RAV4, Golf
+    /// R32 and W70 the non-tyre parts were the dark hardware, which drew the drum inverted, a pale
+    /// ring round a dark face. And it was lit, then lit again when drawn.
+    fn measure(welded: &[Bucket], atlas: &texture::Atlas, corner: u8, radius: f32, width: f32, hub_x: f32) -> WheelLook {
+        let outside = if hub_x >= 0.0 { 1.0 } else { -1.0 };
+        let n = WHEEL_VIEW;
+        let cell = 2.0 * radius / n as f32;
+        // Per cell: nearest depth so far, colour, and whether a tread-reaching part won it.
+        let mut depth = vec![f32::MIN; n * n];
+        let mut colour = vec![[0.0f32; 3]; n * n];
+        let mut tyre_cell = vec![false; n * n];
+        let mut any_rim = false;
+        for b in welded.iter().filter(|b| b.wheel == Some(corner)) {
+            for p in &b.pieces {
+                let tread = reaches_tread(p, radius);
+                any_rim |= !tread;
+                for t in p.indices.chunks_exact(3) {
+                    let v = [&p.vertices[t[0] as usize], &p.vertices[t[1] as usize], &p.vertices[t[2] as usize]];
+                    let a = [&p.attrs[t[0] as usize], &p.attrs[t[1] as usize], &p.attrs[t[2] as usize]];
+                    // Face on from outside: across is z, up is y, nearer is further along `outside`.
+                    let q: Vec<[f32; 2]> = v.iter().map(|v| [(v.z + radius) / cell, (v.y + radius) / cell]).collect();
+                    let d = [v[0].x * outside, v[1].x * outside, v[2].x * outside];
+                    let area = (q[1][0] - q[0][0]) * (q[2][1] - q[0][1]) - (q[2][0] - q[0][0]) * (q[1][1] - q[0][1]);
+                    if area.abs() < 1.0e-9 {
+                        continue;
+                    }
+                    let lo = |k: usize| q.iter().map(|p| p[k]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+                    let hi = |k: usize| (q.iter().map(|p| p[k]).fold(f32::MIN, f32::max).ceil() as usize).min(n);
+                    for y in lo(1)..hi(1) {
+                        for x in lo(0)..hi(0) {
+                            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                            let w1 = ((px - q[0][0]) * (q[2][1] - q[0][1]) - (q[2][0] - q[0][0]) * (py - q[0][1])) / area;
+                            let w2 = ((q[1][0] - q[0][0]) * (py - q[0][1]) - (px - q[0][0]) * (q[1][1] - q[0][1])) / area;
+                            let w0 = 1.0 - w1 - w2;
+                            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                                continue;
+                            }
+                            let z = d[0] * w0 + d[1] * w1 + d[2] * w2;
+                            let at = y * n + x;
+                            if z <= depth[at] {
+                                continue;
+                            }
+                            depth[at] = z;
+                            let uv = [
+                                a[0].uv[0] * w0 + a[1].uv[0] * w1 + a[2].uv[0] * w2,
+                                a[0].uv[1] * w0 + a[1].uv[1] * w1 + a[2].uv[1] * w2,
+                            ];
+                            let texel = atlas_texel(atlas, uv);
+                            let mut c = [0.0f32; 3];
+                            for (vert, w) in v.iter().zip([w0, w1, w2]) {
+                                let u = unpack(vert.color);
+                                for k in 0..3 {
+                                    c[k] += u[k] * w;
+                                }
+                            }
+                            for k in 0..3 {
+                                c[k] *= texel[k];
+                            }
+                            colour[at] = c;
+                            tyre_cell[at] = tread;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only the disc: a cell outside the rolling radius is a caliper or a lip standing proud.
+        let mut tyre = [0.0f64; 4];
+        let mut rim = [0.0f64; 4];
+        let mut rim_radii: Vec<f32> = Vec::new();
+        for y in 0..n {
+            for x in 0..n {
+                let at = y * n + x;
+                if depth[at] == f32::MIN {
+                    continue;
+                }
+                let r = (((x as f32 + 0.5) * cell - radius).powi(2) + ((y as f32 + 0.5) * cell - radius).powi(2)).sqrt();
+                if r > radius {
+                    continue;
+                }
+                let target = if tyre_cell[at] { &mut tyre } else { &mut rim };
+                for k in 0..3 {
+                    target[k] += colour[at][k] as f64;
+                }
+                target[3] += 1.0;
+                if !tyre_cell[at] {
+                    rim_radii.push(r / radius);
+                }
+            }
+        }
+        let mean = |a: [f64; 4]| (a[3] > 0.0).then(|| pack([(a[0] / a[3]) as f32, (a[1] / a[3]) as f32, (a[2] / a[3]) as f32, 1.0]));
+        let seen = tyre[3] + rim[3];
+        let separate_rim = any_rim && rim[3] > seen * 0.15;
+        let (tyre, rim, rim_fraction) = if separate_rim {
+            rim_radii.sort_by(|a, b| a.total_cmp(b));
+            let reach = rim_radii[rim_radii.len() * 19 / 20];
+            (mean(tyre).unwrap_or(pack([0.1, 0.1, 0.1, 1.0])), mean(rim).unwrap(), reach.clamp(0.45, 0.9))
+        } else {
+            // One part, or a rim too small to tell: split the view by radius instead.
+            let (mut outer, mut inner) = ([0.0f64; 4], [0.0f64; 4]);
+            for y in 0..n {
+                for x in 0..n {
+                    let at = y * n + x;
+                    let r = (((x as f32 + 0.5) * cell - radius).powi(2) + ((y as f32 + 0.5) * cell - radius).powi(2)).sqrt() / radius;
+                    if depth[at] == f32::MIN || r > 1.0 {
+                        continue;
+                    }
+                    let target = if r > 0.8 { &mut outer } else if r < 0.6 { &mut inner } else { continue };
+                    for k in 0..3 {
+                        target[k] += colour[at][k] as f64;
+                    }
+                    target[3] += 1.0;
+                }
+            }
+            (
+                mean(outer).unwrap_or(pack([0.1, 0.1, 0.1, 1.0])),
+                mean(inner).unwrap_or(pack([0.5, 0.5, 0.5, 1.0])),
+                0.66,
+            )
+        };
+        WheelLook { corner, radius, width, outside, tyre, rim, rim_fraction, separate_rim }
+    }
+}
+
+/// The atlas colour at a texture coordinate, nearest texel, as linear 0–1 RGBA.
+fn atlas_texel(atlas: &texture::Atlas, uv: [f32; 2]) -> [f32; 4] {
+    let n = texture::ATLAS;
+    let x = ((uv[0] * n as f32) as usize).min(n - 1);
+    let y = ((uv[1] * n as f32) as usize).min(n - 1);
+    let at = (y * n + x) * 4;
+    let p = &atlas.pixels[at..at + 4];
+    [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0, p[3] as f32 / 255.0]
+}
+
+/// A texture coordinate that samples pure white with its neighbours white too, so a vertex there
+/// draws exactly its own colour. The atlas has one wherever a material with no image got its tile;
+/// a car whose every material is textured has none, and keeps its decimated wheels.
+fn white_texel(atlas: &texture::Atlas) -> Option<[f32; 2]> {
+    let n = texture::ATLAS;
+    let white = |x: usize, y: usize| atlas.pixels[(y * n + x) * 4..(y * n + x) * 4 + 4] == [255, 255, 255, 255];
+    for y in 2..n - 2 {
+        for x in 2..n - 2 {
+            if (y - 2..=y + 2).all(|yy| (x - 2..=x + 2).all(|xx| white(xx, yy))) {
+                return Some([(x as f32 + 0.5) / n as f32, (y as f32 + 0.5) / n as f32]);
+            }
+        }
+    }
+    None
+}
+
+/// Builds each corner's wheel for a far level instead of decimating it.
+///
+/// The one other place this pipeline makes geometry rather than simplifying it is the silhouette's
+/// wheels (see `silhouette_wheels`), and the argument is the same. At forty-five metres a wheel is
+/// four pixels across, and what four pixels of wheel have to be is a dark disc with a lighter
+/// middle. Decimated to its share of 1,200 triangles it was not: a tyre is a tube of tread blocks
+/// that collapse cannot take below a few hundred triangles, so clustering took it the rest of the
+/// way and the Civic EJ stood on four black slabs of four to eight triangles, the 190E's alloys
+/// came out as spikes, and one corner of a car could lose its rim outright while its mirror image
+/// kept one. A ten-sided drum at the measured radius and width, in the colours LOD0 draws its tread
+/// and its rim face in, is round from every angle for fifty triangles a wheel — and its cost is
+/// fixed, so the rest of the budget goes to the bodywork.
+///
+/// With `keep_rims` (LOD1) a corner whose rim is a part of its own gets only the tyre — tread and
+/// the outer ring of sidewall, out to where the rim was measured to end — and its real rim is kept
+/// inside it: at ten pixels across the spokes are what say which wheel it is, and a spokeless drum
+/// read as a hubcap. The rim decimates well; it was only ever the tyre that could not.
+///
+/// Stored the way every wheel is, upright about its own hub with its axle along X, so the renderer
+/// steers, cambers and spins it exactly as it does the decimated ones. Drawn two-sided, so the
+/// outer face also serves as the inner one.
+fn generated_wheels(looks: &[WheelLook], white: [f32; 2], n: usize, keep_rims: bool) -> Vec<Bucket> {
+    looks
+        .iter()
+        .map(|w| {
+            // With the model's own rim kept, only the tyre is built, out to where the rim begins.
+            let with_face = !(keep_rims && w.separate_rim);
+            let mut vertices = Vec::new();
+            let mut attrs = Vec::new();
+            let mut indices: Vec<u32> = Vec::new();
+            let mut push = |x: f32, y: f32, z: f32, colour: u32, light: f32| -> u32 {
+                vertices.push(Vertex::new(x, y, z, colour));
+                attrs.push(simplify::Attr { light, uv: white });
+                (vertices.len() - 1) as u32
+            };
+            let (outer, inner) = (w.width * 0.5 * w.outside, -w.width * 0.5 * w.outside);
+            let angle = |i: usize| i as f32 / n as f32 * std::f32::consts::TAU;
+            // Lit as `light_at` lights everything else: the colours were measured unlit.
+            let mut tread = Vec::new();
+            for i in 0..n {
+                let (s, c) = angle(i).sin_cos();
+                let light = light_at([0.0, s, c], Category::Tyre);
+                tread.push((
+                    push(outer, w.radius * s, w.radius * c, w.tyre, light),
+                    push(inner, w.radius * s, w.radius * c, w.tyre, light),
+                ));
+            }
+            // The outside face: a ring of tyre, then the rim filling the middle.
+            let side = light_at([w.outside, 0.0, 0.0], Category::Tyre);
+            let mut ring = Vec::new();
+            for i in 0..n {
+                let (s, c) = angle(i).sin_cos();
+                let r = w.radius * w.rim_fraction;
+                ring.push((
+                    push(outer, w.radius * s, w.radius * c, w.tyre, side),
+                    push(outer, r * s, r * c, w.tyre, side),
+                    push(outer, r * s, r * c, w.rim, side),
+                ));
+            }
+            let centre = push(outer, 0.0, 0.0, w.rim, side);
+            for i in 0..n {
+                let j = (i + 1) % n;
+                indices.extend([tread[i].0, tread[j].0, tread[j].1, tread[i].0, tread[j].1, tread[i].1]);
+                indices.extend([ring[i].0, ring[j].0, ring[j].1, ring[i].0, ring[j].1, ring[i].1]);
+                if with_face {
+                    indices.extend([centre, ring[i].2, ring[j].2]);
+                }
+            }
+            Bucket {
+                category: Category::Tyre,
+                wheel: Some(w.corner),
+                pieces: vec![Piece {
+                    vertices,
+                    attrs,
+                    indices,
+                    pixels: 0,
+                    weight: 1.0,
+                    two_sided: true,
+                    node: "generated wheel".into(),
+                    parent: String::new(),
+                    material: 0,
+                }],
+                vertices: Vec::new(),
+                uvs: Vec::new(),
+                indices: Vec::new(),
+                source_triangles: 0,
+                pixels: 0,
+                weight: 1.0,
+                two_sided_from: 0,
+            }
+        })
+        .collect()
+}
+
+/// Folds the light into the colour and flattens each bucket into its draw call.
+fn finish_level(buckets: &mut Vec<Bucket>) {
+    // Only now is the light folded in: welding averaged it and decimation moved vertices about,
+    // and both of those are the reason it was kept out of the colour until here.
+    for b in buckets.iter_mut() {
+        for p in &mut b.pieces {
+            for (v, a) in p.vertices.iter_mut().zip(&p.attrs) {
+                v.color = apply_light(v.color, a.light);
+            }
+        }
+        b.flatten();
+    }
+
+    // Drop anything simplification emptied, so the file has no zero-triangle draw calls in it.
+    buckets.retain(|b| b.indices.len() >= 3);
 }
 
 /// Decimates each bucket to a target that has already been decided.
@@ -1721,19 +2477,7 @@ fn spend_budget_with(
         }
     }
 
-    // Only now is the light folded in: welding averaged it and decimation moved vertices about,
-    // and both of those are the reason it was kept out of the colour until here.
-    for b in buckets.iter_mut() {
-        for p in &mut b.pieces {
-            for (v, a) in p.vertices.iter_mut().zip(&p.attrs) {
-                v.color = apply_light(v.color, a.light);
-            }
-        }
-        b.flatten();
-    }
-
-    // Drop anything simplification emptied, so the file has no zero-triangle draw calls in it.
-    buckets.retain(|b| b.indices.len() >= 3);
+    finish_level(buckets);
 }
 
 #[cfg(test)]
@@ -1936,6 +2680,25 @@ mod tests {
         assert_eq!(car.lod_for_distance(11.5).first_mesh, lods[0].first_mesh);
         assert_eq!(car.lod_for_distance(25.0).first_mesh, lods[1].first_mesh);
         assert_eq!(car.lod_for_distance(200.0).first_mesh, lods[2].first_mesh);
+    }
+
+    /// The M5's LOD2 body in miniature: many parts, a floor that adds up to more than the budget.
+    /// The share has to stay inside the budget by leaving the least-seen parts out, and the part
+    /// that matters most has to keep the most — not every part pinned at the floor.
+    #[test]
+    fn a_coarse_share_leaves_parts_out_rather_than_overspend() {
+        let mut claims: Vec<(f64, usize)> = (0..210).map(|i| (1.0 + i as f64, 300)).collect();
+        claims[17] = (120_000.0, 62_000); // the paint shell
+        let shares = share_or_drop(&claims, 457, MIN_PIECE_TRIANGLES);
+        assert!(shares.iter().sum::<usize>() <= 457, "spent {}", shares.iter().sum::<usize>());
+        assert!(shares.iter().all(|s| *s == 0 || *s >= MIN_PIECE_TRIANGLES));
+        assert_eq!(shares.iter().max(), Some(&shares[17]));
+        assert!(shares[17] > 200, "the paint got {}", shares[17]);
+        assert!(shares.iter().any(|s| *s == 0));
+
+        // When every part can have the floor, none is left out.
+        let few: Vec<(f64, usize)> = (0..10).map(|i| (1.0 + i as f64, 300)).collect();
+        assert!(share_or_drop(&few, 457, MIN_PIECE_TRIANGLES).iter().all(|s| *s >= MIN_PIECE_TRIANGLES));
     }
 
     /// A car with no level table answers as one level, so nothing has to special-case it.
@@ -2234,5 +2997,72 @@ mod tests {
         let lens_down = light_at([0.0, -1.0, 0.0], Category::Light);
         assert!(lens_down > down * 2.0, "a lamp facing away is barely brighter than paint");
         assert!(lens_down > side);
+    }
+
+    /// A grid of quads, 12 wide and 10 tall, cut at column `cut` into two parts that share the
+    /// column of vertices there — which is how an exporter splitting a primitive leaves it.
+    fn split_strip(cut: usize, parent_b: &str) -> Bucket {
+        const TALL: u32 = 10;
+        let piece = |from: usize, to: usize, parent: &str| {
+            let mut vertices = Vec::new();
+            let mut indices = Vec::new();
+            for x in from..=to {
+                for y in 0..=TALL {
+                    vertices.push(Vertex::new(x as f32 * 0.1, y as f32 * 0.1, 0.0, 0));
+                }
+            }
+            let at = |x: u32, y: u32| x * (TALL + 1) + y;
+            for x in 0..(to - from) as u32 {
+                for y in 0..TALL {
+                    let (a, b, c, d) = (at(x, y), at(x, y + 1), at(x + 1, y), at(x + 1, y + 1));
+                    indices.extend_from_slice(&[a, c, b, b, c, d]);
+                }
+            }
+            Piece {
+                attrs: vec![Attr { light: 1.0, uv: [0.0; 2] }; vertices.len()],
+                vertices,
+                indices,
+                pixels: 100,
+                weight: 1.0,
+                two_sided: false,
+                node: "strip".into(),
+                parent: parent.into(),
+                material: 0,
+            }
+        };
+        let mut a = piece(0, cut, "Body");
+        let b = piece(cut, 12, parent_b);
+        a.weight = 3.0;
+        Bucket {
+            category: Category::Body,
+            wheel: None,
+            pieces: vec![a, b],
+            vertices: Vec::new(),
+            uvs: Vec::new(),
+            indices: Vec::new(),
+            source_triangles: 240,
+            pixels: 200,
+            weight: 1.0,
+            two_sided_from: 0,
+        }
+    }
+
+    #[test]
+    fn halves_of_one_object_are_rejoined_before_welding() {
+        let mut buckets = vec![split_strip(3, "Body")];
+        assert_eq!(rejoin_split_parts(&mut buckets), (2, 1));
+        let p = &buckets[0].pieces[0];
+        assert_eq!(buckets[0].pieces.len(), 1);
+        assert_eq!(p.indices.len() / 3, 12 * 10 * 2);
+        assert_eq!(p.pixels, 200);
+        // Pixel-weighted: 100 px at 3.0 and 100 px at 1.0 are worth 200 px at 2.0.
+        assert!((p.weight - 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn parts_of_different_objects_are_left_apart_even_where_they_touch() {
+        let mut buckets = vec![split_strip(3, "Wing")];
+        assert_eq!(rejoin_split_parts(&mut buckets), (0, 0));
+        assert_eq!(buckets[0].pieces.len(), 2);
     }
 }
