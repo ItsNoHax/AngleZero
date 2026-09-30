@@ -19,6 +19,14 @@ lods = [3000, 1200]
 # four — and the two words are not the same thing even where the result would be.
 match = ["3DWheel"]
 
+[materials]
+# The tail lamp lens is `red_glass`, rgba(0.5, 0, 0, 0.25): a quarter-opaque dark red. As glass it
+# blends at the window floor of 35% over the silver reflector behind it, and a silver lamp seen
+# through a faint red film is pale pink, which is what both clusters were. An F56's tail lamps read
+# solid red. As a lamp, the lens is opaque and lit at its own hue. Its other piece is the red
+# reflector strip in the rear bumper, which is red on the real car too.
+light = ["red_glass"]
+
 # The reversing lamps, placed rather than derived.
 #
 # Nothing in the model names them, so they would otherwise be inferred from the tail lamps: inboard
@@ -36,3 +44,11 @@ radius = 0.11
 [lights.reverse_right]
 at = [-0.634, 0.727, -1.690]
 radius = 0.11
+
+# The headlamp lens is `glass_light`, rgba(0, 0, 0, 0.55): black glass at over half opacity. In the
+# PBR renderer it was made for, its clearcoat reflects the sky and the lamp reads bright. Here glass
+# is only its colour, so a black lens drew a dark grey ring. A real F56 lamp reads silver and white
+# through clear glass, so the lens gets a pale tint instead.
+[[materials.colour]]
+match = ["glass_light"]
+rgb = [215, 218, 224]

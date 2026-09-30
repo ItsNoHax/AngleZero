@@ -5,6 +5,30 @@ source = "2015_rocket_bunny_racing_honda_nsx.glb"
 scale = 100.0
 triangles = 24000
 lods = [3000, 1200]
+# The cabin and engine bay left the window category, so the silhouette lost their volume; a finer
+# grid keeps the roofline and wing.
+silhouette = 1400
 
 [wheels]
-match = ["rim:", "Calliper", "Wheel1A"]
+match = ["rim:", "Calliper", "Wheel1A", "off1_", "off2_"]
+
+[reduce]
+# 95,904 source triangles of cabin and engine bay; at the default 0.4 they fell to 941 at 20% error.
+interior = 2.0
+
+# The wheel's heaviest part is the spoke face (Rim_Color_2), so the default would call it the tyre;
+# the rubber is the `rim:...Wheel1B` part.
+[materials]
+tyre = ["rimHonda_NSXLBWorksRewardRecycled"]
+chrome = ["Rim_Color_2"]
+# The cabin and engine bay materials carry an alpha channel, so by default they went to `window`
+# and were decimated to nothing as glass.
+interior = ["InteriorA_Material1", "INT_Color_1", "Int_Color_2", "EngineA_Material1"]
+
+# The tail-lamp housing in the shared LightA texture is pale grey, and the Red_glass lens over it is
+# only 25% opaque, so the band read salmon-pink. Tint the housing red behind the lens only; the
+# headlights wear the same material at the other end of the car.
+[[materials.colour]]
+match = ["LightA_Material1"]
+rgb = [200, 20, 20]
+inside = { min = [-1.1, 0.55, -2.4], max = [1.1, 0.95, -1.8] }

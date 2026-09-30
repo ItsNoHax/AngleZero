@@ -10,7 +10,35 @@ lods = [3000, 1200]
 match = ["AvantRewardRecycled_2020_Wheel"]
 
 [reduce]
-# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
-# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
-# body with it.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+# `Base_Geo` was dropped here as a display plinth, and it is not one: 3,062 black triangles centred
+# a metre up and inside the car's footprint (2.1 x 1.0 x 5.0 m), which is the floor pan and the
+# inner wheel arches. Dropping it opened the arches to the sky and the cabin to the road.
+
+# The cabin is 47,045 triangles under one material. At the default weight it came out at 759.
+interior = 2.0
+
+# The floor pan's front lip, seen from its back between the lower grille and the splitter, was
+# culled and left a strip of sky across the front. The doubled name is the floor pan alone: this
+# exporter calls every panel's mesh `<Part>_Base_Geo_lodA`.
+two_sided = ["Base_Geo_lodA_Base_Geo_lodA"]
+
+[reduce.parts]
+# One 85-triangle spoke piece per corner (the same part mirrored four times) that decimated to a
+# handful of triangles at 40% error, which on the front-left and rear-left drew as a large stray
+# triangle across three spokes. Weighting it keeps its shape, and the four corners then match.
+"polySurface74_" = 6.0
+"polySurface212_" = 6.0
+"polySurface350_" = 6.0
+"polySurface488_" = 6.0
+# The tailgate "RS6" script and the grille's RS6 badge are one 120-triangle part, which at the
+# default weight came down to a single black triangle.
+"Kit1_Badge_Geo" = 8.0
+# The four rings at both ends are inside the 46,658-triangle chrome trim part, and came out as
+# broken polygons once the cabin took its share. 1.5 draws them round again.
+"Kit1_Coloured_Geo" = 1.5
+
+[materials]
+# The cabin's own material — seats, dash, floor, door cards and the wheel-arch liners — is marked
+# transparent (it is alpha-tested), so it sorted as glass and the visibility sweep, seeing it only
+# through the tinted windows, called all 47,045 triangles hidden and dropped them.
+interior = ["2020InteriorA_Material"]

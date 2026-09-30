@@ -61,3 +61,17 @@ tyre = 4.5
 # one and then the other.
 interior = 2.0
 
+
+[materials]
+# Each tyre is two source parts, not one. `ADVAN_Neova_TIRE` holds two `Tire2` primitives (both
+# named `ADVAN_Neova_TIRE_Tire2_0`) that are complementary patches of the same tread surface: one
+# is the shoulder tread blocks, ~26,000 triangles a corner in 35 shells, the other is the rest of the
+# band with the blocks cut out of it, ~82,000. Inside a wheel only the heaviest part is taken as the
+# tyre and everything else is filed as hardware, so the block patch went to `chrome`, was starved to
+# a few shards against 180,000 triangles of rim and lug nut, and the tyres rendered with the
+# background showing through every block-shaped cut-out. Naming the material keeps both in `tyre`.
+#
+# The two patches share a long border, and the compiler now rejoins split parts like these into one
+# surface before welding (`Rejoined:` in the report), so the border decimates as one and the tread
+# closes on all four corners.
+tyre = ["Tire2"]

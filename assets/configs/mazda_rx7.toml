@@ -14,7 +14,9 @@ name = "Mazda RX-7"
 source = "1993_veilside_c-ii_mazda_rx-7_fast__furious.glb"
 
 scale = 100.0
-triangles = 24000
+# 28,000 rather than the fleet's 24,000: the wheels below need about 2,300 triangles a corner, and
+# taking them out of 24,000 left the bodywork at 8,500. 1,087 KB, inside the slot.
+triangles = 28000
 lods = [3000, 1200]
 
 [wheels]
@@ -22,11 +24,24 @@ lods = [3000, 1200]
 match = ["Mazda_RX7F1_1993_Wh"]
 
 [reduce]
-# Two parts that are not the car. `Base_Geo_lodA_Base_Geo_lodA` is the display plinth this
-# exporter stands its models on — the doubled name is what distinguishes it from bodywork, since a
-# panel's own mesh is `<Part>_Base_Geo_lodA` and a plain `Base_Geo` pattern would take the whole
-# body with it. `UnderLighting` is the four-triangle neon quad described at the top of this file.
-drop = ["Base_Geo_lodA_Base_Geo_lodA", "UnderLighting"]
+# Each wheel is one 8,400-triangle mesh holding tyre, rim and hub together, so there is no rim part
+# to weight on its own. At the default share a corner got ~1,200 triangles at 18-30% error, and the
+# rim decimated into a flat pentagon (the rear left into a torn triangle with no hub) whose corners
+# ran over the sidewall. Given 6,000 a corner it is a clean 20-spoke alloy, so this is budget, not
+# the model. 6.0 buys ~2,265 a corner at ~2% error and a round rim; 3.0 and 5.0 came out *worse*
+# (238 and 1,300 on some corners), so do not lower it without rendering the wheels alone.
+wheel = 6.0
+
+# The cabin, once it is sorted as cabin (see [materials]): 74,000 source triangles that the default
+# 0.4 share squeezed to 717 at 30% error, which is a tub with no seats in it. 2.0 gives ~3,800.
+interior = 2.0
+
+# `UnderLighting` is the four-triangle neon quad described at the top of this file.
+#
+# `Base_Geo_lodA_Base_Geo_lodA` used to be dropped here as a display plinth. It is not one: its
+# extent is the body's own footprint and dropping it left no change to the car's size, and it is
+# the black floor pan and inner arches. Without it you looked up through the car into the roof.
+drop = ["UnderLighting"]
 
 # Placed by hand because the detector will not guess them, and it is right not to: the candidate
 # lenses it finds are at (0.60, 0.54, 1.69) and (-0.47, 0.00, 2.89), which are not a mirrored pair,
@@ -55,3 +70,10 @@ radius = 0.28
 [lights.tail_right]
 at = [-0.58, 0.70, -2.16]
 radius = 0.28
+
+[materials]
+# Both of these materials are flagged transparent in the model, and blending is what sorts a part
+# into `window`. That put the whole 54,500-triangle cabin and the 19,600-triangle engine in with the
+# glass, where they were decimated to a few slabs drawn with the glass's alpha — the "rainbow
+# gradient" seen through the windows from below was the engine collapsed to one textured triangle.
+interior = ["InteriorA_Material", "EngineA_Material"]

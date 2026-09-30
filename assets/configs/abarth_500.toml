@@ -7,9 +7,6 @@ scale = 100.0
 triangles = 24000
 lods = [3000, 1200]
 
-# Short and tall, which is the awkward shape for a grid sized off a triangle count: the default
-# 1,000 loses the top of its roof and a strip of sill. 1,400 brings it into line with the rest.
-silhouette = 1400
 
 [wheels]
 # One material and one node fragment covers the whole wheel here — rim, tyre and hardware are a
@@ -17,8 +14,34 @@ silhouette = 1400
 match = ["Abarth_500_2014_Wheel"]
 
 [reduce]
-# Shipped standing on a display plinth: `Base_Geo_lodA_Base_Geo_lodA`, 1,226 triangles of flat slab
-# that is not part of the car. The doubled name is what tells it apart from the body — this
-# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a pattern of plain `Base_Geo` would
-# take the bodywork with it.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+# `Base_Geo_lodA_Base_Geo_lodA` (1,226 black triangles) is NOT a display plinth, though it was once
+# dropped as one: it sits inside the car's footprint (x ±0.79, z −1.64..1.85, y 0.10..1.35) and is
+# the floor pan and inner wheel arches. Dropping it left the cabin open from below.
+#
+# The cabin needs more than the 0.4 default once it is its own category (see [materials]): at 0.4
+# it gets ~800 triangles at 18% error and reads as shards.
+interior = 2.0
+# The lamps were starved at the 1.6 default: `Light_Geo` (6,688 triangles, every lamp's reflector)
+# came out at ~197 triangles, which erased the headlamp reflectors entirely (empty sockets you
+# could see into) and cut a triangle out of the +X tail lamp, showing dark window glass through it.
+# At 4.0 it gets ~1,100 and both ends have their reflectors back.
+light = 4.0
+# The number plate (`ManufacturerPlate`, body) sits a hair in front of its black holder, which is in
+# `Coloured_Geo` (chrome). With the cabin now paid for, chrome fell to ~1,600 triangles and the
+# holder, decimated, crossed through the plate: a black wedge over most of "ABARTH". 1.5 restores it.
+chrome = 1.5
+
+[materials]
+# `InteriorA_Material1` (38,111 triangles: dash, door cards, headliner, carpet) is flagged BLEND in
+# the source, so it sorted as window and starved alongside the glass — almost none of it survived.
+# Its texture is a decal sheet, but 98% of the geometry's area samples fully opaque texels, so it is
+# an opaque cabin. Same exporter and fix as the NSX and RS6.
+interior = ["InteriorA_Material"]
+
+# The tail-lamp lenses are `glass_light` — smoked, 48% black, the same material as the headlamp
+# covers — so over the grey reflector the tail lamps read grey. The real car's are red. Tint the
+# lens behind the rear axle only; the box holds nothing of `glass_light` but the two tail lamps.
+[[materials.colour]]
+match = ["glass_light"]
+rgb = [200, 10, 10]
+inside = { min = [-0.9, 0.5, -1.85], max = [0.9, 1.05, -1.2] }

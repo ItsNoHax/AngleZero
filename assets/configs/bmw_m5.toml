@@ -3,19 +3,79 @@ name = "BMW M5"
 source = "2025_bmw_m5_sedan.glb"
 
 scale = 100.0
-triangles = 24000
+# 3,000 over the fleet's 24,000 pays for the tread slabs kept near whole (see [materials]); at
+# 24,000 the same weights took it out of the cabin (8.7% -> 22% error) and the rims.
+triangles = 27000
 lods = [3000, 1200]
 
-# The longest car in the fleet at 5.09 m, and the clustering grid is sized by the triangle
-# target, so the default 1,000 rounds its sills away — 3.9% of the car missing against a median of
-# 0.1%. At 1,400 it is 0.3%, for about two extra kilobytes.
-silhouette = 1400
 
 [wheels]
 match = ["SedanRewardRecycled_2024_Wheel"]
 
+# No drop: `Base_Geo_lodA_Base_Geo_lodA` is not a plinth here but the floor, underbody and inner
+# arches (y 0.15-1.42 m, inside the footprint). Dropping it left the cabin floorless.
 [reduce]
-# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
-# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
-# body with it.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+interior = 2.0
+# The tyre is the 25 tread slabs plus two sidewall rings: weighted up so the slabs stay near
+# their 36 triangles each; the sidewalls, which are smooth, are weighted back down.
+tyre = 2.0
+
+[reduce.parts]
+# Sidewalls, outer and inner (FL, FR, RL, RR).
+"polySurface117_b" = 0.4
+"polySurface118_b" = 0.4
+"polySurface265_b" = 0.4
+"polySurface266_b" = 0.4
+"polySurface481_b" = 0.4
+"polySurface482_b" = 0.4
+"polySurface697_b" = 0.4
+"polySurface698_b" = 0.4
+# Spoke star and wheel face. Moved from `tyre` to wheel chrome, they shared its budget with 7,000
+# triangles of hardware and lost the centre badge and spoke edges.
+"polySurface115_b" = 2.0
+"polySurface116_b" = 2.0
+"polySurface263_b" = 2.0
+"polySurface264_b" = 2.0
+"polySurface384_b" = 2.0
+"polySurface415_b" = 2.0
+"polySurface600_b" = 2.0
+"polySurface631_b" = 2.0
+
+# The cabin material is alphaMode BLEND, so it was sorted as glass: 110k cabin triangles squashed
+# into the window budget, and the see-through cabin made the sweep draw the paint two-sided, where
+# the bonnet's 0.7 mm inner skin fought the outer one in 16-bit depth (dark patches).
+[materials]
+interior = ["InteriorA_Material"]
+
+# The whole wheel is one material, so these are node names (FL, FR, RL, RR). The heaviest part
+# of each wheel is the spoke face (4,034 / 3,718 triangles), which the default made the tyre; the
+# rubber went to chrome, including the tread, which is 25 separate 36-triangle slabs per wheel that
+# share no vertices. Cut to a chrome part's share (4-15 triangles each) their ends pulled in and
+# see-through slits opened across the tread. Outer and inner sidewall, then the slabs:
+tyre = [
+    "polySurface117_b", "polySurface118_b", "polySurface265_b", "polySurface266_b",
+    "polySurface481_b", "polySurface482_b", "polySurface697_b", "polySurface698_b",
+    "polySurface119_b", "polySurface120_b", "polySurface121_b", "polySurface122_b", "polySurface123_b",
+    "polySurface124_b", "polySurface125_b", "polySurface126_b", "polySurface127_b", "polySurface128_b",
+    "polySurface129_b", "polySurface130_b", "polySurface131_b", "polySurface132_b", "polySurface133_b",
+    "polySurface134_b", "polySurface135_b", "polySurface136_b", "polySurface137_b", "polySurface138_b",
+    "polySurface139_b", "polySurface140_b", "polySurface141_b", "polySurface142_b", "polySurface143_b",
+    "polySurface267_b", "polySurface268_b", "polySurface269_b", "polySurface270_b", "polySurface271_b",
+    "polySurface272_b", "polySurface273_b", "polySurface274_b", "polySurface275_b", "polySurface276_b",
+    "polySurface277_b", "polySurface278_b", "polySurface279_b", "polySurface280_b", "polySurface281_b",
+    "polySurface282_b", "polySurface283_b", "polySurface284_b", "polySurface285_b", "polySurface286_b",
+    "polySurface287_b", "polySurface288_b", "polySurface289_b", "polySurface290_b", "polySurface291_b",
+    "polySurface483_b", "polySurface484_b", "polySurface485_b", "polySurface486_b", "polySurface487_b",
+    "polySurface488_b", "polySurface489_b", "polySurface490_b", "polySurface491_b", "polySurface492_b",
+    "polySurface493_b", "polySurface494_b", "polySurface495_b", "polySurface496_b", "polySurface497_b",
+    "polySurface498_b", "polySurface499_b", "polySurface500_b", "polySurface501_b", "polySurface502_b",
+    "polySurface503_b", "polySurface504_b", "polySurface505_b", "polySurface506_b", "polySurface507_b",
+    "polySurface699_b", "polySurface700_b", "polySurface701_b", "polySurface702_b", "polySurface703_b",
+    "polySurface704_b", "polySurface705_b", "polySurface706_b", "polySurface707_b", "polySurface708_b",
+    "polySurface709_b", "polySurface710_b", "polySurface711_b", "polySurface712_b", "polySurface713_b",
+    "polySurface714_b", "polySurface715_b", "polySurface716_b", "polySurface717_b", "polySurface718_b",
+    "polySurface719_b", "polySurface720_b", "polySurface721_b", "polySurface722_b", "polySurface723_b",
+]
+chrome = [
+    "polySurface116_b", "polySurface264_b", "polySurface415_b", "polySurface631_b",
+]

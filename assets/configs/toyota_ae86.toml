@@ -55,5 +55,13 @@ grip = 0.94
 # rims and Russian for its headlights.
 tyre = ["pneu"]
 chrome = ["jante", "miroir"]
-window = ["vitre"]
+#
+# The cabin glass, `vitres`, is not glass. The model has no interior at all — every one of its 20
+# materials is accounted for (`noir_mat` is 175,000 triangles of window seals, mirrors and spoiler;
+# `noir_gloss` is the bumpers, sills and the black bonnet, which is the model's own and meant) — and
+# its author made the glass opaque black mirror, alpha 1.0, to hide the empty shell. As `window` it
+# was clamped to 75% and blended, which showed a bare cabin and the far door's lettering backwards.
+# As `body` it draws the way it was authored. `vitre_` still catches the lamp and indicator covers.
+window = ["vitre_"]
+body = ["vitres"]
 light = ["phares", "lumier", "taillights"]

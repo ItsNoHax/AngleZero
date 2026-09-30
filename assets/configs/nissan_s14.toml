@@ -7,7 +7,29 @@ triangles = 24000
 lods = [3000, 1200]
 
 [wheels]
-match = ["wheels_rb", "Wheel1A"]
+match = ["wheels_rb", "Wheel1A", "Rim_C1", "Rim_B_1"]
+
+[materials]
+# Inside a wheel the heaviest part is taken for the tyre, and here that is the five-spoke rim
+# (`Rim_C1`, 3,742 triangles against the tyre's 1,232), so both are named. The tyre nodes are
+# spelt with their `_m` suffix because `polySurface15` alone also matches the callipers'
+# `polySurface1507`.
+chrome = ["Rim_C1"]
+tyre = ["polySurface15_m", "polySurface30_m", "polySurface35_m", "polySurface36_m"]
+# The cabin's material is flagged transparent, so it fell into `window` with the glass, was cut to
+# a window's share and blended: with the glass hidden the car was a hollow shell.
+interior = ["M_Interior_Max"]
+
+# With the rims joined to their wheels, each wheel's hardware outweighs its tyre on screen, and
+# at LOD2 the tyre was starved into a square slab. Weighting tyres up keeps them round.
+[reduce]
+tyre = 2.0
+
+# `M_Chassis_Max` is flagged transparent and stays in `window`, and it carries the intercooler and
+# the piping seen through the bumper's intakes. With the cabin moved out of `window` it lost the
+# share it used to get alongside it, the piping decimated away and the intakes showed background.
+[reduce.parts]
+"M_Chassis_Max" = 2.0
 
 # This model names nothing. Every one of its twenty-two materials is a Maya default —
 # `SILVIAphong2SG1`, `SILVIAphong6SG1` and so on — so the category guesser, which works from names,

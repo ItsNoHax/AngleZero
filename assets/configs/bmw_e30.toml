@@ -13,3 +13,20 @@ lods = [3000, 1200]
 # merely ends in those letters, and nothing here is called `SteeringWheel`, which `Wheel` alone
 # would have taken.
 match = ["_rim", "Wheel1A"]
+
+[reduce]
+drop = ["Callip"]
+# The cabin, once it is `interior` (below): at the default weight its 5,592 triangles fell to 1,812
+# and the steering wheel to a sliver. Doubled, it is 5,592 kept whole, with the round wheel and the
+# textured seats, and the tyres give up 32 triangles each for it without visibly changing.
+interior = 2.0
+
+[reduce.parts]
+"Light_Max_005" = 12.0
+
+# The seats, dashboard and steering wheel wear `BMWM_Interior_Max1`, which carries an alpha channel,
+# so by default they went to `window` and were decimated as glass. This used to take the cabin out
+# of the silhouette (15.8% missing from the side, against 0.3%) and was held back for it; the
+# silhouette is now built from every part, whatever it is called.
+[materials]
+interior = ["BMWM_Interior_Max1"]

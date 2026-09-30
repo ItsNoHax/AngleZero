@@ -30,3 +30,15 @@ match = ["SM_Brake_", "SM_Hub", "Wheel1A"]
 match = ["MAT_Glass"]
 rgb = [30, 32, 36]
 flat = true
+
+# The front wheel-arch liners are one sheet (`SM_FrontKit_..._Base_026`, `MAT_Details_MAT`) wound
+# to face the wheel, so from below and inboard you see its back, and culled it left a hole through
+# the arch beside the wheel. The visibility sweep never looks from below, so it neither marks the
+# sheet two-sided nor gives it more than a sliver of budget: at weight 1 it decimates to 111
+# triangles and loses the lower arch, at 4 it keeps its shape (438) for about a dozen triangles per
+# tyre. The narrow gap left between liner and sill is the body shell's own inside, not this part.
+[reduce]
+two_sided = ["SM_FrontKit_0000_007_MAT_350Z_Base_026"]
+
+[reduce.parts]
+"SM_FrontKit_0000_007_MAT_350Z_Base_026" = 4.0

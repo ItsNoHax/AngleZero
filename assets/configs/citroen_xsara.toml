@@ -15,3 +15,21 @@ lods = [3000, 1200]
 #
 # `SK_Rim` rather than `SK_`: the body panels are `SK_Door_FR` and friends.
 match = ["Ani_Wheel", "Ani_Disc", "Ani_Tyre", "SK_Rim"]
+
+[materials]
+# Four cabin materials share one label sheet and point only at its strip of colour swatches along
+# the top (V < 0.035 for 97.5-100% of their vertices). As palettes they are looked up exactly and
+# stop taking four atlas tiles of the same image, which takes the grid from 5x5 to 4x4 and gives
+# the livery 62 texels a side instead of 49.
+palette = ["Cabin1", "Cabin_Suede_A1", "Cabin_Leather_A1", "Cabin_Plastic_A1"]
+# The tailgate's parts are all nodes named `SK_Trunk_101_MI_Glass_00N`, whatever they wear, and
+# "glass" in the node name put the painted panel (`_006`, MI_Exhaust_008), its livery (`_007`) and
+# its opaque inner trim (`_008`, Cabin_Plastic) in the window category: the whole tailgate drew as
+# blended red glass you could see the boot through. Only `_002` and `_003` wear MI_Glass1 and are
+# the real rear screen; `_004` (MI_Light1) is left where it was.
+body = ["SK_Trunk_101_MI_Glass_006", "SK_Trunk_101_MI_Glass_007", "SK_Trunk_101_MI_Glass_008"]
+
+[reduce.parts]
+# The exhaust (520 source triangles, in chrome by its shiny paint material) was decimated to a
+# flat brown plate. The tan is authored: its UVs point at the tan swatch of MI_Exhaust_008's palette.
+"SK_Exhaust_101" = 8.0

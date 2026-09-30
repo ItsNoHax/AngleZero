@@ -10,7 +10,20 @@ lods = [3000, 1200]
 match = ["Wheel1A", "Rim_", "_Tyre"]
 
 [reduce]
-# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
-# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
-# body with it.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+# `Base_Geo_lodA_Base_Geo_lodA` is not a display plinth on this model: it sits inside the body's
+# footprint (x ±0.87 m against the body's ±0.93, 0.13 m off the ground) and is the black floor pan
+# and tub. Dropping it left the cabin open from below.
+#
+# The cabin is 54,509 triangles under one material; at the default weight it came out at 793 and
+# lost the dash and steering wheel into smears.
+interior = 2.0
+# The rear wheel-arch liners (`GrilleNoAlpha6`) and the floor pan are mostly front-facing, so the
+# sweep left them culled and the arches showed background between tyre and lip, and the floor
+# vanished from below.
+two_sided = ["GrilleNoAlpha6_Geo", "Base_Geo_lodA"]
+
+[materials]
+# The cabin's own material — seats, dash, wheel, door cards, headliner — is marked transparent
+# (alpha-tested), so it sorted as glass and the visibility sweep, seeing it only through the
+# windows, called it hidden and dropped it. Only the seats' tiling zone survived.
+interior = ["InteriorA_Material"]

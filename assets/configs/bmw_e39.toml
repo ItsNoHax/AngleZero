@@ -71,6 +71,18 @@ chrome = 10.0
 # lamps get 42 triangles between them.
 body = 4.5
 
+# The tyres are 800 source triangles a corner and at the default weight came out at 126, which is
+# a twelve-sided wheel you can count the facets on from the chase camera. 5.0 buys them about 600 —
+# round again — for roughly 1,200 triangles off the body, which the door mouldings survive.
+tyre = 5.0
+
+[reduce.parts]
+# `Object_25` (material `black`, 4,359 triangles) is the wheel-arch liner, sorted as bodywork and
+# decimated on the body's budget until the crown of each arch was gone. What showed through the
+# hole was the back of the rear seat — a tan band along the arch lip — and a sliver of sky above
+# the tyre. At 6.0 the liner closes over all four wheels.
+"Object_25_black" = 6.0
+
 [materials]
 # `Scene_-_Root` is the exporter's name for a material that never had one, and on this model it is
 # what the alloys wear — 90,232 triangles of it, all of it at the four corners. Nothing about that

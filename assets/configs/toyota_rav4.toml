@@ -49,3 +49,15 @@ match = ["Wheel.", "WheelBrake"]
 # assembly. `r_glass` is at the other end, 0.78 m up: too low to be the rear screen, which on an
 # SUV is well above a metre, and exactly where a tail lamp lives.
 light = ["Head", "r_glass"]
+
+[reduce]
+# The tyres have modelled tread blocks, and at ~555 triangles each the decimator left a ragged,
+# furry outline. 1.8 buys them ~990; the share comes out of the rims (chrome 0.7, ~1,250 -> ~850,
+# still reading fine alone and large). Taking it from `body` instead (tyre 2.5 alone) starved the
+# black_m trim and lost the roof rails.
+#
+# The flecks and slivers once on the paint were not a budget fault either: Car_paint_Grey is one
+# surface the exporter split at 65k vertices into Object_32 and Object_33 as interleaved patches.
+# The compiler now rejoins those into one surface before welding, which closed them.
+tyre = 1.8
+chrome = 0.7

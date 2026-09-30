@@ -156,3 +156,14 @@ match = ["wheel_bmw_aplg", "Object_4.", "amdb11_brakedisc"]
 [[materials.colour]]
 match = ["BMWE36_paint.004"]
 rgb = [95, 95, 100]
+
+# The bonnet is the same paint as the rest of the car. The model says otherwise.
+#
+# `BMWE36_paint.001` is one part, 5,209 triangles centred over the engine bay (1.45 x 0.25 x 1.30 m
+# at z = 1.34), and the model gives it linear rgba(0.061, 0, 0.002) against the 0.262 red that
+# `BMWE36_paint` puts on every other panel, boot lid included — a quarter of the brightness, so the
+# bonnet drew as a maroon slab in front of a red car. Both are untextured, unmetallic and equally
+# rough, so colour is the whole difference. 140, 3, 0 is `BMWE36_paint`'s own factor in sRGB.
+[[materials.colour]]
+match = ["BMWE36_paint.001"]
+rgb = [140, 3, 0]

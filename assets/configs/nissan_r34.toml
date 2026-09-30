@@ -55,6 +55,15 @@ drop = ["Engine_Geo"]
 light = 8.0
 chrome = 8.0
 
+# Two parts wound facing into the body, each culled whole because too few of its triangles are
+# seen only from behind for the sweep's 15% share to catch. Drawn two-sided, both faults close,
+# and each part fixes only one of them (checked by forcing each alone):
+# - `Kit0_Paint_Geo`, the body shell, carries the inner lips of the wheel arches: without it,
+#   background showed between the top of each tyre and its arch.
+# - `Kit0_Base_Geo`, the floor pan and liners, carries what sits under the bonnet shut line:
+#   without it, a light line ran along the bonnet's edge.
+two_sided = ["Kit0_Paint_Geo", "Kit0_Base_Geo"]
+
 [materials]
 # One long prefix on nearly everything — `Nissan_SkylineGTRR34TNR0_2002` — with the useful word at
 # the end. Matching on the tail is what keeps these patterns readable.

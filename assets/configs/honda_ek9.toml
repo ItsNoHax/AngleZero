@@ -13,3 +13,9 @@ lods = [3000, 1200]
 # name copied to all four corners, and the tyre is the model's own `Wheel1A` group. The converter
 # sorts them into corners by position, so a name shared by four corners is not a problem.
 match = ["WheelFL6_Mesh", "Wheel1A"]
+
+[materials]
+# The front wings' nodes are `FenderFL6_Mesh_015_M_Light_Max_005_…`, and `Light` in a node name
+# sorts them as lamps: lit at the lens floor, they came out bright white against grey doors. They
+# wear the same paint as every other panel, so the paint decides.
+body = ["hM_CarPaint_Max1"]

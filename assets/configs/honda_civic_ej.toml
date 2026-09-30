@@ -15,10 +15,11 @@ lods = [3000, 1200]
 match = ["Wheel1A", "Calliper"]
 
 [reduce]
-# Shipped on a display plinth. The doubled name is what distinguishes it from bodywork — this
-# exporter calls a panel's own mesh `<Part>_Base_Geo_lodA`, so a plain `Base_Geo` would take the
-# body with it.
-drop = ["Base_Geo_lodA_Base_Geo_lodA"]
+# `Base_Geo_lodA_Base_Geo_lodA` was dropped here as a display plinth, and it is not one: it is the
+# car's floor and inner wheel arches (4,501 black triangles, inside the car's own footprint — the
+# model's bounding box reaches no lower and no wider than the wheels). Dropping it left the car
+# open from below straight into the cabin, and showed the background through the arches behind
+# the front tyres. Nothing on this model needs dropping.
 
 # Every lamp on this car is one part. `Light_Geo_lodA` is a single 12,108-triangle mesh holding the
 # headlights and the tail lights together, centred on the car's origin, and `LightEmissive_Geo` is

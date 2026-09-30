@@ -30,3 +30,12 @@ node = "Base_042_Lights"
 [lights.tail_right]
 node = "Base_042_Lights"
 
+
+# Keep parts the visibility sweep never sees. The one it drops is `Base_044_chassis` (71
+# triangles, the only part `Visibility:` reports), and it is the floor pan: the whole underside,
+# textured with the exhaust and tunnel. The sweep looks from above and level, never from below, so
+# it called the floor hidden, and without it the car showed background along both sills and
+# between the floor and the rear bumper when seen from underneath. Nothing else is hidden, so this
+# keeps exactly that part.
+[reduce]
+drop_hidden = false

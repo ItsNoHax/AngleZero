@@ -8,3 +8,14 @@ lods = [3000, 1200]
 
 [wheels]
 match = ["TNRRims"]
+
+# The wheel's heaviest part is the spoked Rim109A mesh, so the position rule made it the tyre and
+# sent the real tyre (TireBlur) to chrome. Say which is which.
+[materials]
+tyre = ["TireBlur"]
+chrome = ["Rim109A"]
+
+# The tyre is an open shell that only just meets the rim lip; decimated below ~1,000 triangles a
+# wheel, its inner edge turns to chords and the background shows through a ring at the rim.
+[reduce]
+tyre = 2.0
