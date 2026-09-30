@@ -423,6 +423,7 @@ pub fn reduce_coarse(
     pixel: f32,
     flat: Option<&FlatTexel>,
     untextured: bool,
+    scene: Option<(&Scene, u32)>,
 ) -> Coarse {
     if indices.len() / 3 <= target_triangles || vertices.is_empty() {
         compact(vertices, attrs, indices);
@@ -551,14 +552,22 @@ pub fn reduce_coarse(
             }
         }
         let cell = pixel * JUDGE_CELL;
-        let judge = |candidate: &[u32]| {
-            if candidate.is_empty() {
-                usize::MAX
-            } else {
-                coverage_difference(vertices, &original, candidate, cell)
-            }
+        // Judged on the part's outline and, when the caller has the rest of the car, in place
+        // (see `Scene`), the second weighted `JUDGE_IN_PLACE` to one. Neither alone will do. The
+        // scene is LOD0's, and a part that is hidden there behind something the level coarsens
+        // is not hidden in the level: in place alone, the 720S's second paint shell, which lies
+        // under the first, was left out of LOD2 and its roof opened, and the Charger's grille
+        // surround clustered into a slab again, behind a black grille that is whole at LOD0 and
+        // twelve triangles at LOD2. On the outline alone, the S14's headlamp surround and the
+        // S15's intake backing were left out, because what clustering spills is almost all behind
+        // the paint and the outline cannot tell.
+        let off = |candidate: &[u32]| {
+            let outline = coverage_difference(vertices, &original, candidate, cell) as f64;
+            let in_place = scene.map_or(0.0, |(scene, id)| scene.difference(id, vertices, &original, candidate) as f64);
+            (outline + JUDGE_IN_PLACE * in_place) as usize
         };
-        let dropped_off = coverage_difference(vertices, &original, &[], cell);
+        let judge = |candidate: &[u32]| if candidate.is_empty() { usize::MAX } else { off(candidate) };
+        let dropped_off = off(&[]);
         let mut candidates = [
             (Coarse::Collapsed, judge(&looser), looser),
             (Coarse::Clustered, judge(&best), best),
@@ -575,9 +584,18 @@ pub fn reduce_coarse(
                 indices.len() / 3,
             );
         }
-        // Ties go to the earlier, which keeps the most of the part's own structure.
-        let pick = (0..candidates.len()).min_by_key(|&i| (candidates[i].1, i)).unwrap();
-        let kept_off = candidates[pick].1;
+        // Ties go to the earlier, which keeps the most of the part's own structure. A near tie
+        // — within `JUDGE_TIE` — goes to the answer that spends more of the part's share: the
+        // two are as far off by the judge's cells, and the one with three times the triangles
+        // has the detail the cells are too coarse to count. The 720S's splitter came out at 7
+        // triangles of 24 at LOD2 on a margin of 5%, and lost its lip.
+        let best = (0..candidates.len()).min_by_key(|&i| (candidates[i].1, i)).unwrap();
+        let near = |i: usize| candidates[i].1 != usize::MAX && candidates[i].1 as f64 <= candidates[best].1 as f64 * JUDGE_TIE;
+        let pick = (0..candidates.len())
+            .filter(|&i| near(i))
+            .max_by_key(|&i| (candidates[i].2.len(), std::cmp::Reverse(i)))
+            .unwrap_or(best);
+        let kept_off = candidates[pick].1.min(candidates[best].1);
         if dropped_off < kept_off {
             indices.clear();
             outcome = Coarse::Dropped;
@@ -667,8 +685,19 @@ pub enum Coarse {
 /// Looser collapse limits, in pixels at the level's distance, tried when collapse at one pixel
 /// stalls short of a part's target. The first that reaches the target is the one judged.
 const JUDGE_LIMITS: [f32; 4] = [2.0, 4.0, 8.0, 16.0];
+/// What a cell a coarse answer changes in place counts for, against one of its outline.
+///
+/// Set by the four parts whose answer is known by looking. Leaving the S15's intake backing out
+/// scores 240 on the outline and 418 in place, clustering it 433 and 298: kept only above 1.6.
+/// The Charger's grille surround at LOD2 must go (30 and 74 against 123 and 30 for its best
+/// answer): below 2.1. The S14's headlamp surround needs over 1.2, and the Charger's surround at
+/// LOD1 anything under 15.
+const JUDGE_IN_PLACE: f64 = 1.8;
+/// How close two coarse answers' judged differences must be to count as a tie (see
+/// `reduce_coarse`).
+const JUDGE_TIE: f64 = 1.1;
 /// The cell a coarse answer is judged in, as a fraction of a pixel at the level's distance.
-const JUDGE_CELL: f32 = 0.5;
+pub const JUDGE_CELL: f32 = 0.5;
 /// Directions a part is projected along to be judged: the three axes, the two horizontal
 /// diagonals, and four from above at 35°. Coverage has no depth, so a direction and its opposite
 /// see the same thing and only one of each pair is needed.
@@ -757,6 +786,193 @@ fn coverage_difference(vertices: &[Vertex], a: &[u32], b: &[u32], cell: f32) -> 
         total += ga.iter().zip(&gb).filter(|(x, y)| x != y).count();
     }
     total
+}
+
+/// A coarse level's parts as they stand in front of one another, from the directions the game's
+/// cameras see a car from, for judging a stalled part's answers in place (`Scene::difference`).
+///
+/// Judged on its own outline (`coverage_difference`), a part is charged for every cell a candidate
+/// covers that the part did not, and for every cell it stops covering, wherever they are. Neither
+/// is what the eye sees. The S14's black headlamp surround clustered spills a few centimetres
+/// outside its own outline, almost all of it behind the paint, and left out it opens holes in the
+/// nose that show the lamp buckets as dark shards; on its outline alone, leaving it out scored
+/// half of clustering (132 cells against 273), and it was left out. In place, a cell only counts
+/// where it changes what is in front: a cell the part was the nearest thing in and the candidate
+/// leaves empty, or a cell the candidate covers nearer than whatever the rest of the car puts
+/// there. The Charger's grille surround still goes, because the slab clustering puts across the
+/// opening is in front of the black grille.
+pub struct Scene {
+    cell: f32,
+    views: Vec<SceneView>,
+}
+
+struct SceneView {
+    /// Looking along `d`; nearer is smaller `d`. `u` and `v` span the grid.
+    d: [f32; 3],
+    u: [f32; 3],
+    v: [f32; 3],
+    lo: [f32; 2],
+    w: usize,
+    h: usize,
+    /// Per cell, the nearest surface's depth and the part it belongs to.
+    depth: Vec<f32>,
+    owner: Vec<u32>,
+}
+
+/// Directions a scene is looked at along: eight round the car at its own height and four from
+/// 35° above, then straight down. Unlike an outline, what is in front depends on which side it
+/// is seen from, so each is its own view. Not from below, which no game camera is.
+const SCENE_VIEWS: [[f32; 3]; 13] = [
+    [1.0, 0.0, 0.0],
+    [-1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0],
+    [0.0, 0.0, -1.0],
+    [0.7071, 0.0, 0.7071],
+    [0.7071, 0.0, -0.7071],
+    [-0.7071, 0.0, 0.7071],
+    [-0.7071, 0.0, -0.7071],
+    [0.5792, -0.5736, 0.5792],
+    [0.5792, -0.5736, -0.5792],
+    [-0.5792, -0.5736, 0.5792],
+    [-0.5792, -0.5736, -0.5792],
+    [0.0, -1.0, 0.0],
+];
+const NOWHERE: u32 = u32::MAX;
+
+impl Scene {
+    /// Rasterises every part, each tagged by its index in `parts`, into a depth grid per view with
+    /// cells `cell` across. Triangles smaller than a cell mark the cell under their centre, so a
+    /// finely tessellated panel is solid rather than a sieve.
+    pub fn build(parts: &[(u32, &[Vertex], &[u32])], cell: f32) -> Scene {
+        let views = SCENE_VIEWS
+            .iter()
+            .map(|&d| {
+                let helper = if d[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+                let u = normalise(cross(helper, d));
+                let v = cross(d, u);
+                let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+                for (_, vertices, indices) in parts {
+                    for p in indices.iter().map(|&i| &vertices[i as usize]) {
+                        let q = [dot([p.x, p.y, p.z], u) / cell, dot([p.x, p.y, p.z], v) / cell];
+                        for k in 0..2 {
+                            lo[k] = lo[k].min(q[k]);
+                            hi[k] = hi[k].max(q[k]);
+                        }
+                    }
+                }
+                if lo[0] > hi[0] {
+                    (lo, hi) = ([0.0; 2], [0.0; 2]);
+                }
+                // A margin, so a candidate spilling past the car's edge still lands in the grid.
+                let lo = [lo[0] - 4.0, lo[1] - 4.0];
+                let w = ((hi[0] - lo[0]) as usize + 6).min(4096);
+                let h = ((hi[1] - lo[1]) as usize + 6).min(4096);
+                let mut view = SceneView {
+                    d,
+                    u,
+                    v,
+                    lo,
+                    w,
+                    h,
+                    depth: vec![f32::MAX; w * h],
+                    owner: vec![NOWHERE; w * h],
+                };
+                let frame = view.frame(cell);
+                for &(id, vertices, indices) in parts {
+                    let (depth, owner) = (&mut view.depth, &mut view.owner);
+                    raster(&frame, vertices, indices, |at, z| {
+                        if z < depth[at] {
+                            depth[at] = z;
+                            owner[at] = id;
+                        }
+                    });
+                }
+                view
+            })
+            .collect();
+        Scene { cell, views }
+    }
+
+    /// How much a candidate for part `id` changes what the scene shows, in cells over every
+    /// view: the cells the part was the nearest thing in and the candidate leaves empty, and the
+    /// cells the candidate covers, outside the part's own, more than a cell's depth in front of
+    /// whatever the rest of the car puts there. See `Scene`.
+    pub fn difference(&self, id: u32, vertices: &[Vertex], original: &[u32], candidate: &[u32]) -> usize {
+        let mut total = 0;
+        for view in &self.views {
+            let frame = view.frame(self.cell);
+            let mut own = vec![false; view.w * view.h];
+            raster(&frame, vertices, original, |at, _| own[at] = true);
+            let mut near = vec![f32::MAX; view.w * view.h];
+            raster(&frame, vertices, candidate, |at, z| near[at] = near[at].min(z));
+            for at in 0..view.w * view.h {
+                let drawn = near[at] < f32::MAX;
+                if view.owner[at] == id {
+                    total += !drawn as usize;
+                } else if drawn && !own[at] && near[at] < view.depth[at] - self.cell {
+                    total += 1;
+                }
+            }
+        }
+        total
+    }
+}
+
+/// A view's projection: axes, grid origin and size, cell.
+struct Frame {
+    d: [f32; 3],
+    u: [f32; 3],
+    v: [f32; 3],
+    lo: [f32; 2],
+    w: usize,
+    h: usize,
+    cell: f32,
+}
+
+impl SceneView {
+    fn frame(&self, cell: f32) -> Frame {
+        Frame { d: self.d, u: self.u, v: self.v, lo: self.lo, w: self.w, h: self.h, cell }
+    }
+}
+
+/// Calls `plot(cell index, depth)` for every grid cell whose centre a triangle covers, or, for a
+/// triangle that covers no centre, for the cell under its centroid.
+fn raster(f: &Frame, vertices: &[Vertex], indices: &[u32], mut plot: impl FnMut(usize, f32)) {
+    for t in indices.chunks_exact(3) {
+        let mut q = [[0.0f32; 3]; 3];
+        for (k, &i) in t.iter().enumerate() {
+            let p = &vertices[i as usize];
+            let p = [p.x, p.y, p.z];
+            q[k] = [dot(p, f.u) / f.cell - f.lo[0], dot(p, f.v) / f.cell - f.lo[1], dot(p, f.d)];
+        }
+        let area = (q[1][0] - q[0][0]) * (q[2][1] - q[0][1]) - (q[2][0] - q[0][0]) * (q[1][1] - q[0][1]);
+        let x0 = q.iter().map(|p| p[0]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+        let x1 = (q.iter().map(|p| p[0]).fold(f32::MIN, f32::max).ceil().max(0.0) as usize).min(f.w - 1);
+        let y0 = q.iter().map(|p| p[1]).fold(f32::MAX, f32::min).floor().max(0.0) as usize;
+        let y1 = (q.iter().map(|p| p[1]).fold(f32::MIN, f32::max).ceil().max(0.0) as usize).min(f.h - 1);
+        let mut hit = false;
+        if area.abs() > 1.0e-9 {
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let w1 = ((px - q[0][0]) * (q[2][1] - q[0][1]) - (q[2][0] - q[0][0]) * (py - q[0][1])) / area;
+                    let w2 = ((q[1][0] - q[0][0]) * (py - q[0][1]) - (px - q[0][0]) * (q[1][1] - q[0][1])) / area;
+                    let w0 = 1.0 - w1 - w2;
+                    if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                        continue;
+                    }
+                    hit = true;
+                    plot(y * f.w + x, q[0][2] * w0 + q[1][2] * w1 + q[2][2] * w2);
+                }
+            }
+        }
+        if !hit {
+            let c = [(q[0][0] + q[1][0] + q[2][0]) / 3.0, (q[0][1] + q[1][1] + q[2][1]) / 3.0];
+            if c[0] >= 0.0 && c[1] >= 0.0 && (c[0] as usize) < f.w && (c[1] as usize) < f.h {
+                plot(c[1] as usize * f.w + c[0] as usize, (q[0][2] + q[1][2] + q[2][2]) / 3.0);
+            }
+        }
+    }
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -1492,5 +1708,26 @@ mod tests {
         let dropped_off = coverage_difference(&vertices, &frame, &[], cell);
         assert!(dropped_off > 0);
         assert!(filled_off > dropped_off, "filled {filled_off}, dropped {dropped_off}");
+    }
+
+    #[test]
+    fn a_part_hidden_behind_another_costs_nothing_to_leave_out_in_place() {
+        // A 1 m panel facing +Z at z = 0.5, and a smaller one 20 cm behind it: from in front the
+        // back one is covered, so leaving it out changes nothing seen from there, where on its own
+        // outline it would cost its whole area.
+        let quad = |z: f32, h: f32| -> Vec<Vertex> {
+            [(-h, -h), (h, -h), (h, h), (-h, h)].iter().map(|&(x, y)| v(x, y, z, 0xFFFF_FFFF)).collect()
+        };
+        let (front, back) = (quad(0.5, 0.5), quad(0.3, 0.3));
+        let tris = [0u32, 1, 2, 0, 2, 3];
+        let scene = Scene::build(&[(0, &front[..], &tris[..]), (1, &back[..], &tris[..])], 0.02);
+        let from_front = &scene.views[SCENE_VIEWS.iter().position(|d| *d == [0.0, 0.0, -1.0]).unwrap()];
+        let frame = from_front.frame(scene.cell);
+        let mut uncovered = 0;
+        raster(&frame, &back, &tris, |at, _| uncovered += (from_front.owner[at] == 1) as usize);
+        assert_eq!(uncovered, 0, "the back panel shows from in front");
+        assert!(scene.difference(1, &back, &tris, &[]) < coverage_difference(&back, &tris, &[], 0.02));
+        // Left out, the front panel uncovers what is behind it, and that is counted.
+        assert!(scene.difference(0, &front, &tris, &[]) > 0);
     }
 }

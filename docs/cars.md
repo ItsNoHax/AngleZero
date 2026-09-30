@@ -304,7 +304,7 @@ Each level is decimated from the welded original, not from the level above, and 
 budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's allocator:
 
 - **Draw calls** share the budget by pixels × category weight, to the power 0.8, and a wheel's
-  kept rim may claim at most 1/40 of the level. The category weight is the default times the
+  draw call, where the wheels are not generated, may claim at most 1/40 of the level. The category weight is the default times the
   square root of the config's ratio to it (`COARSE_WEIGHT_POWER`): config weights are tuned for
   LOD0, and taken whole the E36's `chrome = 12` gave its rims more of LOD1 than its body, and
   `interior = 2.0` gave the NSX's and RX-7's cabins a fifth of LOD2.
@@ -324,12 +324,19 @@ budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's al
   the texture's local colour baked into their vertices and sample a white texel, instead of
   stretching the atlas. A clustered part is drawn two-sided.
 - **Stalled parts are judged.** When collapse stalls, three answers are compared: collapse at a
-  looser limit (2–16 pixels), clustering, and leaving the part out. Each is projected along nine
-  directions onto a half-pixel grid at the level's distance, and the one whose outline differs
-  from the part's own in the fewest cells is kept (`simplify::coverage_difference`). This is what
-  stops a frame being filled in: the Charger's grille surround clustered into a white slab across
-  the opening, and is now left out so the grille behind it shows. A part left out hands its share
-  back to its draw call, which is shared again.
+  looser limit (2–16 pixels), clustering, and leaving the part out. Each is scored on a half-pixel
+  grid at the level's distance two ways: by its outline against the part's own over nine
+  projections (`simplify::coverage_difference`), and in place (`simplify::Scene`) — against LOD0's
+  whole car (glass and wheels left out) from thirteen directions at or above the car, counting the
+  cells the part was frontmost in and the answer leaves empty, and the cells the answer covers
+  more than a cell in front of the rest. The in-place count weighs 1.8 to one
+  (`JUDGE_IN_PLACE`); the lowest total is kept, and an answer within 10% of the best that spends
+  more triangles is preferred to it (`JUDGE_TIE`). The outline alone left the S14's headlamp
+  surround and the S15's intake backing out, their clustered spill being almost all behind the
+  paint; in place alone, parts hidden at LOD0 behind something the level coarsens (the 720S's
+  second paint shell, the Charger's grille surround behind a black grille that is twelve triangles
+  at LOD2) were misjudged. The Charger's grille surround is still left out, so the grille behind
+  it shows. A part left out hands its share back to its draw call, which is shared again.
 - **Coarse parts are relit from their own faces.** A welded vertex's light averages every face
   that met there, so the corner vertices a coarse level keeps carry the grey of a panel edge and
   spread it across the panel; white bonnets and flanks drew grey. Collapsed parts take the light of
@@ -337,13 +344,17 @@ budget. The coarse levels are built by `compile::spend_coarse`, not by LOD0's al
   new.
 - **The level is held to its budget.** If what the parts return adds up to more than the level, it
   is built again asking for less by the overshoot.
-- **Tyres are generated**, not decimated: a drum at the rolling radius and width, 16 sides at
-  LOD1 and 10 at LOD2. At LOD1 the model's own rim (every wheel part that stops short of the tread)
-  is kept and decimated, and only the tyre is built round it; at LOD2 the whole wheel is built,
-  with a rim face. The colours are measured by rasterising LOD0's wheel face on, unlit and
-  textured, and averaging the cells tread-reaching parts win (tyre) and the rest win (rim). A
-  level too small to spend a third of itself on the drums, or an atlas with no white tile, keeps
-  the decimated wheels.
+- **Wheels are generated**, not decimated: a drum at the rolling radius and width, 16 sides at
+  LOD1 and 10 at LOD2, with a painted face. LOD0's wheel is rasterised face on, from outside,
+  textured, and the face is cut into rings and sectors each drawn in the lit mean of what LOD0
+  shows there (a cell with nothing of the wheel in it is the dark of the arch). LOD1 has three
+  rings (hub, spokes, lip) of 16–24 sectors, the count a multiple of the spoke count found from
+  the strongest harmonic round the spoke ring, and the phase the one that separates them most;
+  LOD2 has one ring of 10. The model's rim used to be kept and decimated at LOD1, but at a
+  fortieth of the level it clustered into a pale blob on most cars (Golf R, 350Z, Xsara, S15, E30),
+  and a one-piece wheel got a flat disc. The tyre colour is the mean of the cells tread-reaching
+  parts win. A level too small to spend a third of itself on the wheels, or an atlas with no white
+  tile, keeps the decimated wheels.
 
 `AZ_PARTS=1` prints every coarse part's target and result, marks the ones that were clustered or judged out, and prints a `JUDGE` line with each stalled part's candidates.
 

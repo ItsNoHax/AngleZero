@@ -542,7 +542,16 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         // car with a 40-triangle level does.
         let far = distance >= FAR_WHEEL_FROM;
         let mut segments = if far { FAR_WHEEL_SEGMENTS } else { NEAR_WHEEL_SEGMENTS };
-        let wheel_cost = |segments: usize| 5 * segments * wheel_looks.len();
+        // The tread is two triangles a side; the painted face as many as its rings and sectors
+        // come to, at most a quarter as many sectors again as sides at LOD1 (see `face_sectors`).
+        let wheel_cost = |segments: usize| {
+            let face = if far {
+                painted_face_cost(FAR_FACE_RINGS.len(), segments)
+            } else {
+                painted_face_cost(NEAR_FACE_RINGS.len(), segments * 5 / 4)
+            };
+            (2 * segments + face) * wheel_looks.len()
+        };
         while segments > MIN_WHEEL_SEGMENTS && wheel_cost(segments) * 3 > lod_budget {
             segments -= 2;
         }
@@ -550,21 +559,13 @@ pub fn compile(model: &mut SourceModel, config: &CarConfig, budget: usize) -> Re
         match white {
             Some(white) if !wheel_looks.is_empty() && affordable => {
                 // The wheels' cost comes off the top, so what they no longer spend goes to the
-                // bodywork rather than back to the wheels.
-                // At LOD1 a wheel's own rim is kept and decimated with everything else, and only
-                // its tyre is built: at ten pixels across the spokes are what says which wheel it
-                // is, and a spokeless drum read as a hubcap. The tyre is the part that cannot be
-                // decimated — a tube of tread blocks — and is replaced. At LOD2 the whole wheel is.
-                let keep_rims = !far;
-                let mut wheels = generated_wheels(&wheel_looks, white, segments, keep_rims);
+                // bodywork rather than back to the wheels. The whole wheel is built, rim and all, at
+                // both levels: the rim's spokes are painted on (see `painted_face`), because a
+                // model rim decimated to its share came out as a blob.
+                let mut wheels = generated_wheels(&wheel_looks, white, segments, far);
                 let cost: usize = wheels.iter().flat_map(|b| &b.pieces).map(|p| p.indices.len() / 3).sum();
                 for b in coarse.iter_mut() {
-                    let Some(look) = b.wheel.and_then(|c| wheel_looks.iter().find(|w| w.corner == c)) else {
-                        continue;
-                    };
-                    if keep_rims && look.separate_rim {
-                        b.pieces.retain(|p| !reaches_tread(p, look.radius));
-                    } else {
+                    if b.wheel.is_some_and(|c| wheel_looks.iter().any(|w| w.corner == c)) {
                         b.pieces.clear();
                     }
                 }
@@ -1952,10 +1953,25 @@ fn spend_coarse(
     // level is built again with the overshoot taken off what it asks for. The M5's LOD2 came out
     // at 1,201 of 1,200 before this.
     let welded = buckets.clone();
+    // The whole level as LOD0 draws it, for judging stalled parts in place (see
+    // `simplify::Scene`). Wheels are stored about their hubs rather than where they are on the
+    // car, and are left out of it; a coarse level builds its own anyway. Glass is left out too,
+    // being seen through: in it, a cabin was behind the windows and left out whole for nothing.
+    let mut next_id = 0u32;
+    let parts: Vec<(u32, &[Vertex], &[u32])> = welded
+        .iter()
+        .filter(|b| in_scene(b))
+        .flat_map(|b| b.pieces.iter())
+        .map(|p| {
+            next_id += 1;
+            (next_id - 1, &p.vertices[..], &p.indices[..])
+        })
+        .collect();
+    let scene = simplify::Scene::build(&parts, pixel * simplify::JUDGE_CELL);
     let mut ask = budget;
     for _ in 0..8 {
         *buckets = welded.clone();
-        spend_coarse_once(buckets, ask, tile_span, pixel, flat);
+        spend_coarse_once(buckets, ask, tile_span, pixel, flat, &scene);
         let got: usize = buckets.iter().map(|b| b.indices.len() / 3).sum();
         if got <= budget || ask == 0 {
             return;
@@ -1970,8 +1986,27 @@ fn spend_coarse_once(
     tile_span: f32,
     pixel: f32,
     flat: Option<&simplify::FlatTexel>,
+    scene: &simplify::Scene,
 ) {
-    // A kept rim is capped at a fortieth of the level (75 triangles at LOD1) — enough for five
+    // Each part's index in `scene`, in the order `spend_coarse` built it.
+    let mut next_id = 0u32;
+    let scene_ids: Vec<Vec<Option<u32>>> = buckets
+        .iter()
+        .map(|b| {
+            b.pieces
+                .iter()
+                .map(|_| {
+                    in_scene(b).then(|| {
+                        next_id += 1;
+                        next_id - 1
+                    })
+                })
+                .collect()
+        })
+        .collect();
+    // Where a level's wheels are not generated (an atlas with no white tile, or a level too small
+    // to afford them), a wheel's draw call is capped at a fortieth of the level (75 triangles at
+    // LOD1). It was written for the model rims LOD1 used to keep — enough for five
     // spokes, and a ceiling the config's weights cannot lift. They were set for LOD0, where the
     // E36's `chrome = 12` buys its mesh wheels; at LOD1 the same weight gave its four rims 832 of
     // 3,000 triangles against 820 for the whole body, and the nose shredded. Capping the claim
@@ -1994,7 +2029,7 @@ fn spend_coarse_once(
         budget,
         MIN_BUCKET_TRIANGLES,
     );
-    for (b, target) in buckets.iter_mut().zip(&targets) {
+    for ((b, target), ids) in buckets.iter_mut().zip(&targets).zip(&scene_ids) {
         // A part judged out (see `simplify::Coarse::Dropped`) hands its share back, and the draw
         // call is shared again among what is left, from the welded parts. Without it the Abarth's
         // LOD2 came out at 984 triangles of 1,200, the 190E's at 930. At most two share-outs
@@ -2037,6 +2072,7 @@ fn spend_coarse_once(
                         // A cabin is seen through tinted glass: its colour matters there, its
                         // texture does not.
                         b.category == Category::Interior,
+                        ids[k].map(|id| (scene, id)),
                     );
                     if outcome == simplify::Coarse::Clustered {
                         p.two_sided = true;
@@ -2085,6 +2121,11 @@ fn spend_coarse_once(
         }
     }
     finish_level(buckets);
+}
+
+/// Whether a draw call's parts are in the scene stalled coarse parts are judged in.
+fn in_scene(b: &Bucket) -> bool {
+    b.wheel.is_none() && b.category != Category::Window
 }
 
 /// Lights a coarse part from its own faces rather than from the light its vertices were welded
@@ -2193,7 +2234,8 @@ const COARSE_WEIGHT_POWER: f64 = 0.5;
 const COARSE_BUCKET_POWER: f64 = 0.8;
 
 /// Sides of a generated wheel: sixteen at LOD1, where a wheel is about ten pixels across, and ten
-/// from `FAR_WHEEL_FROM` on, where it is four. Eighty and fifty triangles a wheel.
+/// from `FAR_WHEEL_FROM` on, where it is four. About 150 and fifty triangles a wheel, most of the
+/// first in its painted face.
 const NEAR_WHEEL_SEGMENTS: usize = 16;
 const FAR_WHEEL_SEGMENTS: usize = 10;
 const MIN_WHEEL_SEGMENTS: usize = 6;
@@ -2219,8 +2261,10 @@ struct WheelLook {
     rim: u32,
     /// How far out the rim reaches, as a fraction of the radius: where the drawn tyre ends.
     rim_fraction: f32,
-    /// Whether the wheel has a rim separate from its tyre, which LOD1 keeps and decimates.
-    separate_rim: bool,
+    /// The wheel face on from outside, `WHEEL_VIEW` cells square across the rolling diameter: per
+    /// cell the unlit colour (texel folded in) and the light of whatever LOD0 draws nearest there,
+    /// or nothing where LOD0 draws nothing of the wheel. What `painted_face` paints from.
+    face: Vec<Option<([f32; 3], f32)>>,
 }
 
 /// Whether a wheel part reaches the tread. See `TYRE_REACH`.
@@ -2251,6 +2295,7 @@ impl WheelLook {
         let mut depth = vec![f32::MIN; n * n];
         let mut colour = vec![[0.0f32; 3]; n * n];
         let mut tyre_cell = vec![false; n * n];
+        let mut light = vec![0.0f32; n * n];
         let mut any_rim = false;
         for b in welded.iter().filter(|b| b.wheel == Some(corner)) {
             for p in &b.pieces {
@@ -2299,6 +2344,7 @@ impl WheelLook {
                                 c[k] *= texel[k];
                             }
                             colour[at] = c;
+                            light[at] = a[0].light * w0 + a[1].light * w1 + a[2].light * w2;
                             tyre_cell[at] = tread;
                         }
                     }
@@ -2338,29 +2384,61 @@ impl WheelLook {
             let reach = rim_radii[rim_radii.len() * 19 / 20];
             (mean(tyre).unwrap_or(pack([0.1, 0.1, 0.1, 1.0])), mean(rim).unwrap(), reach.clamp(0.45, 0.9))
         } else {
-            // One part, or a rim too small to tell: split the view by radius instead.
-            let (mut outer, mut inner) = ([0.0f64; 4], [0.0f64; 4]);
+            // One part, or a rim too small to tell: find where the rim ends by the brightness
+            // across the radius instead. A tyre is darker than the lip it meets on every wheel
+            // here, so the rim ends at the outermost band still halfway from the tyre's
+            // brightness to the rim's brightest; a rim as dark as its tyre (the Murciélago's)
+            // leaves nothing to find, and keeps two thirds, which is where most rims end.
+            const BANDS: usize = 40;
+            let mut bands = vec![([0.0f64; 3], 0.0f64, 0.0f64); BANDS];
             for y in 0..n {
                 for x in 0..n {
                     let at = y * n + x;
                     let r = (((x as f32 + 0.5) * cell - radius).powi(2) + ((y as f32 + 0.5) * cell - radius).powi(2)).sqrt() / radius;
-                    if depth[at] == f32::MIN || r > 1.0 {
+                    if depth[at] == f32::MIN || r >= 1.0 {
                         continue;
                     }
-                    let target = if r > 0.8 { &mut outer } else if r < 0.6 { &mut inner } else { continue };
+                    let b = &mut bands[(r * BANDS as f32) as usize];
                     for k in 0..3 {
-                        target[k] += colour[at][k] as f64;
+                        b.0[k] += colour[at][k] as f64;
                     }
-                    target[3] += 1.0;
+                    let c = colour[at];
+                    b.1 += ((0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) * light[at]) as f64;
+                    b.2 += 1.0;
                 }
             }
+            let brightness = |b: usize| (bands[b].2 > 0.0).then(|| bands[b].1 / bands[b].2);
+            let band_of = |f: f32| ((f * BANDS as f32) as usize).min(BANDS - 1);
+            let tread: Vec<f64> = (band_of(0.92)..BANDS).filter_map(brightness).collect();
+            let tread_level = tread.iter().sum::<f64>() / tread.len().max(1) as f64;
+            let peak = (band_of(0.4)..band_of(0.9)).filter_map(brightness).fold(0.0f64, f64::max);
+            let fraction = if peak - tread_level < 0.08 {
+                0.66
+            } else {
+                let bar = tread_level + 0.5 * (peak - tread_level);
+                (band_of(0.45)..band_of(0.9))
+                    .rev()
+                    .find(|&b| brightness(b).is_some_and(|v| v > bar))
+                    .map_or(0.66, |b| (b + 1) as f32 / BANDS as f32)
+            };
+            let sum = |from: usize, to: usize| {
+                let mut a = [0.0f64; 4];
+                for b in &bands[from..to] {
+                    for k in 0..3 {
+                        a[k] += b.0[k];
+                    }
+                    a[3] += b.2;
+                }
+                a
+            };
             (
-                mean(outer).unwrap_or(pack([0.1, 0.1, 0.1, 1.0])),
-                mean(inner).unwrap_or(pack([0.5, 0.5, 0.5, 1.0])),
-                0.66,
+                mean(sum(band_of(fraction + 0.05).max(band_of(0.9)), BANDS)).unwrap_or(pack([0.1, 0.1, 0.1, 1.0])),
+                mean(sum(0, band_of(fraction))).unwrap_or(pack([0.5, 0.5, 0.5, 1.0])),
+                fraction,
             )
         };
-        WheelLook { corner, radius, width, outside, tyre, rim, rim_fraction, separate_rim }
+        let face = (0..n * n).map(|at| (depth[at] != f32::MIN).then(|| (colour[at], light[at]))).collect();
+        WheelLook { corner, radius, width, outside, tyre, rim, rim_fraction, face }
     }
 }
 
@@ -2390,7 +2468,7 @@ fn white_texel(atlas: &texture::Atlas) -> Option<[f32; 2]> {
     None
 }
 
-/// Builds each corner's wheel for a far level instead of decimating it.
+/// Builds each corner's wheel for a coarse level instead of decimating it.
 ///
 /// The one other place this pipeline makes geometry rather than simplifying it is the silhouette's
 /// wheels (see `silhouette_wheels`), and the argument is the same. At forty-five metres a wheel is
@@ -2399,24 +2477,18 @@ fn white_texel(atlas: &texture::Atlas) -> Option<[f32; 2]> {
 /// that collapse cannot take below a few hundred triangles, so clustering took it the rest of the
 /// way and the Civic EJ stood on four black slabs of four to eight triangles, the 190E's alloys
 /// came out as spikes, and one corner of a car could lose its rim outright while its mirror image
-/// kept one. A ten-sided drum at the measured radius and width, in the colours LOD0 draws its tread
-/// and its rim face in, is round from every angle for fifty triangles a wheel — and its cost is
-/// fixed, so the rest of the budget goes to the bodywork.
+/// kept one. A drum at the measured radius and width, in the colours LOD0 draws its tread in, is
+/// round from every angle — and its cost is fixed, so the rest of the budget goes to the bodywork.
 ///
-/// With `keep_rims` (LOD1) a corner whose rim is a part of its own gets only the tyre — tread and
-/// the outer ring of sidewall, out to where the rim was measured to end — and its real rim is kept
-/// inside it: at ten pixels across the spokes are what say which wheel it is, and a spokeless drum
-/// read as a hubcap. The rim decimates well; it was only ever the tyre that could not.
-///
-/// Stored the way every wheel is, upright about its own hub with its axle along X, so the renderer
-/// steers, cambers and spins it exactly as it does the decimated ones. Drawn two-sided, so the
-/// outer face also serves as the inner one.
-fn generated_wheels(looks: &[WheelLook], white: [f32; 2], n: usize, keep_rims: bool) -> Vec<Bucket> {
+/// Its outside face is painted, not modelled: see `painted_face`. At LOD1 that is three rings of
+/// sectors on the rim, which is where the spokes are drawn, and one on the sidewall; at LOD2 one
+/// on each. Stored the way every wheel is, upright about its own hub with its axle along
+/// X, so the renderer steers, cambers and spins it exactly as it does the decimated ones. Drawn
+/// two-sided, so the outer face also serves as the inner one.
+fn generated_wheels(looks: &[WheelLook], white: [f32; 2], n: usize, far: bool) -> Vec<Bucket> {
     looks
         .iter()
         .map(|w| {
-            // With the model's own rim kept, only the tyre is built, out to where the rim begins.
-            let with_face = !(keep_rims && w.separate_rim);
             let mut vertices = Vec::new();
             let mut attrs = Vec::new();
             let mut indices: Vec<u32> = Vec::new();
@@ -2437,25 +2509,34 @@ fn generated_wheels(looks: &[WheelLook], white: [f32; 2], n: usize, keep_rims: b
                     push(inner, w.radius * s, w.radius * c, w.tyre, light),
                 ));
             }
-            // The outside face: a ring of tyre, then the rim filling the middle.
-            let side = light_at([w.outside, 0.0, 0.0], Category::Tyre);
-            let mut ring = Vec::new();
-            for i in 0..n {
-                let (s, c) = angle(i).sin_cos();
-                let r = w.radius * w.rim_fraction;
-                ring.push((
-                    push(outer, w.radius * s, w.radius * c, w.tyre, side),
-                    push(outer, r * s, r * c, w.tyre, side),
-                    push(outer, r * s, r * c, w.rim, side),
-                ));
-            }
-            let centre = push(outer, 0.0, 0.0, w.rim, side);
             for i in 0..n {
                 let j = (i + 1) % n;
                 indices.extend([tread[i].0, tread[j].0, tread[j].1, tread[i].0, tread[j].1, tread[i].1]);
-                indices.extend([ring[i].0, ring[j].0, ring[j].1, ring[i].0, ring[j].1, ring[i].1]);
-                if with_face {
-                    indices.extend([centre, ring[i].2, ring[j].2]);
+            }
+            // The outside face, painted out to the tread: the rim's rings, then the sidewall's.
+            let side = light_at([w.outside, 0.0, 0.0], Category::Tyre);
+            let rings = face_rings(w, far);
+            let (sectors, phase) = if far { (n, 0.0) } else { face_sectors(w, &rings, n * 3 / 4, n * 5 / 4) };
+            let painted = painted_face(w, &rings, sectors, phase, side, far);
+            let sector_angle = |k: usize| phase + k as f32 / sectors as f32 * std::f32::consts::TAU;
+            for (r, row) in painted.iter().enumerate() {
+                let (r0, r1) = (if r == 0 { 0.0 } else { rings[r - 1] * w.radius }, rings[r] * w.radius);
+                for (k, &(colour, light)) in row.iter().enumerate() {
+                    // Each sector has corners of its own, so its colour stops at its edges rather
+                    // than blending into the next: a spoke and the gap beside it are one sector
+                    // wide at ten pixels, and interpolated they would both be grey.
+                    let (s0, c0) = sector_angle(k).sin_cos();
+                    let (s1, c1) = sector_angle(k + 1).sin_cos();
+                    let a1 = push(outer, r1 * s0, r1 * c0, colour, light);
+                    let b1 = push(outer, r1 * s1, r1 * c1, colour, light);
+                    if r0 == 0.0 {
+                        let centre = push(outer, 0.0, 0.0, colour, light);
+                        indices.extend([centre, a1, b1]);
+                    } else {
+                        let a0 = push(outer, r0 * s0, r0 * c0, colour, light);
+                        let b0 = push(outer, r0 * s1, r0 * c1, colour, light);
+                        indices.extend([a1, b1, b0, a1, b0, a0]);
+                    }
                 }
             }
             Bucket {
@@ -2480,6 +2561,176 @@ fn generated_wheels(looks: &[WheelLook], white: [f32; 2], n: usize, keep_rims: b
                 weight: 1.0,
                 two_sided_from: 0,
             }
+        })
+        .collect()
+}
+
+/// Rings of a painted face at LOD1, each one's outer edge as a fraction of the rim's radius,
+/// innermost first: the hub, the spokes, and the lip the spokes run into.
+const NEAR_FACE_RINGS: [f32; 3] = [0.3, 0.8, 1.0];
+/// At LOD2 the rim is four pixels and one ring says all of it that can be seen.
+const FAR_FACE_RINGS: [f32; 1] = [1.0];
+/// What shows through a rim where LOD0 draws nothing of the wheel behind it: the dark inside of
+/// the arch, unlit colour.
+const FACE_GAP: [f32; 3] = [0.06, 0.06, 0.06];
+
+/// A face's rings as fractions of the rolling radius: the rim's, scaled to where the rim was
+/// measured to end, then the sidewall out to the tread. The sidewall is painted like the rest
+/// rather than drawn in the tyre's colour, so a lip the measurement put on the wrong side of the
+/// line, or white lettering, still shows as LOD0 draws it.
+fn face_rings(w: &WheelLook, far: bool) -> Vec<f32> {
+    let rim: &[f32] = if far { &FAR_FACE_RINGS } else { &NEAR_FACE_RINGS };
+    rim.iter().map(|f| f * w.rim_fraction).chain([1.0]).collect()
+}
+
+/// Triangles a painted face costs, for a level to budget its wheels before it builds them.
+fn painted_face_cost(rim_rings: usize, sectors: usize) -> usize {
+    sectors * (2 * (rim_rings + 1) - 1)
+}
+
+/// Every cell of a wheel's face-on view that falls inside the tread: ring, angle, unlit colour and
+/// light. A cell LOD0 draws nothing in is the gap colour, lit as a face turned sideways is.
+fn face_samples(w: &WheelLook, rings: &[f32], gap_light: f32) -> Vec<(usize, f32, [f32; 3], f32)> {
+    let n = WHEEL_VIEW;
+    let cell = 2.0 * w.radius / n as f32;
+    let mut out = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            // Across the view is z and up it is y, as `WheelLook::measure` laid it out.
+            let (z, yy) = ((x as f32 + 0.5) * cell - w.radius, (y as f32 + 0.5) * cell - w.radius);
+            let r = (z * z + yy * yy).sqrt() / w.radius;
+            let Some(ring) = rings.iter().position(|&edge| r <= edge) else {
+                continue;
+            };
+            let a = yy.atan2(z).rem_euclid(std::f32::consts::TAU);
+            let (colour, light) = w.face[y * n + x].unwrap_or((FACE_GAP, gap_light));
+            out.push((ring, a, colour, light));
+        }
+    }
+    out
+}
+
+/// How many sectors a LOD1 face is cut into, and where the first one starts.
+///
+/// A wheel is ten pixels across at LOD1, its spokes a pixel or two wide, and a sector either lands
+/// on a spoke or it averages spoke and gap into the grey disc that read as a hubcap. So the count
+/// follows the spokes: the strongest harmonic of the brightness round the spoke ring, 3 to 12, is
+/// taken as the spoke count and the sectors are its smallest multiple from `min` to `max` (12 to
+/// 20 at LOD1) — fifteen for five spokes, twenty for ten, twelve for six, fourteen for seven. The
+/// range is what the level can pay for: a painted face is seven triangles a sector, and at 16 to
+/// 24 the wheels took some 350 triangles of LOD1 from the bodywork of the cars whose one-piece
+/// wheels had cost 80 a corner, and the Murciélago's, RX-7's and Mini's lower noses thinned out.
+/// The phase is the one of eight
+/// that tells the sectors apart the most. A face with no spokes worth the name (a disc, a
+/// fifteen-spoke mesh no grid of ten pixels can draw) gets `min`.
+fn face_sectors(w: &WheelLook, rings: &[f32], min: usize, max: usize) -> (usize, f32) {
+    let band = if rings.len() >= 4 { 1 } else { 0 };
+    let samples: Vec<(f32, f32)> = face_samples(w, rings, AMBIENT)
+        .into_iter()
+        .filter(|s| s.0 == band)
+        .map(|(_, a, c, l)| (a, (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) * l))
+        .collect();
+    if samples.is_empty() {
+        return (min, 0.0);
+    }
+    const BINS: usize = 360;
+    let mut profile = vec![(0.0f32, 0usize); BINS];
+    for &(a, v) in &samples {
+        let b = ((a / std::f32::consts::TAU * BINS as f32) as usize).min(BINS - 1);
+        profile[b].0 += v;
+        profile[b].1 += 1;
+    }
+    let mean = samples.iter().map(|s| s.1).sum::<f32>() / samples.len() as f32;
+    let values: Vec<f32> = profile.iter().map(|&(s, c)| if c > 0 { s / c as f32 } else { mean }).collect();
+    let (mut spokes, mut strongest) = (0usize, 0.0f32);
+    for m in 3..=12usize {
+        let (mut re, mut im) = (0.0f32, 0.0f32);
+        for (b, v) in values.iter().enumerate() {
+            let t = (m * b) as f32 / BINS as f32 * std::f32::consts::TAU;
+            re += (v - mean) * t.cos();
+            im += (v - mean) * t.sin();
+        }
+        let amplitude = 2.0 * (re * re + im * im).sqrt() / BINS as f32;
+        if amplitude > strongest {
+            (spokes, strongest) = (m, amplitude);
+        }
+    }
+    // A brightness swing of under 4% round the ring is texture, not spokes.
+    let count = if strongest < 0.04 {
+        min
+    } else {
+        (min..=max).find(|s| s % spokes == 0).unwrap_or(min)
+    };
+    let mut best = (f32::MIN, 0.0f32);
+    for p in 0..8 {
+        let phase = p as f32 / 8.0 / count as f32 * std::f32::consts::TAU;
+        let mut sums = vec![(0.0f32, 0usize); count];
+        for &(a, v) in &samples {
+            let k = (((a - phase).rem_euclid(std::f32::consts::TAU)) / std::f32::consts::TAU * count as f32) as usize;
+            let k = k.min(count - 1);
+            sums[k].0 += v;
+            sums[k].1 += 1;
+        }
+        // Between-sector variance, up to a constant: how much of the ring's brightness the sectors
+        // explain.
+        let spread: f32 = sums.iter().filter(|s| s.1 > 0).map(|&(s, c)| (s / c as f32 - mean).powi(2) * c as f32).sum();
+        if spread > best.0 {
+            best = (spread, phase);
+        }
+    }
+    (count, best.1)
+}
+
+/// The colour and light of each sector of each ring of a wheel's face, painted from LOD0's own
+/// face-on view (see `WheelLook::measure`).
+///
+/// The kept model rim this replaces at LOD1 did not survive its share. A spoked alloy is a few
+/// thousand triangles of separate spokes, bolts and lip; collapse stalls at a hundred and seventy
+/// or so, and a rim is allowed a fortieth of the level, so it was clustered, and clustering filled
+/// the gaps between the spokes — the Golf R's, the 350Z's, the Xsara's and the S15's rims all came
+/// out as pale blobs, the E30's as white ones, and a one-piece wheel (the Abarth's, the Lancia's,
+/// the Civic's) as a flat disc of its mean colour. What says which wheel it is at ten pixels is
+/// the pattern of light and dark round the hub, and that is what a ring of sectors in the colours
+/// LOD0 draws there keeps, for about as many triangles as the blob.
+///
+/// A sector's colour is the light-weighted mean of the unlit colours under it, and its light the
+/// mean light, so that `finish_level`'s product of the two is the mean of what LOD0 draws there.
+///
+/// With `uniform` (LOD2) every sector of a ring takes the ring's mean: at four pixels a wheel has
+/// no spokes to show, and ten sectors each in the colour of whatever spoke or gap it happened to
+/// land on drew a pinwheel.
+fn painted_face(w: &WheelLook, rings: &[f32], sectors: usize, phase: f32, gap_light: f32, uniform: bool) -> Vec<Vec<(u32, f32)>> {
+    let mut sums = vec![vec![([0.0f32; 3], 0.0f32, 0usize); sectors]; rings.len()];
+    for (ring, a, c, l) in face_samples(w, rings, gap_light) {
+        let k = ((((a - phase).rem_euclid(std::f32::consts::TAU)) / std::f32::consts::TAU * sectors as f32) as usize)
+            .min(sectors - 1);
+        let s = &mut sums[ring][k];
+        for i in 0..3 {
+            s.0[i] += c[i] * l;
+        }
+        s.1 += l;
+        s.2 += 1;
+    }
+    let paint = |(cl, l, count): ([f32; 3], f32, usize)| -> Option<(u32, f32)> {
+        (count > 0 && l > 1.0e-6).then(|| {
+            let c = [cl[0] / l, cl[1] / l, cl[2] / l];
+            (pack([c[0].min(1.0), c[1].min(1.0), c[2].min(1.0), 1.0]), l / count as f32)
+        })
+    };
+    sums.iter()
+        .map(|row| {
+            // A sector too thin to hold a cell (only ever at the very centre) takes its ring's
+            // mean, and a ring with none at all the rim colour.
+            let mut whole = ([0.0f32; 3], 0.0f32, 0usize);
+            for s in row {
+                for i in 0..3 {
+                    whole.0[i] += s.0[i];
+                }
+                whole.1 += s.1;
+                whole.2 += s.2;
+            }
+            let fallback = paint(whole).unwrap_or((w.rim, gap_light));
+            row.iter().map(|&s| if uniform { fallback } else { paint(s).unwrap_or(fallback) }).collect()
         })
         .collect()
 }
